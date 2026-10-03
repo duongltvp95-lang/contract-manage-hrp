@@ -164,22 +164,44 @@ deletes the objects first, and every teardown goes through it.)
 
 ### CI (`.github/workflows/ci.yml`)
 
-| Job | Runs | Gate |
-| --- | --- | --- |
-| `quality` | lint → typecheck → `pnpm test` → build | **always**, on push and pull request; no secret needed |
-| `integration` | `pnpm test:integration` | only when the repository has Supabase secrets, and never on a pull request from a fork |
-| `e2e` | `pnpm test:e2e` + report artifact | same condition |
+| Job | Runs |
+| --- | --- |
+| `quality` | lint → typecheck → `pnpm test` → build |
+| `integration` | `pnpm test:integration` |
+| `e2e` | `pnpm test:e2e` + report artifact |
+
+Every job runs on every push. The suites that need a live backend skip
+themselves when credentials are absent, so a repository without secrets still
+gets a green build: the integration suite via `hasLiveBackend` in
+`tests/integration/setup.ts`, and each Playwright spec via
+`test.skip(!hasLiveBackend, …)` at file scope.
 
 Secrets come from GitHub secrets and are written to `.env.local` inside the job,
-then removed (`if: always()`). Nothing is hard-coded, and a fork without
-credentials gets a green `quality` job instead of a red build it cannot fix.
+then removed (`if: always()`). Nothing is hard-coded.
 
 The `build` step passes placeholder Supabase/R2 values: the build never calls
 those services, but the modules read them at import time.
 
-**Not yet executed.** This repository has no GitHub remote in this environment,
-so the workflow has not run on GitHub. It is written and reviewed, not proven —
-stated plainly rather than implied.
+**Executed.** Run
+[#3](https://github.com/duongltvp95-lang/contract-manage-hrp/actions/runs/37135198924)
+is green on all three jobs.
+
+### What the first real runs found
+
+Three problems, none of which any local run could have caught, because all three
+depend on the CI environment. Recorded rather than quietly fixed.
+
+| # | Symptom | Cause | Fix |
+| --- | --- | --- | --- |
+| 1 | Run #1: `failure` with **zero jobs** | `secrets` is not an allowed context in a job-level `if:` — only `github`, `needs`, `vars` and `inputs` are. Gating the jobs on a secret made the whole workflow file invalid, and GitHub rejected it wholesale. | Removed both `if:` conditions (`d790c02`). The skip logic moved into the suites, where it can be tested — Vitest already had it, and each Playwright spec gained `test.skip(!hasLiveBackend, …)`. |
+| 2 | Run #2: the `Unit tests` step failed — `Failed to load custom Reporter from github` | Vitest has no reporter called `github`; that one is Playwright's. Asking for it makes Vitest try to load a *custom reporter module* named "github", which throws at startup before a single test runs. The Vitest built-in is `github-actions`. Only reachable with `CI` set, which is never true locally. | Corrected the name (`7ecfb44`) and verified by running the suite with `CI=true` locally — the check that should have been done first. |
+| 3 | **A live production password was committed** | `tests/setup/env.ts` and `tests/e2e/helpers.ts` both defaulted the admin password to the real credential, so `59a153a` shipped a working password in source. | Both now read it from the environment with **no fallback** and include it in `hasLiveBackend`, so the live suites skip rather than carry a secret. `.env.example` documents `TEST_ADMIN_EMAIL` / `TEST_ADMIN_PASSWORD`; the workflow passes them through from secrets. Scrubbed from the pushed history by amending and force-pushing (`d790c02`). |
+
+Finding 3 is the serious one. Even though that commit is no longer reachable on
+the remote, **the password should be rotated**: it existed in a pushed commit,
+and GitHub does not guarantee prompt garbage collection. The M6 report already
+asked for this password to be changed; this makes it necessary rather than
+advisory.
 
 ## 4. Rate limiting (W1-WEB-041)
 
@@ -343,13 +365,24 @@ completes section 9, the correct reading is "verified, not yet in production".
 
 ## 9. What remains (owner)
 
-1. **Revoke the account-level R2 key** in Cloudflare → R2 → Manage R2 API Tokens.
-   The local copy has been deleted; the credential itself is still valid.
-2. **Push to GitHub** and **connect the repository to Vercel**.
-3. **Set the environment variables** from section 5 (Production and Preview).
-4. **Add the production origin to the R2 CORS policy** and to the Supabase Auth
+1. **Rotate the admin password** for `duongltvp95@gmail.com`. A working copy of
+   it was committed (finding 3 above). The commit is no longer reachable on the
+   remote, but rotation is the only way to be certain. It is also the password
+   change M6 already asked for, at
+   `http://localhost:3000/auth/update-password` or through Supabase.
+2. **Revoke the account-level R2 key** in Cloudflare → R2 → Manage R2 API
+   Tokens. The local file has been deleted; the credential itself is still valid.
+3. **Revoke the GitHub token** used for the push. It was sent in plain text, so
+   treat it as compromised. If further pushes are needed, create a new one.
+4. **Connect the repository to Vercel** —
+   `https://github.com/duongltvp95-lang/contract-manage-hrp` is pushed and green
+   on CI (`main`, `7ecfb44`).
+5. **Set the environment variables** from section 5 (Production and Preview),
+   plus `TEST_ADMIN_EMAIL` / `TEST_ADMIN_PASSWORD` as GitHub secrets if the live
+   suites should run in CI.
+6. **Add the production origin to the R2 CORS policy** and to the Supabase Auth
    redirect URLs.
-5. **Run the plan section 102 demo scenario** against `https://cm.hrpartner.vn`.
+7. **Run the plan section 102 demo scenario** against `https://cm.hrpartner.vn`.
    The same Playwright suite can do most of it:
 
    ```bash
@@ -365,7 +398,7 @@ completes section 9, the correct reading is "verified, not yet in production".
 | Criterion | Status |
 | --- | --- |
 | `pnpm test` (Vitest) and `pnpm test:e2e` (Playwright) run and pass | ✅ 94 + 39 |
-| CI runs lint / typecheck / build / test | ✅ written; not yet executed on GitHub (no remote here) |
+| CI runs lint / typecheck / build / test | ✅ green on [run #3](https://github.com/duongltvp95-lang/contract-manage-hrp/actions/runs/37135198924) — after fixing two real CI bugs and one committed credential |
 | Rate limiting works, 429 when exceeded | ✅ 60/min per user via PostgreSQL; real 429s asserted |
 | The section 100 matrix is covered automatically | ✅ all 24 rows |
 | Cross-org DB **and** R2 are blocked by automated tests | ✅ `rls.test.ts`, `authorization.test.ts`, `security.spec.ts` |
