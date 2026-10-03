@@ -27,7 +27,12 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    reporters: process.env.CI ? ["github", "default"] : ["default"],
+    // `github-actions` is the Vitest built-in that annotates a GitHub run.
+    // The name is easy to get wrong: `github` is Playwright's reporter, not
+    // Vitest's, and asking Vitest for it makes it try to load a *custom reporter
+    // module* called "github" — which fails at startup, before any test runs.
+    // Locally `CI` is unset, so only CI ever hit it.
+    reporters: process.env.CI ? ["github-actions", "default"] : ["default"],
     projects: [
       {
         extends: true,
