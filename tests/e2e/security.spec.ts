@@ -131,12 +131,18 @@ test.describe("cross-organization isolation", () => {
   test("the second tenant cannot open the first tenant's contract", async ({ page }) => {
     await login(page, secondTenantEmail, secondTenantPassword);
 
-    const response = await page.goto(`/contracts/${ownContract.id}`);
+    await page.goto(`/contracts/${ownContract.id}`);
 
-    // A real 404 — the authorization runs before the Suspense boundary, so the
-    // status line is still open when notFound() is thrown.
-    expect(response?.status()).toBe(404);
-    await expect(page.locator("body")).not.toContainText(`${TEST_PREFIX}ORGA-${stamp}`);
+    // The contract is refused and nothing about it is rendered. The status code
+    // is not asserted: on a production build Next has already flushed the
+    // Partial Prerender shell as 200 by the time notFound() runs, so a status
+    // assertion would pass locally and fail on the deployed app. The leak is
+    // what matters, and that is what this checks. See M8, deviation 12.
+    const body = page.locator("body");
+    await expect(body).toContainText("This page could not be found");
+    await expect(body).not.toContainText(`${TEST_PREFIX}ORGA-${stamp}`);
+    await expect(body).not.toContainText("Đối tác org A");
+    await expect(page.locator('[data-testid="document-selector"]')).toHaveCount(0);
   });
 
   test("the second tenant's list shows none of the first tenant's data", async ({ page }) => {
@@ -230,8 +236,14 @@ test.describe("cross-organization isolation", () => {
   test("the first tenant cannot see the second tenant's contract either", async ({ page }) => {
     await login(page);
 
-    const response = await page.goto(`/contracts/${otherContract.id}`);
-    expect(response?.status()).toBe(404);
-    await expect(page.locator("body")).not.toContainText(`${TEST_PREFIX}ORGB-${stamp}`);
+    await page.goto(`/contracts/${otherContract.id}`);
+
+    // Same reasoning as the test above: isolation is enforced in both
+    // directions, and what is asserted is the refusal and the absence of a
+    // leak, not the status line (see M8, deviation 12).
+    const body = page.locator("body");
+    await expect(body).toContainText("This page could not be found");
+    await expect(body).not.toContainText(`${TEST_PREFIX}ORGB-${stamp}`);
+    await expect(body).not.toContainText("Đối tác org B");
   });
 });

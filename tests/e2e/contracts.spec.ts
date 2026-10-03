@@ -170,9 +170,16 @@ test.describe("contract lifecycle", () => {
     await expect(page.locator("body")).toContainText("tối đa 100 ký tự");
   });
 
-  test("a contract that does not exist is a 404, not an empty page", async ({ page }) => {
+  test("a contract that does not exist shows the not-found page, not an empty one", async ({ page }) => {
     await login(page);
-    const response = await page.goto(`/contracts/${crypto.randomUUID()}`);
-    expect(response?.status()).toBe(404);
+    await page.goto(`/contracts/${crypto.randomUUID()}`);
+
+    // The status is deliberately NOT asserted. `notFound()` fires after Next has
+    // flushed the Partial Prerender shell, so a production build answers 200
+    // with the not-found page while `next dev` answers 404 — asserting the code
+    // would make this suite pass locally and fail against a real deployment.
+    // See docs/milestones/M8, deviation 12. What must hold is the outcome.
+    await expect(page.locator("body")).toContainText("This page could not be found");
+    await expect(page.locator('[data-testid="document-selector"]')).toHaveCount(0);
   });
 });

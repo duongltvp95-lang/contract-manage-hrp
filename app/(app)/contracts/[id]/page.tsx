@@ -20,6 +20,25 @@ import { getFileViewUrl, listContractFiles } from "@/lib/services/files";
 
 export const instant = false;
 
+/**
+ * KNOWN LIMITATION — the HTTP status of a not-found contract.
+ *
+ * With `cacheComponents` this route is a Partial Prerender (`◐`): Next flushes a
+ * static shell with `200` before the page body runs, so the `notFound()` below
+ * swaps the UI but cannot change the status line. A production build therefore
+ * answers `200` with the not-found page, while `next dev` answers `404` and hid
+ * the difference until the end-to-end suite was run against a real build.
+ *
+ * `export const dynamic` would fix it and is rejected by the build:
+ * "Route segment config 'dynamic' is not compatible with
+ * `nextConfig.cacheComponents`". The remaining options — a per-request existence
+ * check in `proxy.ts`, or turning `cacheComponents` off — are not worth a
+ * duplicated database query on the hot path for a status code no user sees.
+ *
+ * What matters is intact and asserted: the not-found page is rendered, and no
+ * contract data leaks. See docs/milestones/M8, deviation 12.
+ */
+
 type DetailParams = Promise<{ id: string }>;
 type DetailSearchParams = Promise<{ file?: string }>;
 

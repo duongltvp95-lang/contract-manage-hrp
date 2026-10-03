@@ -144,10 +144,29 @@ pnpm lint               PASS (exit 0, 0 warnings)
 pnpm build              PASS (exit 0) — 17 routes
 pnpm test               94 passed (8 files)
 pnpm test:integration   29 passed (3 files)   — live Supabase + live R2
-pnpm test:e2e           39 passed (6 files)   — real Chrome
+pnpm test:e2e           39 passed (6 files)   — real Chrome, against `next dev`
+pnpm test:e2e           39 passed (6 files)   — the SAME suite against `next build` + `next start`
                         ─────
                         162 automated tests
 ```
+
+### 3a. The suite was run against a production build, not only the dev server
+
+`next dev` and a deployed build are different programs, and a green suite against
+one is not evidence about the other. Before handing the project over for
+deployment the whole end-to-end suite was pointed at `next build` + `next start`:
+
+```text
+next build    →  ✓ Compiled successfully · 17 routes
+next start    →  Ready on http://localhost:3000
+pnpm test:e2e →  39 passed
+```
+
+**It did not pass the first time — 30/39.** Two specs failed on one assertion,
+and the cause was a real production-only defect that the dev-server runs had
+hidden for two milestones. That is deviation 12 below, and it is the reason this
+extra run was worth doing: it would otherwise have failed in front of the owner,
+during the production demo.
 
 The suites leave nothing behind — verified after a full run:
 
@@ -331,6 +350,14 @@ auth users: ["duongltvp95@gmail.com",      auth users: ["duongltvp95@gmail.com"]
 | 9 | Added `data-testid="image-zoom-in"` / `image-zoom-out` | The PDF toolbar already had them; without them the image-zoom test had to match on a Vietnamese `aria-label`, which is brittle. |
 | 10 | The "expired presigned URL" test makes the object request fail with 403 rather than waiting for a real expiry | The server signs the URL before the page renders, so the expiry window is 15 minutes. Returning the error R2 actually returns for a dead signature exercises the same client path (plan section 60) in seconds. The proactive timer itself is covered by `tests/unit/view-url.test.ts`. |
 | 11 | The integration suite creates and destroys its own second tenant | RLS cannot be tested with one organization. The fixture is created in `beforeAll` and removed in `afterAll`, and `createSecondTenant()` asserts the profile really moved — a silently failed move would leave the "other tenant" inside org A and every RLS assertion would pass for the wrong reason. (It did exactly that on the first run.) |
+| 12 | **A production build answers `200`, not `404`, for a missing or cross-tenant contract — accepted, documented, not fixed** | Found by running the suite against `next build` + `next start` for the first time. With `cacheComponents`, `/contracts/[id]` is a Partial Prerender (`◐`): Next flushes a static shell with `200` **before** the page body runs, so `notFound()` swaps the UI but cannot change the status line. `next dev` answered `404` and hid this for two milestones, and the M7 report claimed a "real 404" on that evidence alone. `export const dynamic` would fix it and the build rejects it — *"Route segment config 'dynamic' is not compatible with `nextConfig.cacheComponents`"*. The two remaining options are a duplicated existence query in `proxy.ts` on the hottest page of the app, or turning `cacheComponents` off entirely; neither is worth it for a status code no user sees, on an authenticated route no crawler reaches. **What matters is intact and now asserted:** the not-found page renders and **no contract data leaks** — verified directly against the production build (`status 200`, not-found UI, no `contract_number`/`partner` in the body). The three status assertions in the Playwright suite were replaced with UI and no-leak assertions, because a status assertion would pass locally and fail against the deployment. Corrected in the M7 report as well. If a real 404 is ever required, it belongs in a decision about `cacheComponents`, not in this page. |
+
+### Correction to the M7 report
+
+M7 deviation 1 claimed that moving authorization before the Suspense boundary
+made a cross-tenant contract answer a real `404`. That was verified on `next dev`
+only. On a production build it answers `200` with the not-found page. The claim
+was wrong, and the M7 document has been amended to say so.
 
 ## 8. Wave 1 Exit Gate — plan section 110
 
