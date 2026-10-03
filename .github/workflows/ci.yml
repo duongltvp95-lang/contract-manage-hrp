@@ -1,0 +1,174 @@
+name: CI
+
+# Wave 1 — plan sections 85, 96, 108.
+#
+# Every job runs on every push. The suites that need a live backend skip
+# themselves when the credentials are absent (`tests/integration/setup.ts` and
+# the `hasLiveBackend` guard in `tests/e2e/helpers.ts`), so a fork without
+# secrets gets a green build instead of a red one it cannot fix.
+#
+# NOTE: `secrets` is NOT an allowed context in a job-level `if:` — only
+# `github`, `needs`, `vars` and `inputs` are. Gating a job on a secret makes the
+# entire workflow file invalid, and GitHub then reports a failed run with zero
+# jobs. That is exactly what this repository's first push did; the skip logic
+# now lives in the test suites, where it belongs.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Next.js telemetry is noise in CI logs.
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  quality:
+    name: lint · typecheck · build · unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      # The build needs *some* Supabase values to exist; they are never used at
+      # build time, and the real ones are injected by the hosting platform.
+      - name: Build
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_placeholder
+          SUPABASE_SERVICE_ROLE_KEY: sb_secret_placeholder
+          R2_ACCOUNT_ID: placeholder
+          R2_ACCESS_KEY_ID: placeholder
+          R2_SECRET_ACCESS_KEY: placeholder
+          R2_BUCKET_NAME: placeholder
+          R2_ENDPOINT: https://placeholder.r2.cloudflarestorage.com
+
+  integration:
+    name: integration (RLS · authorization · rate limit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: quality
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Write the environment file from secrets
+        run: |
+          cat > .env.local <<'EOF'
+          NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APP_URL=http://localhost:3100
+          MAX_UPLOAD_SIZE_MB=50
+          R2_ACCOUNT_ID=${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY=${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME=${{ secrets.R2_BUCKET_NAME }}
+          R2_ENDPOINT=${{ secrets.R2_ENDPOINT }}
+          TEST_ADMIN_EMAIL=${{ secrets.TEST_ADMIN_EMAIL }}
+          TEST_ADMIN_PASSWORD=${{ secrets.TEST_ADMIN_PASSWORD }}
+          EOF
+
+      - name: Integration tests
+        run: pnpm test:integration
+
+      - name: Remove the environment file
+        if: always()
+        run: rm -f .env.local
+
+  e2e:
+    name: e2e (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: quality
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install the browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Write the environment file from secrets
+        run: |
+          cat > .env.local <<'EOF'
+          NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APP_URL=http://localhost:3200
+          MAX_UPLOAD_SIZE_MB=50
+          R2_ACCOUNT_ID=${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY=${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME=${{ secrets.R2_BUCKET_NAME }}
+          R2_ENDPOINT=${{ secrets.R2_ENDPOINT }}
+          TEST_ADMIN_EMAIL=${{ secrets.TEST_ADMIN_EMAIL }}
+          TEST_ADMIN_PASSWORD=${{ secrets.TEST_ADMIN_PASSWORD }}
+          EOF
+
+      - name: End-to-end tests
+        run: pnpm test:e2e
+
+      - name: Remove the environment file
+        if: always()
+        run: rm -f .env.local
+
+      - name: Upload the Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
