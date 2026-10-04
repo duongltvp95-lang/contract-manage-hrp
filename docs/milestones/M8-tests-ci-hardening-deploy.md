@@ -431,7 +431,7 @@ completes section 9, the correct reading is "verified, not yet in production".
 | Cross-org DB **and** R2 are blocked by automated tests | ✅ `rls.test.ts`, `authorization.test.ts`, `security.spec.ts` |
 | Cleanup done: no leftover test accounts or data | ✅ admin only; 0 contracts / files / objects |
 | Deploy docs + the full environment list | ✅ README → Deployment, `.env.example`, section 5 |
-| Production deploy and smoke test | ⏳ **owner step** — section 9 |
+| Production deploy and smoke test | ✅ deployed at `https://contract-manage-hrp.vercel.app`; demo scenario 6/6 on the deployed app; test account deleted; 0/0/0 leftover — section 12 |
 
 ## 11. Hardening addendum (post-review)
 
@@ -515,3 +515,47 @@ pnpm test:e2e          39 passed            — app flows unaffected by the RLS 
   `include` list for whatever `distDir` a server last ran with, and the stale
   generated types of a removed test route then broke `next build` until the
   directories were deleted by hand.
+
+## 12. Production smoke test (deployed)
+
+Deployed at `https://contract-manage-hrp.vercel.app` (custom domain deferred).
+The plan section 102 demo scenario was run against the deployed app, with the
+dedicated test account, and passed **6/6**:
+
+```text
+login → dashboard          ✅ 10.9s   (unauthenticated API also probed: 401)
+create contract            ✅  7.2s
+edit (Sheet + list)        ✅  9.6s
+search by number           ✅  4.9s
+upload PDF → R2 → row      ✅  7.1s
+open + PDF viewer          ✅  5.1s
+```
+
+What the run found, in order:
+
+1. **CORS was already right** — the bucket accepts the Vercel origin for PUT and
+   GET (owner had added it).
+2. **Login dead: `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   were missing from the client bundle.** `NEXT_PUBLIC_*` values are inlined at
+   build time; the page rendered (SSR) but the login form threw
+   *"@supabase/ssr: Your project's URL and API key are required"* on submit.
+   Fixed by the owner (env + redeploy).
+3. **All file paths 500: the five R2 variables were missing.** `view-url` /
+   `upload-url` presign threw while every DB path worked. Fixed by the owner
+   (env + a fresh deployment — the first redeploy had not picked them up).
+4. **The search test flaked 50% of the time — a fill-before-hydration race.**
+   React resets uncontrolled inputs to their server-rendered values during
+   hydration, so a fill + submit read an empty query on the streaming page.
+   Fixed in `d3b3737`: `waitForHydration()` + `gotoAndSettle()` are now used by
+   every navigation in the specs, including `login()` (39/39 locally).
+
+After the pass: the test account was deleted and production verified clean —
+one user (`duongltvp95@gmail.com`), 0 contracts, 0 files, 0 R2 objects.
+
+Exit gate (§8) on production: questions 1-12 were exercised through the
+deployed origin by the demo subset; the remaining matrix rows (archive, image
+uploads, filters, pagination, zoom, retry) and the cross-org questions 13-14
+are verified against the **same** production Supabase project and R2 bucket by
+the integration suite (40 tests) and the full Playwright suite (39 tests)
+running against a production build — the enforcement for those lives in
+Supabase/R2, which the deployed app shares.
