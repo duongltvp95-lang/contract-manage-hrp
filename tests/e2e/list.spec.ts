@@ -4,6 +4,7 @@ import {
   ORG_A,
   TEST_PREFIX,
   adminClient,
+  gotoAndSettle,
   isoDate,
   hasLiveBackend,
   login,
@@ -73,7 +74,7 @@ test.describe("contract list", () => {
 
   test("searches by contract number", async ({ page }) => {
     await login(page);
-    await page.goto("/contracts");
+    await gotoAndSettle(page, "/contracts");
     await page.fill('input[name="q"]', expiredNumber);
     await page.locator('form button[type="submit"]').click();
 
@@ -86,7 +87,7 @@ test.describe("contract list", () => {
 
   test("searches by partner name", async ({ page }) => {
     await login(page);
-    await page.goto("/contracts");
+    await gotoAndSettle(page, "/contracts");
     await page.fill('input[name="q"]', partnerNeedle);
     await page.locator('form button[type="submit"]').click();
 
@@ -97,7 +98,7 @@ test.describe("contract list", () => {
 
   test("a search with no matches shows the empty state, not a blank table", async ({ page }) => {
     await login(page);
-    await page.goto(`/contracts?q=${TEST_PREFIX}definitely-nothing-${stamp}`);
+    await gotoAndSettle(page, `/contracts?q=${TEST_PREFIX}definitely-nothing-${stamp}`);
 
     const body = page.locator("body");
     await expect(body).toContainText("Không tìm thấy hợp đồng phù hợp");
@@ -106,7 +107,7 @@ test.describe("contract list", () => {
 
   test("the expired filter returns only expired contracts", async ({ page }) => {
     await login(page);
-    await page.goto("/contracts");
+    await gotoAndSettle(page, "/contracts");
 
     await page.locator("#preset").click();
     await page.getByRole("option", { name: "Đã hết hạn" }).click();
@@ -119,7 +120,7 @@ test.describe("contract list", () => {
 
   test("the expiring-90 filter finds a contract 20 days out and not an expired one", async ({ page }) => {
     await login(page);
-    await page.goto("/contracts");
+    await gotoAndSettle(page, "/contracts");
 
     await page.locator("#preset").click();
     await page.getByRole("option", { name: "Hết hạn trong 90 ngày" }).click();
@@ -132,7 +133,7 @@ test.describe("contract list", () => {
 
   test("paginates the seeded rows", async ({ page }) => {
     await login(page);
-    await page.goto(`/contracts?q=${TEST_PREFIX}PAGE-${stamp}`);
+    await gotoAndSettle(page, `/contracts?q=${TEST_PREFIX}PAGE-${stamp}`);
 
     const body = page.locator("body");
     await expect(body).toContainText(`trong ${SEEDED} hợp đồng`);
@@ -152,7 +153,7 @@ test.describe("contract list", () => {
 
   test("keeps the filter when changing the page size", async ({ page }) => {
     await login(page);
-    await page.goto(`/contracts?q=${TEST_PREFIX}PAGE-${stamp}&page=2`);
+    await gotoAndSettle(page, `/contracts?q=${TEST_PREFIX}PAGE-${stamp}&page=2`);
 
     await page.locator("#pageSize").click();
     await page.getByRole("option", { name: "50" }).click();
@@ -167,7 +168,7 @@ test.describe("contract list", () => {
 
   test("sorts by a sortable column", async ({ page }) => {
     await login(page);
-    await page.goto(`/contracts?q=${TEST_PREFIX}PAGE-${stamp}`);
+    await gotoAndSettle(page, `/contracts?q=${TEST_PREFIX}PAGE-${stamp}`);
 
     await page.getByRole("link", { name: /Ngày ký/ }).click();
     await expect(page).toHaveURL(/sort=signed_date/);
@@ -176,7 +177,7 @@ test.describe("contract list", () => {
 
   test("clears every filter in one click", async ({ page }) => {
     await login(page);
-    await page.goto(`/contracts?q=${expiredNumber}&preset=expired`);
+    await gotoAndSettle(page, `/contracts?q=${expiredNumber}&preset=expired`);
 
     await page.getByRole("link", { name: /Xoá bộ lọc/ }).click();
     await expect(page).toHaveURL(/\/contracts$/);

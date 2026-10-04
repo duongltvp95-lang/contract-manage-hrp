@@ -15,6 +15,7 @@ import {
   seedContracts,
   sweep,
   type SeededContract,
+  gotoAndSettle,
 } from "./helpers";
 
 test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
@@ -123,7 +124,7 @@ test.describe("cross-organization isolation", () => {
 
   test("the organizer's own contract opens normally", async ({ page }) => {
     await login(page);
-    const response = await page.goto(`/contracts/${ownContract.id}`);
+    const response = await gotoAndSettle(page, `/contracts/${ownContract.id}`);
     expect(response?.status()).toBe(200);
     await expect(page.locator("body")).toContainText(`${TEST_PREFIX}ORGA-${stamp}`);
   });
@@ -131,7 +132,7 @@ test.describe("cross-organization isolation", () => {
   test("the second tenant cannot open the first tenant's contract", async ({ page }) => {
     await login(page, secondTenantEmail, secondTenantPassword);
 
-    await page.goto(`/contracts/${ownContract.id}`);
+    await gotoAndSettle(page, `/contracts/${ownContract.id}`);
 
     // The contract is refused and nothing about it is rendered. The status code
     // is not asserted: on a production build Next has already flushed the
@@ -147,7 +148,7 @@ test.describe("cross-organization isolation", () => {
 
   test("the second tenant's list shows none of the first tenant's data", async ({ page }) => {
     await login(page, secondTenantEmail, secondTenantPassword);
-    await page.goto("/contracts");
+    await gotoAndSettle(page, "/contracts");
 
     const body = page.locator("body");
     await expect(body).not.toContainText(`${TEST_PREFIX}ORGA-${stamp}`);
@@ -159,7 +160,7 @@ test.describe("cross-organization isolation", () => {
 
   test("the second tenant's dashboard counts only its own contracts", async ({ page }) => {
     await login(page, secondTenantEmail, secondTenantPassword);
-    await page.goto("/dashboard");
+    await gotoAndSettle(page, "/dashboard");
 
     const card = page.locator('[data-testid="metric-total"]');
     await expect(card).toBeVisible();
@@ -236,7 +237,7 @@ test.describe("cross-organization isolation", () => {
   test("the first tenant cannot see the second tenant's contract either", async ({ page }) => {
     await login(page);
 
-    await page.goto(`/contracts/${otherContract.id}`);
+    await gotoAndSettle(page, `/contracts/${otherContract.id}`);
 
     // Same reasoning as the test above: isolation is enforced in both
     // directions, and what is asserted is the refusal and the absence of a

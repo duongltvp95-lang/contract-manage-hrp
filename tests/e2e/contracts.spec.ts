@@ -12,6 +12,7 @@ import {
   runId,
   setInput,
   sweep,
+  gotoAndSettle,
 } from "./helpers";
 
 test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
@@ -41,7 +42,7 @@ test.describe("contract lifecycle", () => {
     const expiry = isoDate(45);
 
     await login(page);
-    await page.goto("/contracts/new");
+    await gotoAndSettle(page, "/contracts/new");
 
     await page.fill('input[name="contractNumber"]', contractNumber);
     await page.fill('input[name="partnerText"]', "Công ty TNHH Samsung Electronics Việt Nam");
@@ -80,7 +81,7 @@ test.describe("contract lifecycle", () => {
     const newExpiry = isoDate(-10);
 
     await login(page);
-    await page.goto(`/contracts/${id}`);
+    await gotoAndSettle(page, `/contracts/${id}`);
 
     await clickSafe(page, '[data-testid="contract-edit-button"]');
     await expect(page.locator('[data-testid="edit-contract-sheet"]')).toBeVisible();
@@ -114,7 +115,7 @@ test.describe("contract lifecycle", () => {
     await expect(detail).toContainText("Đối tác đã sửa");
 
     // And so does the list.
-    await page.goto(`/contracts?q=${encodeURIComponent(contractNumber)}`);
+    await gotoAndSettle(page, `/contracts?q=${encodeURIComponent(contractNumber)}`);
     await expect(page.locator("body")).toContainText(dmy(newExpiry));
   });
 
@@ -123,7 +124,7 @@ test.describe("contract lifecycle", () => {
     const contractNumber = `${TEST_PREFIX}CREATE-${stamp}`;
 
     await login(page);
-    await page.goto(`/contracts/${id}`);
+    await gotoAndSettle(page, `/contracts/${id}`);
 
     await clickSafe(page, '[data-testid="contract-more-button"]');
     await clickSafe(page, '[data-testid="contract-archive-menu-item"]');
@@ -146,21 +147,21 @@ test.describe("contract lifecycle", () => {
     expect(data?.id).toBe(id);
     expect(data?.archived_at).not.toBeNull();
 
-    await page.goto(`/contracts?q=${encodeURIComponent(contractNumber)}`);
+    await gotoAndSettle(page, `/contracts?q=${encodeURIComponent(contractNumber)}`);
     await expect(page.locator("body")).toContainText("Không tìm thấy hợp đồng phù hợp");
 
-    await page.goto("/dashboard");
+    await gotoAndSettle(page, "/dashboard");
     await expect(page.locator("body")).not.toContainText(contractNumber);
 
     // Still reachable by direct link, clearly marked, and no longer editable.
-    await page.goto(`/contracts/${id}`);
+    await gotoAndSettle(page, `/contracts/${id}`);
     await expect(page.locator('[data-testid="contract-archived-badge"]')).toBeVisible();
     await expect(page.locator('[data-testid="contract-edit-button"]')).toHaveCount(0);
   });
 
   test("validates the form before saving", async ({ page }) => {
     await login(page);
-    await page.goto("/contracts/new");
+    await gotoAndSettle(page, "/contracts/new");
 
     await page.fill('input[name="contractNumber"]', "x".repeat(101));
     await clickSafe(page, '[data-testid="contract-form-submit"]');
@@ -172,7 +173,7 @@ test.describe("contract lifecycle", () => {
 
   test("a contract that does not exist shows the not-found page, not an empty one", async ({ page }) => {
     await login(page);
-    await page.goto(`/contracts/${crypto.randomUUID()}`);
+    await gotoAndSettle(page, `/contracts/${crypto.randomUUID()}`);
 
     // The status is deliberately NOT asserted. `notFound()` fires after Next has
     // flushed the Partial Prerender shell, so a production build answers 200

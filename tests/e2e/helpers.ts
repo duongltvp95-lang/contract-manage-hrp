@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Response } from "@playwright/test";
 import zlib from "node:zlib";
 import {
   DeleteObjectCommand,
@@ -210,12 +210,48 @@ export function dmy(iso: string): string {
 // Browser helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Waits until the Next.js client runtime has booted and React has had a beat to
+ * hydrate the page.
+ *
+ * Interacting with a form before hydration completes loses input: React resets
+ * uncontrolled fields to their server-rendered values during hydration, so a
+ * fill + submit that "worked" reads an empty field and the page does nothing
+ * visible. Locally the window is tiny; against a streaming production page
+ * (Vercel) it is real — this is exactly what made the search test flake on the
+ * deployed app: fill → submit → URL unchanged.
+ */
+export async function waitForHydration(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => Boolean((window as unknown as { next?: { version?: string } }).next?.version),
+    undefined,
+    { timeout: 30_000 },
+  );
+  // A short beat for React 19's concurrent hydration to finish attaching
+  // handlers after the runtime reports in.
+  await page.waitForTimeout(400);
+}
+
+/**
+ * `page.goto()` followed by `waitForHydration()` — the safe way to navigate
+ * before interacting with the page. Returns the navigation response, like
+ * `page.goto` does, for the few tests that read the status.
+ */
+export async function gotoAndSettle(
+  page: Page,
+  url: string,
+): Promise<Response | null> {
+  const response = await page.goto(url);
+  await waitForHydration(page);
+  return response;
+}
+
 export async function login(
   page: Page,
   email = ADMIN_EMAIL,
   password = ADMIN_PASSWORD,
 ): Promise<void> {
-  await page.goto("/login");
+  await gotoAndSettle(page, "/login");
   await page.fill("#email", email);
   await page.fill("#password", password);
   await Promise.all([

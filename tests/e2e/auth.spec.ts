@@ -8,6 +8,7 @@ import {
   hasLiveBackend,
   login,
   sweep,
+  gotoAndSettle,
 } from "./helpers";
 
 test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
@@ -19,18 +20,18 @@ test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
 
 test.describe("authentication", () => {
   test("a protected route redirects to the sign-in page when signed out", async ({ page }) => {
-    await page.goto("/contracts");
+    await gotoAndSettle(page, "/contracts");
     await expect(page).toHaveURL(/\/login/);
 
-    await page.goto("/dashboard");
+    await gotoAndSettle(page, "/dashboard");
     await expect(page).toHaveURL(/\/login/);
 
-    await page.goto("/settings");
+    await gotoAndSettle(page, "/settings");
     await expect(page).toHaveURL(/\/login/);
   });
 
   test("a wrong password is refused and explained, not a blank page", async ({ page }) => {
-    await page.goto("/login");
+    await gotoAndSettle(page, "/login");
     await page.fill("#email", ADMIN_EMAIL);
     await page.fill("#password", `${ADMIN_PASSWORD}-wrong`);
     await page.locator('button[type="submit"]').click();
@@ -47,12 +48,12 @@ test.describe("authentication", () => {
     await expect(page).toHaveURL(/\/dashboard/);
     await expect(page.getByRole("heading", { name: "Tổng quan" })).toBeVisible();
 
-    await page.goto("/settings");
+    await gotoAndSettle(page, "/settings");
     await page.getByRole("button", { name: "Đăng xuất" }).click();
     await expect(page).toHaveURL(/\/login/, { timeout: 30_000 });
 
     // The session is really gone: a protected route bounces again.
-    await page.goto("/dashboard");
+    await gotoAndSettle(page, "/dashboard");
     await expect(page).toHaveURL(/\/login/);
   });
 

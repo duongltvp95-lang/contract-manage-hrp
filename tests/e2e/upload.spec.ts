@@ -7,6 +7,7 @@ import {
   buildPdf,
   buildPng,
   clickSafe,
+  gotoAndSettle,
   hasLiveBackend,
   login,
   R2_REQUEST,
@@ -46,7 +47,7 @@ test.describe("upload", () => {
     const contractNumber = `${TEST_PREFIX}UPLOAD-PDF-${stamp}`;
 
     await login(page);
-    await page.goto("/contracts/new");
+    await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
     await page.setInputFiles('input[type="file"]', pdfPath);
 
@@ -75,7 +76,7 @@ test.describe("upload", () => {
     const contractNumber = `${TEST_PREFIX}UPLOAD-MULTI-${stamp}`;
 
     await login(page);
-    await page.goto("/contracts/new");
+    await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
     await page.setInputFiles('input[type="file"]', [pngPath, jpgPath]);
 
@@ -102,7 +103,7 @@ test.describe("upload", () => {
     ]);
 
     // Both files are listed in the viewer's selector.
-    await page.goto(`/contracts/${id}`);
+    await gotoAndSettle(page, `/contracts/${id}`);
     await expect(page.locator('[data-testid="document-selector"]')).toBeVisible();
     await expect(page.locator('[data-testid^="document-option-"]')).toHaveCount(2);
   });
@@ -116,7 +117,7 @@ test.describe("upload", () => {
     });
 
     await login(page);
-    await page.goto("/contracts/new");
+    await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', `${TEST_PREFIX}UPLOAD-PROGRESS-${stamp}`);
     await page.setInputFiles('input[type="file"]', pdfPath);
 
@@ -143,7 +144,7 @@ test.describe("upload", () => {
     });
 
     await login(page);
-    await page.goto("/contracts/new");
+    await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
     await page.setInputFiles('input[type="file"]', pdfPath);
 
@@ -180,7 +181,7 @@ test.describe("upload", () => {
     const evilPath = writeArtifact(`e2e-${stamp}.exe`, Buffer.from("MZ not a document"));
 
     await login(page);
-    await page.goto("/contracts/new");
+    await gotoAndSettle(page, "/contracts/new");
     await page.setInputFiles('input[type="file"]', evilPath);
 
     // react-dropzone refuses it at the source: the user is told why, and the

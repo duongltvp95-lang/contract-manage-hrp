@@ -7,6 +7,7 @@ import {
   attachFile,
   buildPdf,
   buildPng,
+  gotoAndSettle,
   isoDate,
   hasLiveBackend,
   login,
@@ -87,7 +88,7 @@ test.describe("document viewer", () => {
 
   test("renders a PDF in the browser and navigates pages", async ({ page }) => {
     await login(page);
-    await page.goto(pdfUrl());
+    await gotoAndSettle(page, pdfUrl());
 
     await expect(page.locator('[data-testid="document-selector"]')).toBeVisible({
       timeout: 30_000,
@@ -112,7 +113,7 @@ test.describe("document viewer", () => {
 
   test("zooms in and out, and fit width behaves as a mode", async ({ page }) => {
     await login(page);
-    await page.goto(pdfUrl());
+    await gotoAndSettle(page, pdfUrl());
 
     const zoom = page.locator('[data-testid="pdf-zoom-indicator"]');
     const fit = page.locator('[data-testid="pdf-fit-width"]');
@@ -144,7 +145,7 @@ test.describe("document viewer", () => {
 
   test("switches between documents, showing the image viewer for a PNG", async ({ page }) => {
     await login(page);
-    await page.goto(`/contracts/${contract.id}`);
+    await gotoAndSettle(page, `/contracts/${contract.id}`);
 
     const options = page.locator('[data-testid^="document-option-"]');
     await expect(options).toHaveCount(2, { timeout: 30_000 });
@@ -168,7 +169,7 @@ test.describe("document viewer", () => {
 
   test("the image viewer zooms and fits", async ({ page }) => {
     await login(page);
-    await page.goto(`/contracts/${contract.id}`);
+    await gotoAndSettle(page, `/contracts/${contract.id}`);
 
     await page.getByRole("button", { name: /viewer\.png/ }).click();
     await expect(page.locator('[data-testid="image-viewer-image"]')).toBeVisible({
@@ -213,7 +214,7 @@ test.describe("document viewer", () => {
     });
 
     await login(page);
-    await page.goto(pdfUrl());
+    await gotoAndSettle(page, pdfUrl());
 
     // The viewer notices, mints a new URL, and the document loads.
     await expect
@@ -244,7 +245,7 @@ test.describe("document viewer", () => {
 
     try {
       await login(page);
-      await page.goto(pdfUrl());
+      await gotoAndSettle(page, pdfUrl());
 
       // Plan section 80: the contract view survives a broken document. The
       // metadata, the heading and the selector must all still be there — a
