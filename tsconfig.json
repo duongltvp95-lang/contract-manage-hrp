@@ -45,6 +45,11 @@
     ".next-e2e/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".next",
+    ".next-test",
+    ".next-e2e",
+    "test-results",
+    "playwright-report"
   ]
 }

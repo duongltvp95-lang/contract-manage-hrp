@@ -1,15 +1,16 @@
 import "server-only";
 
-import { PresignUploadSchema } from "@schemas/file";
+import { MAX_UPLOAD_SIZE_BYTES, MAX_UPLOAD_SIZE_MB, PresignUploadSchema } from "@schemas/file";
 
-import { buildObjectKey } from "@/lib/r2/keys";
-import { headObject } from "@/lib/r2/objects";
+import { buildObjectKey, isObjectKeyFor } from "@/lib/r2/keys";
+import { deleteObject, headObject } from "@/lib/r2/objects";
 import {
   createUploadUrl,
   createViewUrl,
   VIEW_URL_TTL_SECONDS,
 } from "@/lib/r2/presign";
 import { getR2Bucket } from "@/lib/r2/client";
+import { formatBytes } from "@/lib/format";
 import { createClient } from "@/lib/supabase/server";
 import { getContract } from "./contracts";
 import { dbError, err, ok, type ServiceResult } from "./types";
@@ -186,8 +187,7 @@ export async function completeUpload(
 
   // The key must sit under this organization and contract; a client could
   // otherwise hand back an arbitrary key it happens to know.
-  const expectedPrefix = `contracts/${organizationId}/${contractId}/${fileId}/`;
-  if (!objectKey.startsWith(expectedPrefix)) {
+  if (!isObjectKeyFor(objectKey, { organizationId, contractId, fileId })) {
     return err("forbidden", "objectKey không khớp với hợp đồng");
   }
 
@@ -196,6 +196,31 @@ export async function completeUpload(
     return err(
       "upload_incomplete",
       "Tệp chưa được tải lên hoàn tất. Vui lòng thử lại.",
+    );
+  }
+
+  /**
+   * Enforce the ceiling on what actually landed, not on what was promised.
+   *
+   * The size in the request is the client's claim. A presigned PUT cannot cap a
+   * body — the signature fixes the key and the content type, not a maximum
+   * length — so a client can declare 1 KB, upload 500 MB and the bytes are in
+   * the bucket before anyone looks. The HEAD above is the first fact available,
+   * and until this check existed the only limit that applied was the one on the
+   * browser's own file picker.
+   *
+   * The object is removed before returning: leaving it would mean paying to
+   * store something the application refuses to acknowledge, with no row to find
+   * it by later.
+   */
+  const actualSize = head.contentLength ?? 0;
+
+  if (actualSize > MAX_UPLOAD_SIZE_BYTES) {
+    await deleteObject(objectKey);
+
+    return err(
+      "validation",
+      `Tệp vượt quá giới hạn ${MAX_UPLOAD_SIZE_MB} MB (tệp thực tế ${formatBytes(actualSize)}). Tệp đã được xoá, vui lòng chọn tệp nhỏ hơn.`,
     );
   }
 
@@ -211,7 +236,8 @@ export async function completeUpload(
       object_key: objectKey,
       original_filename: input.filename,
       mime_type: input.mimeType,
-      file_size: head.contentLength ?? input.fileSize,
+      // The measured size, not the declared one.
+      file_size: actualSize > 0 ? actualSize : input.fileSize,
       checksum: head.etag,
       created_by: userId,
     })
@@ -225,7 +251,8 @@ export async function completeUpload(
   return ok(data as ContractFileRow);
 }
 
-/** Plan section 77 — files of one contract, newest first. */export async function listContractFiles(
+/** Plan section 77 — files of one contract, newest first. */
+export async function listContractFiles(
   organizationId: string,
   contractId: string,
 ): Promise<ServiceResult<ContractFileRow[]>> {
@@ -303,11 +330,43 @@ export async function getFileViewUrl(
     return access;
   }
 
-  const viewUrl = await createViewUrl(located.object_key);
+  const authorized = access.data.file;
+  if (!authorized) {
+    return err("forbidden", "Tệp không thuộc hợp đồng này");
+  }
+
+  /**
+   * The stored key must still belong to the ids in the row, before anything is
+   * signed.
+   *
+   * The authorization above answers "may this caller see this file row?". It
+   * does not answer "does this row still point where it claims?" — the
+   * `object_key` column is data, and data can be wrong. A row re-pointed at
+   * another organization's key (by hand, by a bad migration, or by a future
+   * bug) would otherwise turn this function into a way to read an arbitrary
+   * object out of the bucket, with a valid signature and a valid session.
+   *
+   * `isObjectKeyFor()` rebuilds the prefix from the row's own ids, so a mismatch
+   * is refused instead of signed.
+   */
+  if (
+    !isObjectKeyFor(authorized.object_key, {
+      organizationId,
+      contractId: authorized.contract_id,
+      fileId: authorized.id,
+    })
+  ) {
+    return err(
+      "forbidden",
+      "Đường dẫn tệp không hợp lệ nên không thể tạo liên kết xem",
+    );
+  }
+
+  const viewUrl = await createViewUrl(authorized.object_key);
 
   return ok({
     fileId,
-    objectKey: located.object_key,
+    objectKey: authorized.object_key,
     viewUrl,
     expiresInSeconds: VIEW_URL_TTL_SECONDS,
     expiresAt: new Date(Date.now() + VIEW_URL_TTL_SECONDS * 1000).toISOString(),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { OBJECT_KEY_PREFIX, buildObjectKey, sanitizeFilename } from "@/lib/r2/keys";
+import { OBJECT_KEY_PREFIX, buildObjectKey, isObjectKeyFor, sanitizeFilename } from "@/lib/r2/keys";
 import {
   UPLOAD_URL_TTL_SECONDS,
   VIEW_URL_TTL_MAX_SECONDS,
@@ -111,6 +111,68 @@ describe("buildObjectKey (plan section 37)", () => {
     });
     expect(mine.startsWith(`contracts/${ORG}/`)).toBe(true);
     expect(theirs.startsWith(`contracts/${ORG}/`)).toBe(false);
+  });
+});
+
+describe("isObjectKeyFor — M8 hardening, fix 3", () => {
+  const parts = { organizationId: ORG, contractId: CONTRACT, fileId: FILE };
+
+  it("accepts a key built for exactly these ids", () => {
+    const key = buildObjectKey({ ...parts, filename: "Hợp đồng mẫu.pdf" });
+    expect(isObjectKeyFor(key, parts)).toBe(true);
+  });
+
+  it("accepts a different filename at the same location", () => {
+    // The filename is the client's, so a mismatch there is not a mismatch.
+    expect(
+      isObjectKeyFor(`contracts/${ORG}/${CONTRACT}/${FILE}/anything.jpg`, parts),
+    ).toBe(true);
+  });
+
+  it("rejects a key belonging to another organization", () => {
+    const other = "22222222-2222-2222-2222-222222222222";
+    expect(
+      isObjectKeyFor(`contracts/${other}/${CONTRACT}/${FILE}/a.pdf`, parts),
+    ).toBe(false);
+  });
+
+  it("rejects a key belonging to another contract or file", () => {
+    expect(
+      isObjectKeyFor(`contracts/${ORG}/${FILE}/${FILE}/a.pdf`, parts),
+    ).toBe(false);
+    expect(
+      isObjectKeyFor(`contracts/${ORG}/${CONTRACT}/${CONTRACT}/a.pdf`, parts),
+    ).toBe(false);
+  });
+
+  it("rejects a key with no filename segment", () => {
+    expect(isObjectKeyFor(`contracts/${ORG}/${CONTRACT}/${FILE}/`, parts)).toBe(false);
+  });
+
+  it("rejects a key that climbs out of the prefix", () => {
+    expect(
+      isObjectKeyFor(`contracts/${ORG}/${CONTRACT}/${FILE}/../secret.pdf`, parts),
+    ).toBe(false);
+    expect(
+      isObjectKeyFor(`contracts/${ORG}/${CONTRACT}/${FILE}/..`, parts),
+    ).toBe(false);
+    expect(
+      isObjectKeyFor(`contracts/${ORG}/${CONTRACT}/${FILE}/nested/a.pdf`, parts),
+    ).toBe(false);
+  });
+
+  it("rejects a plain key from somewhere else entirely", () => {
+    expect(isObjectKeyFor("contracts/whatever", parts)).toBe(false);
+    expect(isObjectKeyFor("", parts)).toBe(false);
+  });
+
+  it("answers false rather than throwing when an id is not a UUID", () => {
+    expect(
+      isObjectKeyFor(`contracts/${ORG}/${CONTRACT}/${FILE}/a.pdf`, {
+        ...parts,
+        organizationId: "../../etc",
+      }),
+    ).toBe(false);
   });
 });
 

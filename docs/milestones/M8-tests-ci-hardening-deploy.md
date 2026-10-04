@@ -432,3 +432,86 @@ completes section 9, the correct reading is "verified, not yet in production".
 | Cleanup done: no leftover test accounts or data | ✅ admin only; 0 contracts / files / objects |
 | Deploy docs + the full environment list | ✅ README → Deployment, `.env.example`, section 5 |
 | Production deploy and smoke test | ⏳ **owner step** — section 9 |
+
+## 11. Hardening addendum (post-review)
+
+A review before the production deploy flagged three write-path holes and
+prescribed the fixes. All three are closed, migrated and regression-tested.
+
+### 11a. Migration `20261003120000_harden_write_paths.sql`
+
+Closes the three database-side capabilities the application never uses:
+
+1. **No client hard-delete.** `DELETE` on `contracts` and on `contract_files` is
+   revoked from `authenticated`; the `contracts` DELETE policy is dropped
+   entirely. `service_role` keeps the rights — it is what the cleanup tooling
+   uses. Wave 1 removes contracts only through archiving.
+2. **An archived contract is frozen.** The `contracts` UPDATE policy gains
+   `archived_at IS NULL` in **USING** (and deliberately not in WITH CHECK, which
+   would break the archiving write itself). Editing and un-archiving through the
+   API are now refused at the database layer, not only in the service.
+3. **A file row is immutable.** UPDATE and DELETE on `contract_files` are
+   revoked and their policies dropped: a row cannot be re-pointed at another
+   `object_key` after upload, and cannot be deleted by a client.
+
+One extra change the review's line references implied: the foreign key
+`contract_files.contract_id` moves from `ON DELETE CASCADE` to
+`ON DELETE RESTRICT`. The cascade deleted the very rows that record which R2
+objects exist — turning a hard delete into permanent, untraceable orphaned
+storage. RESTRICT forces files (and their objects) to be removed first. Every
+teardown path already does that, so nothing depended on the cascade.
+
+### 11b. The other two fixes
+
+- **Upload ceiling enforced on real bytes** (`lib/services/files.ts`,
+  `completeUpload`). A presigned PUT fixes the key and the content type but not a
+  maximum length, so a client could declare 1 KB and upload 500 MB. The size R2
+  reports via HEAD is now the authority: over the limit → the object is deleted
+  from R2 and the call answers 422, no row is written, and the stored
+  `file_size` is the measured value, never the claimed one.
+- **The stored key is validated before signing** (`lib/services/files.ts`,
+  `getFileViewUrl`, plus the new pure `isObjectKeyFor()` in `lib/r2/keys.ts`).
+  Authorization answers "may this caller see this row?", not "does this row still
+  point where it claims?". A row re-pointed at another tenant's key would
+  otherwise have produced a valid signed URL for an object belonging to someone
+  else. The prefix is rebuilt from the row's own ids; a mismatch answers 403
+  with no URL.
+
+### 11c. Regression tests
+
+| # | Test | Where |
+| --- | --- | --- |
+| 1 | a client cannot DELETE its own contract or a file row; cannot re-point a file row; cannot edit or un-archive an archived contract; can still archive a live one | `tests/integration/rls.test.ts` (+5) |
+| 2 | declare-small / upload-large is answered 422 and **the object is deleted from R2**; the control case still passes; the measured size is what gets stored | `tests/integration/hardening.test.ts` (new, 4) |
+| 3 | a re-pointed `object_key` is refused with no signed URL; the matching-key control still signs | `tests/integration/authorization.test.ts` (+2) |
+| — | `isObjectKeyFor` prefix rules, path-escape attempts, non-UUID ids | `tests/unit/r2-keys-presign.test.ts` (+8) |
+
+The over-limit case is only reachable by a client that bypasses the browser, so
+it cannot be produced through the UI. `tests/integration/global-setup.ts`
+therefore installs a test-only route (`tests/integration/fixtures/…`, copied in
+and removed around the run, 404 unless `HARDENING_PROBE=1`, gitignored, never in
+a production build) and runs the integration server with `MAX_UPLOAD_SIZE_MB=1`
+so the test moves 2 MB instead of 51. Both are documented where they live.
+
+### 11d. Results
+
+```text
+typecheck PASS · lint PASS · build PASS
+pnpm test            102 passed (was 94)  — unit
+pnpm test:integration  40 passed (was 29)  — live Supabase + live R2
+pnpm test:e2e          39 passed            — app flows unaffected by the RLS change
+```
+
+### 11e. Operational notes
+
+- The suites no longer depend on the owner's personal account. After the admin
+  password was rotated (the security steps recommended earlier in this
+  document), the live suites switched to a **dedicated test account**
+  (`test.wave1@hrpartner.vn`, random password held only in the gitignored
+  `.env.local`). That account exists for the suites and the production smoke
+  test, and should be deleted after them.
+- `tsconfig.json` now excludes the test build directories (`.next-test`,
+  `.next-e2e`, `test-results`, `playwright-report`). Next rewrites the tsconfig
+  `include` list for whatever `distDir` a server last ran with, and the stale
+  generated types of a removed test route then broke `next build` until the
+  directories were deleted by hand.

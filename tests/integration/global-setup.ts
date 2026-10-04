@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +18,12 @@ import { BASE_URL, TEST_PORT } from "./config";
  */
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+
+const PROBE_SOURCE = fileURLToPath(
+  new URL("./fixtures/hardening-probe.route.ts", import.meta.url),
+);
+const PROBE_TARGET = `${repoRoot}app/api/hardening-probe/route.ts`;
+const PROBE_DIR = dirname(PROBE_TARGET);
 
 let child: ChildProcess | null = null;
 
@@ -61,13 +69,46 @@ function childEnvironment(): NodeJS.ProcessEnv {
     // server is running (`next.config.ts` reads NEXT_DIST_DIR).
     NEXT_DIST_DIR: ".next-test",
     PORT: String(TEST_PORT),
+    // A 1 MB ceiling instead of the configured 50 MB. The over-limit test then
+    // moves 2 MB rather than 51, and the value is configuration — the code path
+    // under test is identical. Nothing else in this suite uploads.
+    MAX_UPLOAD_SIZE_MB: "1",
+    // Enables the fixture route below.
+    HARDENING_PROBE: "1",
   };
 }
 
+/**
+ * Installs the test-only probe route for the duration of the run.
+ *
+ * `completeUpload()` is the only place the real upload ceiling is enforced
+ * against bytes that actually landed, and it is reachable from the browser only
+ * as a server action invoked by a client that already measured the file — so the
+ * case worth testing (declare small, upload large) cannot be produced through
+ * the UI. This copies a route in to reach it.
+ *
+ * It is removed in teardown, it lives under `tests/`, and the route itself
+ * answers 404 unless `HARDENING_PROBE=1`. It is never part of a production
+ * build.
+ */
+function installProbeRoute(): void {
+  mkdirSync(PROBE_DIR, { recursive: true });
+  copyFileSync(PROBE_SOURCE, PROBE_TARGET);
+  console.log("[integration] probe route installed at app/api/hardening-probe");
+}
+
+function removeProbeRoute(): void {
+  rmSync(dirname(PROBE_TARGET), { recursive: true, force: true });
+}
+
 export default async function setup() {
+  installProbeRoute();
+
   if (await serverIsUp()) {
     console.log(`[integration] reusing the server already listening on ${BASE_URL}`);
-    return async () => {};
+    return async () => {
+      removeProbeRoute();
+    };
   }
 
   const nextBin = `${repoRoot}node_modules/next/dist/bin/next`;
@@ -97,10 +138,12 @@ export default async function setup() {
       console.log(`[integration] server ready on ${BASE_URL}`);
       return async () => {
         child?.kill();
+        removeProbeRoute();
       };
     }
 
     if (child.exitCode !== null) {
+      removeProbeRoute();
       throw new Error(
         `[integration] the Next server exited with code ${child.exitCode}`,
       );
@@ -110,5 +153,6 @@ export default async function setup() {
   }
 
   child.kill();
+  removeProbeRoute();
   throw new Error(`[integration] the Next server never became ready on ${BASE_URL}`);
 }

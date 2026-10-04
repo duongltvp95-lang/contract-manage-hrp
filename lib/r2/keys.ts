@@ -85,3 +85,47 @@ export function buildObjectKey({
 
   return `${OBJECT_KEY_PREFIX}/${org}/${contract}/${file}/${safeName}`;
 }
+
+/**
+ * Is `objectKey` the key this file is *supposed* to live at?
+ *
+ * `buildObjectKey()` is the only thing that creates keys, so the shape is known
+ * exactly: `contracts/{org}/{contract}/{file}/` followed by a sanitized
+ * filename. Only the prefix is compared, because the filename is the client's
+ * and may legitimately differ from whatever a caller guesses.
+ *
+ * This matters in both directions:
+ *   - after an upload, the client hands the key back and must not be able to
+ *     point the row at a key it merely happens to know;
+ *   - before signing a view URL, the stored key must still belong to the ids in
+ *     the row, or a row that was re-pointed (by hand, or by a future bug) would
+ *     become a way to read an arbitrary object out of the bucket.
+ *
+ * Ids are validated as UUIDs and compared lower-cased, so a value containing `/`
+ * or `..` cannot be smuggled in as a path segment.
+ */
+export function isObjectKeyFor(
+  objectKey: string,
+  { organizationId, contractId, fileId }: Omit<ObjectKeyParts, "filename">,
+): boolean {
+  let prefix: string;
+
+  try {
+    prefix = `${OBJECT_KEY_PREFIX}/${assertUuid(organizationId, "organizationId")}/${assertUuid(contractId, "contractId")}/${assertUuid(fileId, "fileId")}/`;
+  } catch {
+    // A non-UUID id is a programming error rather than a data condition.
+    // Answering "no" keeps this total instead of throwing inside a request path.
+    return false;
+  }
+
+  if (!objectKey.startsWith(prefix)) return false;
+
+  // Exactly one more segment, and nothing that could climb out of the prefix.
+  const rest = objectKey.slice(prefix.length);
+  return (
+    rest.length > 0 &&
+    !rest.includes("/") &&
+    !rest.includes("\\") &&
+    rest !== ".."
+  );
+}

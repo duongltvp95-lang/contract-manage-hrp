@@ -2,9 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { hasLiveBackend } from "../setup/env";
-import { BASE_URL, ORG_A, TEST_PREFIX } from "./config";
+import { BASE_URL, ORG_A, ORG_B, TEST_PREFIX } from "./config";
 import {
   adminClient,
+  bucketName,
   createSecondTenant,
   destroySecondTenant,
   hasR2,
@@ -134,6 +135,57 @@ suite("file API authorization", () => {
     expect(result.headers.get("x-ratelimit-limit")).toBe("60");
     expect(Number(result.headers.get("x-ratelimit-remaining"))).toBeGreaterThanOrEqual(0);
     expect(result.headers.get("x-ratelimit-reset")).toBeTruthy();
+  });
+
+  // -------------------------------------------------------------------------
+  // M8 hardening, fix 3 — the key is checked before anything is signed.
+  // -------------------------------------------------------------------------
+
+  it("refuses to sign a URL when the row's object_key points somewhere else", async () => {
+    /*
+     * Authorization alone is not enough. It answers "may this caller see this
+     * file row?", not "does this row still point where it says?". The row below
+     * is a legitimate org A row on a legitimate org A contract — every check up
+     * to the key comparison passes — but its `object_key` names an org B
+     * prefix. Before fix 3 that produced a valid signed URL for an object
+     * belonging to another tenant.
+     */
+    const fileId = crypto.randomUUID();
+    const foreignKey = `contracts/${ORG_B}/${otherFile.contractId}/${crypto.randomUUID()}/stolen.pdf`;
+
+    const { error: seedError } = await admin.from("contract_files").insert({
+      id: fileId,
+      organization_id: ORG_A,
+      contract_id: ownFile.contractId,
+      storage_provider: "r2",
+      bucket: bucketName(),
+      object_key: foreignKey,
+      original_filename: "stolen.pdf",
+      mime_type: "application/pdf",
+      file_size: 10,
+    });
+    expect(seedError).toBeNull();
+
+    try {
+      const result = await post("/api/files/view-url", { fileId }, orgA.cookie);
+
+      expect(result.status).toBe(403);
+      const serialised = JSON.stringify(result.json ?? {});
+      expect(result.json).not.toHaveProperty("viewUrl");
+      expect(result.json).not.toHaveProperty("objectKey");
+      expect(serialised).not.toContain("X-Amz-Signature");
+      expect(serialised).not.toContain(foreignKey);
+      expect(serialised).not.toContain("r2.cloudflarestorage.com");
+    } finally {
+      await admin.from("contract_files").delete().eq("id", fileId);
+    }
+  });
+
+  it("still signs a URL when the key matches the row's own ids (control)", async () => {
+    const result = await post("/api/files/view-url", { fileId: ownFile.fileId }, orgA.cookie);
+
+    expect(result.status).toBe(200);
+    expect(result.json?.objectKey).toBe(ownFile.objectKey);
   });
 
   // --- plan section 101: cross-organization --------------------------------
