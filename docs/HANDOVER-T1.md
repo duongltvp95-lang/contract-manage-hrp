@@ -66,32 +66,33 @@ Người dùng yêu cầu thêm 2 tính năng:
 
 Test sau round 2: **unit 145 · integration 61 · e2e 48** (đều pass, không regression).
 
-### ⏳ ĐANG DỞ: Part 4 — push + CI + redeploy + smoke production
+### ⏳ ĐANG DỞ: Part 4 — CI + redeploy + smoke production
 
-Trình tự còn lại (người dùng + T2 phối hợp):
+> **Cập nhật 2026-10-05 (T1 tiếp quản): bước 1 & 2 đã XONG.** 5 commit round 2 **đã có trên
+> `origin/main`**, local `main` đồng bộ (`git rev-list --left-right --count origin/main...main` → `0  0`).
+> Production **đã chạy code round 2** (Partners + Users). Việc còn lại:
 
-1. **Người dùng đăng nhập GitHub trực tiếp** trên máy/Cursor (browser / Git Credential Manager / `gh auth login`). **Không** tạo PAT, **không** dán token vào chat.
-2. **T2 push** 5 commit local (+ commit `docs/HANDOVER-T1.md` nếu còn untracked) lên `origin/main`. Push thường (`git push`); **cấm** `--force` trừ khi T1 duyệt vì remote đã diverge.
-3. **Người dùng thêm `SUPABASE_SERVICE_ROLE_KEY` vào Vercel** (Secret, để chức năng "Thêm user" chạy được trên production).
-4. **Người dùng Redeploy Vercel**.
-5. **T2 smoke test production** (Demo cũ + luồng Partners + luồng Users) → xoá tài khoản test `test.wave1@hrpartner.vn` → báo cáo.
-6. T1 chốt round 2.
+1. **Người dùng thêm `SUPABASE_SERVICE_ROLE_KEY`** vào Vercel (Secret, để chức năng "Thêm user" chạy được trên production).
+2. **Người dùng Redeploy Vercel**.
+3. **T2 smoke test production** (Demo cũ + luồng Partners + luồng Users) → xoá tài khoản test `test.wave1@hrpartner.vn` → báo cáo.
+4. T1 chốt round 2.
 
-### 📦 Git hiện tại (quan trọng — CHƯA PUSH)
+### 📦 Git hiện tại (đã đồng bộ)
 
-**5 commit đang ở LOCAL**, chưa lên GitHub (PAT cũ đã revoke; giờ push bằng login GitHub trên máy):
+**5 commit round 2 đã có trên `origin/main`** (không còn gánh nặng PAT/push):
 
 ```
-f936724  docs: record the production smoke test result
-04460d0  feat(partners): partners table, service layer and search
-9a926ac  feat(partners): partner directory UI and contract form integration
-8c809cf  docs(partners): reference screenshots
+cb7b92b  docs: T1 handover for Contract Manager
 d3d018b  feat(users): administrator-only user management in Settings
+8c809cf  docs(partners): reference screenshots
+9a926ac  feat(partners): partner directory UI and contract form integration
+04460d0  feat(partners): partners table, service layer and search
+f936724  docs: record the production smoke test result
 ```
 
-→ Production đang chạy **code Wave 1** (chưa có tính năng Partners/Users) cho tới khi push + redeploy.
+Đối chiếu lúc tiếp quản (2026-10-05): `git fetch origin` → `git rev-list --left-right --count origin/main...main` → `0  0` (không ahead, không behind). Working tree sạch, trừ thư mục `.codegraph/` untracked (công cụ index của Cursor, **không commit**).
 
-Đối chiếu lúc tiếp quản (2026-10-05): `main...origin/main [ahead 5]`. File này (`docs/HANDOVER-T1.md`) là thay đổi **chưa commit** — T1 quyết định gom vào commit docs khi push Part 4, không tách thành vòng T2 riêng trừ khi người dùng muốn.
+→ **Production đang chạy code round 2** (đã có Partners + Users). Chỉ còn chặn bởi `SUPABASE_SERVICE_ROLE_KEY` như mục 3.
 
 ### Tài khoản / dữ liệu hiện tại
 
@@ -116,9 +117,17 @@ d3d018b  feat(users): administrator-only user management in Settings
 
 ⚠️ **Key dùng format MỚI** (`sb_publishable_`/`sb_secret_`) — Supabase đang deprecate format cũ. `supabase-js`/`@supabase/ssr` phải bản v2 mới nhất.
 
-### Vercel env (production) — danh sách đầy đủ 11 biến
+### Vercel env (production) — 10 biến ứng dụng
 
-10 biến đã set: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, 5 biến `R2_*`, `APP_URL`, `MAX_UPLOAD_SIZE_MB`. **Còn thiếu `SUPABASE_SERVICE_ROLE_KEY`** (phải thêm ở Part 4). Nhớ: biến `NEXT_PUBLIC_*` đặt kiểu **Config** (không được Secret), biến còn lại đặt **Secret**.
+**9 biến đã set**: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, 5 biến `R2_*` (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_ENDPOINT`), `APP_URL`, `MAX_UPLOAD_SIZE_MB`.
+**Còn thiếu `SUPABASE_SERVICE_ROLE_KEY`** (phải thêm ở Part 4).
+
+Nhớ: biến `NEXT_PUBLIC_*` đặt kiểu **Config** (không được Secret), biến còn lại đặt **Secret**.
+
+Hai điểm đã kiểm tra lại (2026-10-05):
+
+- `APP_URL` khai trong `.env.example`/README nhưng **không có code nào đọc** (M1 milestone đã ghi nhận) → thiếu/nhầm giá trị không làm hỏng chức năng nào. Có thể giữ hoặc bỏ.
+- Ngoài 10 biến trên, `.env.example` còn có `TEST_ADMIN_EMAIL` / `TEST_ADMIN_PASSWORD` — chỉ dùng cho test, **không** cần đặt trên Vercel.
 
 ### R2 CORS (đã cấu hình)
 
@@ -162,7 +171,7 @@ Origins: `http://localhost:3000`, `https://contract-manage-hrp.vercel.app`, `htt
 - **Harness sandbox**: `pnpm dev` cần escalation full-access (lỗi `spawn EPERM` là giới hạn sandbox, không phải lỗi code). `curl` trong sandbox bị chặn TLS (`SEC_E_NO_CREDENTIALS`) — dùng `web_fetch` để kiểm tra URL ngoài.
 - **Máy chưa có Node.js độc lập** (chỉ có node đi kèm DSH Desktop); `git` chưa trong PATH (MinGit ở `D:\HRP-app\tools\mingit`).
 - **Không xoá `.next` khi `next dev` đang chạy** (làm Turbopack panic).
-- **Push code**: người dùng **đăng nhập GitHub trực tiếp** trên môi trường (Cursor / Git Credential Manager / `gh auth login`). Không dùng PAT qua chat. Lịch sử từng phải `--force-with-lease` vì GitHub có commit cũ — **không** lặp lại trừ khi remote diverge và T1 duyệt.
+- **Push code**: người dùng **đăng nhập GitHub trực tiếp** trên môi trường (Cursor / Git Credential Manager / `gh auth login`). Không dùng PAT qua chat. Lịch sử từng phải `--force-with-lease` vì GitHub có commit cũ — **không** lặp lại trừ khi remote diverge và T1 duyệt. (2026-10-05: round 2 đã push sạch bằng `git push` thường, không cần force.)
 - **CI**: job `quality` (lint/typecheck/test/build) chạy luôn; integration/e2e tự skip nếu thiếu GitHub secrets.
 - **Không gửi mật khẩu / PAT / service_role / R2 key qua chat.**
 
@@ -170,6 +179,12 @@ Origins: `http://localhost:3000`, `https://contract-manage-hrp.vercel.app`, `htt
 
 ## 9. Việc ngay sau khi tiếp quản
 
-1. Đảm bảo **Part 4** hoàn tất: login GitHub trên máy → push 5 commit + handover → thêm `SUPABASE_SERVICE_ROLE_KEY` vào Vercel → redeploy → T2 smoke (Demo + Partners + Users) → xoá `test.wave1@hrpartner.vn`.
-2. Chốt Feature round 2.
-3. Hỏi người dùng có tiếp tục (nối domain / Wave 2 / tính năng mới) không.
+1. **Người dùng** thêm `SUPABASE_SERVICE_ROLE_KEY` (Secret) vào Vercel → Redeploy.
+2. **T2 smoke** production: Demo cũ + luồng Partners + luồng Users (thêm user thật sự chạy được) → xoá `test.wave1@hrpartner.vn`.
+3. **T1 chốt Feature round 2.**
+4. Hỏi người dùng có tiếp tục (nối domain / Wave 2 / tính năng mới) không.
+
+### Ghi chú kỹ thuật còn sót (không gấp, xử khi tiện)
+
+- Hai lỗi vặt vãn **đã sửa trong commit này**: comment `lib/supabase/admin.ts` trỏ `docs/milestones/M9` không tồn tại (đổi sang trỏ mục 3 file này), và `.codegraph/` gây bẩn `git status` (đã thêm `/.codegraph/` vào `.gitignore`).
+- Còn lại: việc thêm `SUPABASE_SERVICE_ROLE_KEY` vào Vercel là **thao tác của người dùng**, agent không tự truy cập được.

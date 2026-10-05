@@ -24,8 +24,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
  *
  * NOTE for deployment: the Vercel project does NOT set
  * `SUPABASE_SERVICE_ROLE_KEY` yet, so user creation is unavailable in
- * production until the owner adds it (see docs/milestones/M9). This helper lets
- * the UI say so instead of failing with a stack trace.
+ * production until the owner adds it (see docs/HANDOVER-T1.md section 3). This
+ * helper lets the UI say so instead of failing with a stack trace.
  */
 export function hasServiceRoleKey(): boolean {
   return Boolean(

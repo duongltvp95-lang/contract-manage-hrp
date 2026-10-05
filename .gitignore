@@ -50,6 +50,9 @@ next-env.d.ts
 # supabase cli cache
 supabase/.temp
 
+# Cursor local code index (per-machine, not for committing)
+/.codegraph/
+
 # Test-only routes that tests/integration/global-setup.ts copies in and removes
 # again. Ignored so a crashed run can never leave one in a commit — each route
 # also answers 404 unless TEST_PROBE=1.
