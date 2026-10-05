@@ -107,7 +107,7 @@ export default async function PartnerDetailPage({
 
   return (
     <div className="space-y-6 p-8">
-      <header className="flex flex-wrap items-center gap-3">
+      <header className="flex flex-wrap items-start gap-3">
         <Button variant="ghost" size="sm" asChild>
           <Link href="/partners">
             <ArrowLeft className="mr-1 h-4 w-4" />
@@ -115,7 +115,7 @@ export default async function PartnerDetailPage({
           </Link>
         </Button>
 
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 space-y-1">
           <h1
             className="truncate text-2xl font-bold"
             data-testid="partner-detail-name"
@@ -125,6 +125,42 @@ export default async function PartnerDetailPage({
           <p className="text-muted-foreground">
             Hợp đồng đã ký với đối tác này.
           </p>
+          {/* Round 2 part 3: address + tax code are OPTIONAL fields, so each line
+              shows only when populated. `whitespace-pre-line` keeps newlines a
+              user typed in the textarea (multi-line Vietnamese addresses). */}
+          {(loaded.partner.address || loaded.partner.tax_code) && (
+            <dl
+              className="grid gap-x-6 gap-y-1 pt-2 text-sm sm:grid-cols-[auto_1fr]"
+              data-testid="partner-detail-meta"
+            >
+              {loaded.partner.tax_code && (
+                <>
+                  <dt className="font-medium text-muted-foreground">
+                    Mã số thuế
+                  </dt>
+                  <dd
+                    className="font-mono"
+                    data-testid="partner-detail-tax-code"
+                  >
+                    {loaded.partner.tax_code}
+                  </dd>
+                </>
+              )}
+              {loaded.partner.address && (
+                <>
+                  <dt className="font-medium text-muted-foreground sm:self-start">
+                    Địa chỉ
+                  </dt>
+                  <dd
+                    className="whitespace-pre-line"
+                    data-testid="partner-detail-address"
+                  >
+                    {loaded.partner.address}
+                  </dd>
+                </>
+              )}
+            </dl>
+          )}
         </div>
 
         <RenamePartnerButton partner={loaded.partner} />

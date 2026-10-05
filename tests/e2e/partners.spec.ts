@@ -257,3 +257,280 @@ test.describe("partner flow", () => {
     // `afterAll` sweeps it: the name carries the test prefix.
   });
 });
+
+/**
+ * Feature round 2, part 3 — partner address + tax code, end to end.
+ *
+ * The two fields are OPTIONAL by Owner decision (T6). The flow proves three
+ * things at the level a real user can see:
+ *
+ *   1. Both fields can be left blank (existing partners keep working);
+ *   2. Both fields appear on the detail page when populated;
+ *   3. The tax-code shape (10 digits, optional -NNN branch suffix) is enforced
+ *      and a duplicate inside the same organization is rejected with a
+ *      readable Vietnamese message.
+ *
+ * A second partner is created with the SAME tax code and the duplicate-check
+ * path is exercised, then deleted by service role in `afterAll`.
+ */
+test.describe("partner address + tax code", () => {
+  const partnerWithDetails = `${TEST_PREFIX}Đối tác có MST ${stamp}`;
+  const partnerWithBranch = `${TEST_PREFIX}Đối tác chi nhánh ${stamp}`;
+  const partnerNoDetails = `${TEST_PREFIX}Đối tác trống ${stamp}`;
+
+  const taxCode = `0123456789`;
+  const branchTaxCode = `0123456789-001`;
+
+  let detailsPartnerId = "";
+  let branchPartnerId = "";
+  let noDetailsPartnerId = "";
+
+  test.beforeAll(async () => {
+    await sweep(adminClient());
+  });
+
+  test.afterAll(async () => {
+    const admin = adminClient();
+    await sweep(admin);
+
+    // Service-role cleanup for the partners this describe created. They were
+    // created without any contracts, so the RESTRICT on delete is not
+    // exercised; service_role is permitted regardless.
+    for (const id of [detailsPartnerId, branchPartnerId, noDetailsPartnerId]) {
+      if (!id) continue;
+      await admin.from("partners").delete().eq("id", id);
+    }
+  });
+
+  test("creates a partner with address and a main tax code", async ({ page }) => {
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    await clickSafe(page, '[data-testid="partner-add-button"]');
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
+
+    await page.fill("#partnerName", partnerWithDetails);
+    await page.fill(
+      "#partnerAddress",
+      "Số 9, đường Bắc Hà, phường Thanh Xuân Bắc, Hà Nội",
+    );
+    await page.fill("#partnerTaxCode", taxCode);
+    await clickSafe(page, '[data-testid="partner-name-submit"]');
+
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeHidden({
+      timeout: 30_000,
+    });
+
+    // The new row in the list carries the tax code in the dedicated column.
+    const row = page
+      .getByTestId("partner-row")
+      .filter({ hasText: partnerWithDetails });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText(taxCode);
+
+    // The database has all three fields stored.
+    const { data } = await adminClient()
+      .from("partners")
+      .select("id, address, tax_code")
+      .eq("name", partnerWithDetails)
+      .single();
+
+    expect(data?.address).toBe(
+      "Số 9, đường Bắc Hà, phường Thanh Xuân Bắc, Hà Nội",
+    );
+    expect(data?.tax_code).toBe(taxCode);
+    detailsPartnerId = data?.id ?? "";
+  });
+
+  test("accepts a tax code with the -NNN branch suffix", async ({ page }) => {
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    await clickSafe(page, '[data-testid="partner-add-button"]');
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
+
+    await page.fill("#partnerName", partnerWithBranch);
+    await page.fill("#partnerTaxCode", branchTaxCode);
+    await clickSafe(page, '[data-testid="partner-name-submit"]');
+
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeHidden({
+      timeout: 30_000,
+    });
+
+    const row = page
+      .getByTestId("partner-row")
+      .filter({ hasText: partnerWithBranch });
+    await expect(row).toContainText(branchTaxCode);
+
+    const { data } = await adminClient()
+      .from("partners")
+      .select("id, tax_code")
+      .eq("name", partnerWithBranch)
+      .single();
+
+    expect(data?.tax_code).toBe(branchTaxCode);
+    branchPartnerId = data?.id ?? "";
+  });
+
+  test("rejects an invalid tax code and shows a Vietnamese message", async ({ page }) => {
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    await clickSafe(page, '[data-testid="partner-add-button"]');
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
+
+    await page.fill("#partnerName", `${TEST_PREFIX}Bỏ qua ${stamp}`);
+    await page.fill("#partnerTaxCode", "not-a-tax-code");
+    await clickSafe(page, '[data-testid="partner-name-submit"]');
+
+    // The form rejected the input: the sheet is still open and the field's
+    // Vietnamese message is on screen.
+    await expect(
+      page.locator('[data-testid="partner-name-sheet"]'),
+    ).toBeVisible();
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toContainText(
+      "Mã số thuế phải gồm 10 chữ số",
+    );
+
+    // Nothing was written.
+    const { data } = await adminClient()
+      .from("partners")
+      .select("id")
+      .eq("name", `${TEST_PREFIX}Bỏ qua ${stamp}`)
+      .maybeSingle();
+
+    expect(data).toBeNull();
+
+    // Close the sheet so the next test starts clean.
+    await clickSafe(page, '[data-testid="partner-name-sheet"] button:has-text("Huỷ")');
+  });
+
+  test("rejects a tax code that is already in use inside the same organization", async ({
+    page,
+  }) => {
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    await clickSafe(page, '[data-testid="partner-add-button"]');
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
+
+    await page.fill("#partnerName", `${TEST_PREFIX}Trùng MST ${stamp}`);
+    await page.fill("#partnerTaxCode", taxCode); // Same as partnerWithDetails.
+    await clickSafe(page, '[data-testid="partner-name-submit"]');
+
+    // The duplicate check fires before the row is written, so the sheet stays
+    // open and the readable Vietnamese message is on screen.
+    await expect(
+      page.locator('[data-testid="partner-name-sheet"]'),
+    ).toBeVisible();
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toContainText(
+      "Mã số thuế đã được dùng cho đối tác khác trong tổ chức",
+    );
+
+    const { data } = await adminClient()
+      .from("partners")
+      .select("id")
+      .eq("name", `${TEST_PREFIX}Trùng MST ${stamp}`)
+      .maybeSingle();
+
+    expect(data).toBeNull();
+
+    await clickSafe(page, '[data-testid="partner-name-sheet"] button:has-text("Huỷ")');
+  });
+
+  test("creates a partner with both fields left blank (backwards-compatible)", async ({
+    page,
+  }) => {
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    await clickSafe(page, '[data-testid="partner-add-button"]');
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
+
+    await page.fill("#partnerName", partnerNoDetails);
+    // Address + tax code are left empty on purpose.
+    await clickSafe(page, '[data-testid="partner-name-submit"]');
+
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeHidden({
+      timeout: 30_000,
+    });
+
+    const row = page
+      .getByTestId("partner-row")
+      .filter({ hasText: partnerNoDetails });
+    await expect(row).toBeVisible();
+    // The tax-code column falls back to the em-dash when null.
+    await expect(row).toContainText("—");
+
+    const { data } = await adminClient()
+      .from("partners")
+      .select("id, address, tax_code")
+      .eq("name", partnerNoDetails)
+      .single();
+
+    expect(data?.address).toBeNull();
+    expect(data?.tax_code).toBeNull();
+    noDetailsPartnerId = data?.id ?? "";
+  });
+
+  test("the detail page shows address and tax code when populated", async ({ page }) => {
+    await login(page);
+    await gotoAndSettle(page, `/partners/${detailsPartnerId}`);
+
+    await expect(page.getByTestId("partner-detail-name")).toHaveText(
+      partnerWithDetails,
+    );
+    await expect(page.getByTestId("partner-detail-tax-code")).toHaveText(taxCode);
+    await expect(page.getByTestId("partner-detail-address")).toContainText(
+      "Thanh Xuân Bắc",
+    );
+  });
+
+  test("the detail page hides the meta block when both fields are blank", async ({
+    page,
+  }) => {
+    await login(page);
+    await gotoAndSettle(page, `/partners/${noDetailsPartnerId}`);
+
+    await expect(page.getByTestId("partner-detail-name")).toHaveText(
+      partnerNoDetails,
+    );
+    // The whole meta block (MST + địa chỉ) is omitted when both are null.
+    await expect(page.getByTestId("partner-detail-meta")).toHaveCount(0);
+  });
+
+  test("edits the address and tax code from the detail page", async ({ page }) => {
+    const updatedAddress = "Tầng 5, tòa nhà X, phường Bến Nghé, TP.HCM";
+    const updatedTaxCode = "9876543210";
+
+    await login(page);
+    await gotoAndSettle(page, `/partners/${detailsPartnerId}`);
+
+    await clickSafe(page, '[data-testid="partner-rename-button"]');
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
+
+    await page.fill("#partnerAddress", updatedAddress);
+    await page.fill("#partnerTaxCode", updatedTaxCode);
+    await clickSafe(page, '[data-testid="partner-name-submit"]');
+
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeHidden({
+      timeout: 30_000,
+    });
+
+    await expect(page.getByTestId("partner-detail-tax-code")).toHaveText(
+      updatedTaxCode,
+    );
+    await expect(page.getByTestId("partner-detail-address")).toContainText(
+      "Bến Nghé",
+    );
+
+    const { data } = await adminClient()
+      .from("partners")
+      .select("address, tax_code")
+      .eq("id", detailsPartnerId)
+      .single();
+
+    expect(data?.address).toBe(updatedAddress);
+    expect(data?.tax_code).toBe(updatedTaxCode);
+  });
+});

@@ -20,12 +20,15 @@ import { formatDateTime } from "@/lib/format";
 import type { PartnerWithCount } from "@/lib/services/partners";
 
 /**
- * Partners table — feature round 2, part 2.
+ * Partners table — feature round 2, part 2 + part 3.
  *
- * Columns: Tên đối tác · Số hợp đồng · Cập nhật lúc, plus a "Sửa tên" action.
+ * Columns: Tên đối tác · Mã số thuế · Số hợp đồng · Cập nhật lúc, plus a
+ * "Sửa" action. Address is deliberately NOT in the table — it can run to a
+ * couple of lines and would crowd the row; the detail page carries it.
+ *
  * There is no Xoá column and no delete control of any kind: a partner is
  * referenced by contracts, and the database refuses a client-side delete twice
- * over (no grant, no policy). Renaming is the only write the UI offers.
+ * over (no grant, no policy). Editing is the only write the UI offers.
  */
 export function PartnersTable({ rows }: { rows: PartnerWithCount[] }) {
   const router = useRouter();
@@ -49,6 +52,7 @@ export function PartnersTable({ rows }: { rows: PartnerWithCount[] }) {
         <TableHeader>
           <TableRow>
             <TableHead>Tên đối tác</TableHead>
+            <TableHead>Mã số thuế</TableHead>
             <TableHead className="text-center">Số hợp đồng</TableHead>
             <TableHead>Cập nhật lúc</TableHead>
             <TableHead className="text-right">Thao tác</TableHead>
@@ -65,6 +69,7 @@ export function PartnersTable({ rows }: { rows: PartnerWithCount[] }) {
                 onClick={() => router.push(href)}
                 data-testid="partner-row"
                 data-partner-name={row.name}
+                data-partner-tax-code={row.tax_code ?? ""}
               >
                 <TableCell className="font-medium">
                   {/* A real link, so the row is reachable by keyboard too. */}
@@ -75,6 +80,13 @@ export function PartnersTable({ rows }: { rows: PartnerWithCount[] }) {
                   >
                     {row.name}
                   </Link>
+                </TableCell>
+                <TableCell className="font-mono text-sm">
+                  {row.tax_code ? (
+                    row.tax_code
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
                 </TableCell>
                 <TableCell className="text-center">
                   {row.contract_count > 0 ? (

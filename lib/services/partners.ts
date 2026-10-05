@@ -9,7 +9,7 @@ import { createClient } from "@/lib/supabase/server";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
- * Partner service — feature round 2, part 1.
+ * Partner service — feature round 2, part 1 + part 3.
  *
  * Every function takes `organizationId` from the caller's session
  * (`resolveAccess()`); the client never supplies it. RLS enforces the same rule
@@ -20,17 +20,28 @@ import { dbError, err, ok, type ServiceResult } from "./types";
  * contracts, the database revokes DELETE from `authenticated`, and no DELETE
  * policy exists. If a partner ever needs to be removed it will be an owner
  * decision with the referencing contracts in view, not a service function.
+ *
+ * Round 2 part 3 added two OPTIONAL fields — `address` and `tax_code` — per
+ * the Owner decision. The service writes them when present and leaves them
+ * alone when omitted (the partial-update rule). Tax code is checked for
+ * duplicates inside the caller's organization before insert / update, with a
+ * readable Vietnamese error rather than a database unique-violation stack
+ * trace. The database has no UNIQUE constraint on `tax_code` on purpose (so
+ * historical data with duplicates is not blocked).
  */
 
 export type PartnerRow = {
   id: string;
   organization_id: string;
   name: string;
+  address: string | null;
+  tax_code: string | null;
   created_at: string;
   updated_at: string;
 };
 
-export const PARTNER_COLUMNS = "id, organization_id, name, created_at, updated_at";
+export const PARTNER_COLUMNS =
+  "id, organization_id, name, address, tax_code, created_at, updated_at";
 
 /**
  * A partner plus how many contracts point at it.
@@ -137,6 +148,55 @@ export async function getPartner(
 }
 
 /**
+ * Finds a same-organization partner that shares `taxCode`. Used to surface a
+ * readable Vietnamese duplicate-message before the database would return a
+ * generic constraint error. There is no UNIQUE on `tax_code` (Owner-approved
+ * decision), so this check is what catches the conflict.
+ *
+ * Returns `null` when no duplicate exists. Excludes the partner being updated
+ * when an `excludeId` is supplied.
+ */
+async function findPartnerByTaxCode(
+  taxCode: string,
+  organizationId: string,
+  excludeId?: string,
+): Promise<PartnerRow | null> {
+  const supabase = await createClient();
+  let query = supabase
+    .from("partners")
+    .select(PARTNER_COLUMNS)
+    .eq("organization_id", organizationId)
+    .eq("tax_code", taxCode)
+    .limit(1);
+
+  if (excludeId) {
+    query = query.neq("id", excludeId);
+  }
+
+  const { data, error } = await query.maybeSingle();
+
+  if (error) {
+    return null;
+  }
+  return (data as PartnerRow | null) ?? null;
+}
+
+/**
+ * Normalises the optional fields on the input. The Zod schema trims them and
+ * accepts `""`; here we collapse the empty form to `null` so the database
+ * stores a real NULL instead of an empty string, and the partial-update rule
+ * can distinguish "the user cleared the field" from "the user did not touch
+ * the field" cleanly.
+ */
+function normaliseOptionalText(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
+/**
  * Creates one partner for the caller's organization.
  *
  * `input` is `unknown` on purpose: a server action hands over whatever the client
@@ -160,6 +220,20 @@ export async function createPartner(
     );
   }
 
+  const address = normaliseOptionalText(parsed.data.address);
+  const taxCode = normaliseOptionalText(parsed.data.taxCode);
+
+  if (taxCode) {
+    const conflict = await findPartnerByTaxCode(taxCode, organizationId);
+    if (conflict) {
+      return err(
+        "validation",
+        "Mã số thuế đã được dùng cho đối tác khác trong tổ chức",
+        [{ path: "taxCode", message: `Đã thuộc về "${conflict.name}"` }],
+      );
+    }
+  }
+
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -168,6 +242,8 @@ export async function createPartner(
       // From the session, never from the request body.
       organization_id: organizationId,
       name: parsed.data.name,
+      address,
+      tax_code: taxCode,
     })
     .select(PARTNER_COLUMNS)
     .single();
@@ -204,13 +280,34 @@ export async function updatePartner(
     );
   }
 
-  const patch: Record<string, string> = {};
+  const patch: Record<string, string | null> = {};
   if ("name" in raw && parsed.data.name !== undefined) {
     patch.name = parsed.data.name;
+  }
+  if ("address" in raw) {
+    patch.address = normaliseOptionalText(parsed.data.address) ?? null;
+  }
+  if ("taxCode" in raw) {
+    patch.tax_code = normaliseOptionalText(parsed.data.taxCode) ?? null;
   }
 
   if (Object.keys(patch).length === 0) {
     return err("validation", "Không có thay đổi nào để lưu");
+  }
+
+  if ("tax_code" in patch && patch.tax_code) {
+    const conflict = await findPartnerByTaxCode(
+      patch.tax_code,
+      organizationId,
+      id,
+    );
+    if (conflict) {
+      return err(
+        "validation",
+        "Mã số thuế đã được dùng cho đối tác khác trong tổ chức",
+        [{ path: "taxCode", message: `Đã thuộc về "${conflict.name}"` }],
+      );
+    }
   }
 
   const supabase = await createClient();

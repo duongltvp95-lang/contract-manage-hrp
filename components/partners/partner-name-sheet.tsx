@@ -18,12 +18,14 @@ import { Button } from "@/components/ui/button";
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Sheet,
   SheetContent,
@@ -35,7 +37,7 @@ import {
 import type { PartnerRow } from "@/lib/services/partners";
 
 /**
- * Add / rename a partner — feature round 2, part 2.
+ * Add / edit a partner — feature round 2, part 2 + part 3.
  *
  * Reuses the edit-contract pattern exactly: a shadcn Sheet holding a
  * react-hook-form form validated by the shared Zod schema, a server action, then
@@ -49,12 +51,18 @@ import type { PartnerRow } from "@/lib/services/partners";
  * The same component serves both modes and can be driven either by a trigger
  * (`<PartnerNameSheet mode="create" trigger={...} />`) or programmatically
  * (`open` / `onOpenChange`), which is how the contract form's combobox opens it.
+ *
+ * The component name stays `PartnerNameSheet` on purpose — REUSE-FIRST rule:
+ * every existing import (combobox, rename button, add button) keeps working
+ * without a sweeping rename. The form now exposes three fields (name, address,
+ * tax code) but the API surface (`mode`, `partner`, `onSaved`, `trigger`,
+ * `open`, `onOpenChange`) is unchanged. The two optional fields are part 3.
  */
 
 export type PartnerNameSheetProps = {
   mode: "create" | "edit";
   /** Edit only — the partner being renamed. */
-  partner?: Pick<PartnerRow, "id" | "name"> | null;
+  partner?: Pick<PartnerRow, "id" | "name" | "address" | "tax_code"> | null;
   /** Called with the saved row, before the refresh. */
   onSaved?: (row: PartnerRow) => void;
   /** Optional trigger; omit when the sheet is opened programmatically. */
@@ -87,7 +95,12 @@ export function PartnerNameSheet({
 
   const form = useForm<CreatePartnerInput>({
     resolver: zodResolver(PartnerSchema),
-    defaultValues: { name: partner?.name ?? "" },
+    defaultValues: {
+      name: partner?.name ?? "",
+      // `?? ""` keeps the form happy when the field is null on the row.
+      address: partner?.address ?? "",
+      taxCode: partner?.tax_code ?? "",
+    },
   });
 
   async function onSubmit(values: CreatePartnerInput) {
@@ -107,10 +120,14 @@ export function PartnerNameSheet({
       return;
     }
 
-    toast.success(mode === "edit" ? "Đã đổi tên đối tác" : "Đã thêm đối tác");
+    toast.success(mode === "edit" ? "Đã cập nhật đối tác" : "Đã thêm đối tác");
     onSaved?.(result.data);
     setSheetOpen(false);
-    form.reset({ name: result.data.name });
+    form.reset({
+      name: result.data.name,
+      address: result.data.address ?? "",
+      taxCode: result.data.tax_code ?? "",
+    });
     router.refresh();
   }
 
@@ -124,11 +141,13 @@ export function PartnerNameSheet({
         data-testid="partner-name-sheet"
       >
         <SheetHeader>
-          <SheetTitle>{mode === "edit" ? "Sửa tên đối tác" : "Thêm đối tác"}</SheetTitle>
+          <SheetTitle>
+            {mode === "edit" ? "Sửa thông tin đối tác" : "Thêm đối tác"}
+          </SheetTitle>
           <SheetDescription>
             {mode === "edit"
-              ? "Đổi tên hiển thị của đối tác. Các hợp đồng đã gắn vẫn giữ nguyên."
-              : "Nhập tên đối tác để dùng lại khi tạo hợp đồng."}
+              ? "Đổi tên, địa chỉ hoặc mã số thuế. Hợp đồng đã gắn vẫn giữ nguyên."
+              : "Nhập tên đối tác để dùng lại khi tạo hợp đồng. Địa chỉ và mã số thuế có thể bổ sung sau."}
           </SheetDescription>
         </SheetHeader>
 
@@ -156,11 +175,63 @@ export function PartnerNameSheet({
                 )}
               />
 
+              <FormField
+                control={form.control}
+                name="address"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Địa chỉ</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        id="partnerAddress"
+                        placeholder="VD: Số 9, đường Bắc Hà, phường Thanh Xuân Bắc, Hà Nội"
+                        autoComplete="off"
+                        disabled={saving}
+                        rows={3}
+                        data-testid="partner-address-input"
+                        {...field}
+                        value={field.value ?? ""}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Không bắt buộc. Tối đa 500 ký tự.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="taxCode"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Mã số thuế</FormLabel>
+                    <FormControl>
+                      <Input
+                        id="partnerTaxCode"
+                        placeholder="VD: 0123456789 hoặc 0123456789-001"
+                        autoComplete="off"
+                        disabled={saving}
+                        inputMode="numeric"
+                        data-testid="partner-tax-code-input"
+                        {...field}
+                        value={field.value ?? ""}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Không bắt buộc. 10 chữ số, thêm -NNN nếu là mã chi nhánh.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
               {formError && (
                 <Alert variant="destructive">
                   <AlertTitle>
                     {mode === "edit"
-                      ? "Không đổi được tên đối tác"
+                      ? "Không cập nhật được đối tác"
                       : "Không thêm được đối tác"}
                   </AlertTitle>
                   <AlertDescription>{formError}</AlertDescription>
@@ -174,7 +245,7 @@ export function PartnerNameSheet({
                   data-testid="partner-name-submit"
                 >
                   {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  {mode === "edit" ? "Lưu tên" : "Thêm đối tác"}
+                  {mode === "edit" ? "Lưu thay đổi" : "Thêm đối tác"}
                 </Button>
                 <Button
                   type="button"
@@ -208,11 +279,11 @@ export function AddPartnerButton() {
   );
 }
 
-/** The "Sửa tên" trigger used in a table row and on the detail header. */
+/** The "Sửa" trigger used in a table row and on the detail header. */
 export function RenamePartnerButton({
   partner,
 }: {
-  partner: Pick<PartnerRow, "id" | "name">;
+  partner: Pick<PartnerRow, "id" | "name" | "address" | "tax_code">;
 }) {
   return (
     <PartnerNameSheet
@@ -221,7 +292,7 @@ export function RenamePartnerButton({
       trigger={
         <Button variant="outline" size="sm" data-testid="partner-rename-button">
           <Pencil className="mr-1 h-4 w-4" />
-          Sửa tên
+          Sửa
         </Button>
       }
     />
