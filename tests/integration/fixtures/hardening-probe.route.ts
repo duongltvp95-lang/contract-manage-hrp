@@ -24,7 +24,7 @@ import { statusForCode } from "@/lib/services/types";
  * action does — the request body cannot choose a tenant.
  */
 export async function POST(request: NextRequest) {
-  if (process.env.HARDENING_PROBE !== "1" || process.env.NODE_ENV === "production") {
+  if (process.env.TEST_PROBE !== "1" || process.env.NODE_ENV === "production") {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 

@@ -81,25 +81,27 @@ function makeCookieSession() {
   return { client, cookie };
 }
 
-/** Signs in as the Wave 1 admin (org A). */
-export async function signInAsAdmin(): Promise<TestSession> {
+/** Signs in with a cookie session, for tests that need a second identity. */
+export async function signInAs(email: string, password: string): Promise<TestSession> {
   const { client, cookie } = makeCookieSession();
-  const { error } = await client.auth.signInWithPassword({
-    email: ADMIN_EMAIL,
-    password: ADMIN_PASSWORD,
-  });
+  const { error } = await client.auth.signInWithPassword({ email, password });
 
-  if (error) throw new Error(`admin sign-in failed: ${error.message}`);
+  if (error) throw new Error(`sign-in failed for ${email}: ${error.message}`);
 
   const { data } = await client.auth.getUser();
 
   return {
     userId: data.user?.id ?? "",
-    email: ADMIN_EMAIL,
-    password: ADMIN_PASSWORD,
+    email,
+    password,
     cookie: cookie(),
     client,
   };
+}
+
+/** Signs in as the account the suites use as the administrator (org A). */
+export async function signInAsAdmin(): Promise<TestSession> {
+  return signInAs(ADMIN_EMAIL, ADMIN_PASSWORD);
 }
 
 /**

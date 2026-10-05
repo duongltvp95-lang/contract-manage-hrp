@@ -19,11 +19,25 @@ import { BASE_URL, TEST_PORT } from "./config";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
-const PROBE_SOURCE = fileURLToPath(
-  new URL("./fixtures/hardening-probe.route.ts", import.meta.url),
-);
-const PROBE_TARGET = `${repoRoot}app/api/hardening-probe/route.ts`;
-const PROBE_DIR = dirname(PROBE_TARGET);
+/**
+ * Test-only routes, copied into `app/api/` for the duration of the run.
+ *
+ * Some services cannot be reached from a Vitest process at all: they read the
+ * session from cookies and are invoked from the browser as server actions. The
+ * fixtures give the suite a route to call them through, with the organization
+ * still coming from the session — never from the request body.
+ *
+ * They live under `tests/`, are installed by `installProbeRoutes()` and removed
+ * in teardown, answer 404 unless `TEST_PROBE=1` (set only for this run), are
+ * gitignored, and are never part of a production build.
+ */
+const PROBE_ROUTES = [
+  { source: "hardening-probe", target: `${repoRoot}app/api/hardening-probe/route.ts` },
+  { source: "users-probe", target: `${repoRoot}app/api/users-probe/route.ts` },
+].map((route) => ({
+  ...route,
+  source: fileURLToPath(new URL(`./fixtures/${route.source}.route.ts`, import.meta.url)),
+}));
 
 let child: ChildProcess | null = null;
 
@@ -73,41 +87,34 @@ function childEnvironment(): NodeJS.ProcessEnv {
     // moves 2 MB rather than 51, and the value is configuration — the code path
     // under test is identical. Nothing else in this suite uploads.
     MAX_UPLOAD_SIZE_MB: "1",
-    // Enables the fixture route below.
-    HARDENING_PROBE: "1",
+    // Enables the fixture routes above; nothing else reads this flag.
+    TEST_PROBE: "1",
   };
 }
 
-/**
- * Installs the test-only probe route for the duration of the run.
- *
- * `completeUpload()` is the only place the real upload ceiling is enforced
- * against bytes that actually landed, and it is reachable from the browser only
- * as a server action invoked by a client that already measured the file — so the
- * case worth testing (declare small, upload large) cannot be produced through
- * the UI. This copies a route in to reach it.
- *
- * It is removed in teardown, it lives under `tests/`, and the route itself
- * answers 404 unless `HARDENING_PROBE=1`. It is never part of a production
- * build.
- */
-function installProbeRoute(): void {
-  mkdirSync(PROBE_DIR, { recursive: true });
-  copyFileSync(PROBE_SOURCE, PROBE_TARGET);
-  console.log("[integration] probe route installed at app/api/hardening-probe");
+function installProbeRoutes(): void {
+  for (const route of PROBE_ROUTES) {
+    mkdirSync(dirname(route.target), { recursive: true });
+    copyFileSync(route.source, route.target);
+  }
+  console.log(
+    `[integration] probe routes installed: ${PROBE_ROUTES.map((route) => route.target.replace(repoRoot, "")).join(", ")}`,
+  );
 }
 
-function removeProbeRoute(): void {
-  rmSync(dirname(PROBE_TARGET), { recursive: true, force: true });
+function removeProbeRoutes(): void {
+  for (const route of PROBE_ROUTES) {
+    rmSync(dirname(route.target), { recursive: true, force: true });
+  }
 }
 
 export default async function setup() {
-  installProbeRoute();
+  installProbeRoutes();
 
   if (await serverIsUp()) {
     console.log(`[integration] reusing the server already listening on ${BASE_URL}`);
     return async () => {
-      removeProbeRoute();
+      removeProbeRoutes();
     };
   }
 
@@ -138,12 +145,12 @@ export default async function setup() {
       console.log(`[integration] server ready on ${BASE_URL}`);
       return async () => {
         child?.kill();
-        removeProbeRoute();
+        removeProbeRoutes();
       };
     }
 
     if (child.exitCode !== null) {
-      removeProbeRoute();
+      removeProbeRoutes();
       throw new Error(
         `[integration] the Next server exited with code ${child.exitCode}`,
       );
@@ -153,6 +160,6 @@ export default async function setup() {
   }
 
   child.kill();
-  removeProbeRoute();
+  removeProbeRoutes();
   throw new Error(`[integration] the Next server never became ready on ${BASE_URL}`);
 }

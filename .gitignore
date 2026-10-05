@@ -50,7 +50,8 @@ next-env.d.ts
 # supabase cli cache
 supabase/.temp
 
-# Test-only route that tests/integration/global-setup.ts copies in and removes
-# again. Ignored so a crashed run can never leave it in a commit — the route
-# itself also answers 404 unless HARDENING_PROBE=1.
+# Test-only routes that tests/integration/global-setup.ts copies in and removes
+# again. Ignored so a crashed run can never leave one in a commit — each route
+# also answers 404 unless TEST_PROBE=1.
 /app/api/hardening-probe/
+/app/api/users-probe/
