@@ -173,6 +173,42 @@ export async function createSecondTenant(
   return { userId: data.user.id, email, password, cookie: cookie(), client };
 }
 
+export type SeededPartner = {
+  id: string;
+  name: string;
+  cleanup: () => Promise<void>;
+};
+
+/**
+ * One partner row in `organizationId` (feature round 2).
+ *
+ * The row is inserted with the service role, which bypasses RLS: the RLS rules
+ * themselves are what the partners suite asserts, so the fixtures must not
+ * depend on them.
+ */
+export async function seedPartner(
+  admin: SupabaseClient,
+  { organizationId, name }: { organizationId: string; name: string },
+): Promise<SeededPartner> {
+  const { data, error } = await admin
+    .from("partners")
+    .insert({ organization_id: organizationId, name })
+    .select("id, name")
+    .single();
+
+  if (error || !data) {
+    throw new Error(`could not seed the partner: ${error?.message}`);
+  }
+
+  return {
+    id: data.id as string,
+    name: data.name as string,
+    cleanup: async () => {
+      await admin.from("partners").delete().eq("id", data.id);
+    },
+  };
+}
+
 export type SeededFile = {
   contractId: string;
   fileId: string;
@@ -186,6 +222,9 @@ export type SeededFile = {
  * The row is inserted directly rather than through the API because the suite is
  * testing authorization, not the create flow (that is the end-to-end suite's
  * job). The object is a real upload so a presigned GET can actually be fetched.
+ *
+ * `partnerId` (feature round 2) links the contract to a partner row; omit it for
+ * the free-text-only contracts that every Wave 1 row looks like.
  */
 export async function seedContractWithFile(
   admin: SupabaseClient,
@@ -193,7 +232,13 @@ export async function seedContractWithFile(
     organizationId,
     label,
     withObject,
-  }: { organizationId: string; label: string; withObject: boolean },
+    partnerId,
+  }: {
+    organizationId: string;
+    label: string;
+    withObject: boolean;
+    partnerId?: string;
+  },
 ): Promise<SeededFile> {
   const contractId = crypto.randomUUID();
   const fileId = crypto.randomUUID();
@@ -207,6 +252,7 @@ export async function seedContractWithFile(
     signed_date: "2026-01-15",
     expiry_date: "2027-01-14",
     partner_text: "W1TEST partner",
+    partner_id: partnerId ?? null,
   });
 
   if (contractError) {
@@ -303,6 +349,18 @@ export async function destroySecondTenant(
     await admin.from("contracts").delete().eq("id", contract.id);
   }
 
+  // Contracts go first (they reference partners), then the partner rows, then
+  // the organization itself: every one of those foreign keys is RESTRICT, so the
+  // order is not a preference.
+  const { data: partners } = await admin
+    .from("partners")
+    .select("id")
+    .eq("organization_id", ORG_B);
+
+  for (const partner of partners ?? []) {
+    await admin.from("partners").delete().eq("id", partner.id);
+  }
+
   await admin.from("profiles").update({ organization_id: ORG_A }).eq("id", session.userId);
   await admin.auth.admin.deleteUser(session.userId);
   await admin.from("organizations").delete().eq("id", ORG_B);
@@ -338,6 +396,17 @@ export async function sweepTestRows(admin: SupabaseClient): Promise<void> {
 
     await admin.from("contract_files").delete().eq("contract_id", contract.id);
     await admin.from("contracts").delete().eq("id", contract.id);
+  }
+
+  // Partners last: a contract that still pointed at one would block the delete
+  // (ON DELETE RESTRICT), which is exactly the behaviour the migration intends.
+  const { data: partners } = await admin
+    .from("partners")
+    .select("id")
+    .like("name", `${TEST_PREFIX}%`);
+
+  for (const partner of partners ?? []) {
+    await admin.from("partners").delete().eq("id", partner.id);
   }
 
   const { data: users } = await admin.auth.admin.listUsers({ perPage: 200 });

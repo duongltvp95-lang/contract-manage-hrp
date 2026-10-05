@@ -100,6 +100,52 @@ describe("contractsHref", () => {
   });
 });
 
+describe("partner filter (feature round 2)", () => {
+  const PARTNER = "8f14e45f-ceea-4a1f-9e3b-2f5a6c7d8e9f";
+
+  it("reads a partner id from the URL", () => {
+    expect(parseContractsQuery({ partnerId: PARTNER }).partnerId).toBe(PARTNER);
+  });
+
+  it("keeps only a real uuid", () => {
+    // The value travels into a PostgREST filter, so anything else is dropped
+    // rather than passed through.
+    expect(parseContractsQuery({ partnerId: "not-a-uuid" }).partnerId).toBe("");
+    expect(parseContractsQuery({ partnerId: "1);drop table contracts--" }).partnerId).toBe("");
+    expect(parseContractsQuery({ partnerId: "" }).partnerId).toBe("");
+  });
+
+  it("accepts an uppercase uuid", () => {
+    expect(parseContractsQuery({ partnerId: PARTNER.toUpperCase() }).partnerId).toBe(
+      PARTNER.toUpperCase(),
+    );
+  });
+
+  it("round-trips through the URL", () => {
+    const href = contractsHref({ partnerId: PARTNER }, DEFAULT_QUERY);
+
+    expect(href).toBe(`/contracts?partnerId=${PARTNER}`);
+    expect(parseContractsQuery({ partnerId: PARTNER }).partnerId).toBe(PARTNER);
+  });
+
+  it("omits the parameter when no partner is selected", () => {
+    expect(contractsHref({ q: "abc" }, DEFAULT_QUERY)).not.toContain("partnerId");
+  });
+
+  it("counts as an active filter", () => {
+    expect(hasActiveFilters({ ...DEFAULT_QUERY, partnerId: PARTNER })).toBe(true);
+    expect(hasActiveFilters(DEFAULT_QUERY)).toBe(false);
+  });
+
+  it("is preserved when another filter changes", () => {
+    const current = parseContractsQuery({ partnerId: PARTNER, q: "samsung" });
+    const href = contractsHref({ preset: "expired" }, current);
+
+    expect(href).toContain(`partnerId=${PARTNER}`);
+    expect(href).toContain("preset=expired");
+  });
+});
+
 describe("hasActiveFilters", () => {
   it("is false only for a pristine query", () => {
     expect(hasActiveFilters(DEFAULT_QUERY)).toBe(false);

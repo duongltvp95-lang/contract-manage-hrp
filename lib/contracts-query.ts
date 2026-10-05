@@ -41,6 +41,8 @@ export type ContractsQuery = {
   signedTo: string;
   expiryFrom: string;
   expiryTo: string;
+  /** Feature round 2: show only contracts linked to this partner. */
+  partnerId: string;
   page: number;
   pageSize: PageSize;
   sort: SortField;
@@ -58,6 +60,7 @@ export const DEFAULT_QUERY: ContractsQuery = {
   signedTo: "",
   expiryFrom: "",
   expiryTo: "",
+  partnerId: "",
   page: 1,
   pageSize: DEFAULT_PAGE_SIZE,
   sort: DEFAULT_SORT,
@@ -65,6 +68,18 @@ export const DEFAULT_QUERY: ContractsQuery = {
 };
 
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Only a real uuid is accepted.
+ *
+ * The value travels into a PostgREST `eq` filter, so anything that is not a
+ * uuid could carry filter syntax; a partner that does not exist and a value that
+ * was never an id both become "no partner filter".
+ */
+function isValidGuid(value: string): boolean {
+  return GUID_RE.test(value);
+}
 
 type RawParams = Record<string, string | string[] | undefined>;
 
@@ -100,6 +115,7 @@ export function parseContractsQuery(params: RawParams): ContractsQuery {
     signedTo: dateOrEmpty(first(params.signedTo)),
     expiryFrom: dateOrEmpty(first(params.expiryFrom)),
     expiryTo: dateOrEmpty(first(params.expiryTo)),
+    partnerId: isValidGuid(first(params.partnerId)) ? first(params.partnerId) : "",
     page: Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1,
     pageSize: (PAGE_SIZE_OPTIONS as readonly number[]).includes(rawPageSize)
       ? (rawPageSize as PageSize)
@@ -125,6 +141,7 @@ export function contractsHref(
   if (next.signedTo) params.set("signedTo", next.signedTo);
   if (next.expiryFrom) params.set("expiryFrom", next.expiryFrom);
   if (next.expiryTo) params.set("expiryTo", next.expiryTo);
+  if (next.partnerId) params.set("partnerId", next.partnerId);
   if (next.page > 1) params.set("page", String(next.page));
   if (next.pageSize !== DEFAULT_PAGE_SIZE) params.set("pageSize", String(next.pageSize));
   if (next.sort !== DEFAULT_SORT) params.set("sort", next.sort);
@@ -141,7 +158,8 @@ export function hasActiveFilters(query: ContractsQuery): boolean {
       query.signedFrom ||
       query.signedTo ||
       query.expiryFrom ||
-      query.expiryTo,
+      query.expiryTo ||
+      query.partnerId,
   );
 }
 

@@ -39,6 +39,25 @@ const optionalDate = (label: string) =>
       `${label} phải theo định dạng YYYY-MM-DD và là ngày hợp lệ`,
     );
 
+/**
+ * An optional partner link (feature round 2).
+ *
+ * `""` is accepted and means "no partner", the same convention every other
+ * optional field here uses: an untouched `<select>` submits an empty string, and
+ * the service normalises it to SQL NULL. A non-empty value must be a UUID, so a
+ * crafted payload cannot smuggle a filter fragment into a PostgREST query.
+ *
+ * The organization that owns the partner is NOT checked here — that is the
+ * service's job, because it is the layer that knows the caller's session.
+ */
+const optionalPartnerId = z
+  .string()
+  .optional()
+  .refine(
+    (value) => !value || z.guid().safeParse(value).success,
+    "Đối tác được chọn không hợp lệ",
+  );
+
 /** Plan section 45 — the fields of the Add Contract form. */
 export const CreateContractSchema = z.object({
   contractNumber: optionalText(100, "Số hợp đồng"),
@@ -46,6 +65,7 @@ export const CreateContractSchema = z.object({
   durationText: optionalText(200, "Thời hạn"),
   expiryDate: optionalDate("Ngày hết hạn"),
   partnerText: optionalText(300, "Đối tác"),
+  partnerId: optionalPartnerId,
   notes: optionalText(5000, "Ghi chú"),
 });
 

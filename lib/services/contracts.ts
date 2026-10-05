@@ -10,6 +10,7 @@ import {
 
 import { resolveExpiryPreset, sanitizeSearchTerm, type ContractsQuery } from "@/lib/contracts-query";
 import { createClient } from "@/lib/supabase/server";
+import { getPartner } from "./partners";
 import { dbError, err, ok, type ServiceErr, type ServiceResult } from "./types";
 
 /**
@@ -28,6 +29,7 @@ export type ContractRow = {
   duration_text: string | null;
   expiry_date: string | null;
   partner_text: string | null;
+  partner_id: string | null;
   notes: string | null;
   archived_at: string | null;
   created_by: string | null;
@@ -36,7 +38,26 @@ export type ContractRow = {
 };
 
 export const CONTRACT_COLUMNS =
-  "id, organization_id, contract_number, signed_date, duration_text, expiry_date, partner_text, notes, archived_at, created_by, created_at, updated_at";
+  "id, organization_id, contract_number, signed_date, duration_text, expiry_date, partner_text, partner_id, notes, archived_at, created_by, created_at, updated_at";
+
+/**
+ * A contract plus the resolved partner name (feature round 2).
+ *
+ * `partner_name` is null when the contract has no linked partner — which
+ * includes every contract created before the partners table existed. Callers
+ * fall back to `partner_text` in that case; `partner_text` is never removed.
+ */
+export type ContractDetail = ContractRow & { partner_name: string | null };
+
+/**
+ * How many matching partner ids may be folded into the search filter.
+ *
+ * The directory is expected to be small (tens, maybe low hundreds), so this
+ * bound is not reached in practice — it exists so that a pathological term
+ * ("a") cannot build a URL longer than the server accepts. When it is reached
+ * the search still works; it simply covers the first N matching partners.
+ */
+const PARTNER_SEARCH_ID_LIMIT = 150;
 
 export type CreateContractContext = {
   userId: string;
@@ -62,6 +83,25 @@ export async function createContract(
   }
 
   const values = parsed.data;
+
+  /**
+   * A chosen partner must belong to the caller's organization.
+   *
+   * RLS checks the *contract's* organization, not the organization that owns
+   * the referenced partner, so without this a crafted request could link a
+   * contract to another tenant's partner row — the foreign key would be
+   * satisfied and the other tenant's partner name would then render on this
+   * contract. The check is explicit for that reason.
+   */
+  const partnerId = values.partnerId ? values.partnerId : null;
+
+  if (partnerId) {
+    const partner = await getPartner(partnerId, { organizationId });
+    if (!partner.ok) {
+      return err("validation", "Đối tác được chọn không thuộc tổ chức của bạn");
+    }
+  }
+
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -75,6 +115,7 @@ export async function createContract(
       duration_text: emptyToNull(values.durationText),
       expiry_date: emptyToNull(values.expiryDate),
       partner_text: emptyToNull(values.partnerText),
+      partner_id: partnerId,
       notes: emptyToNull(values.notes),
     })
     .select(CONTRACT_COLUMNS)
@@ -87,16 +128,23 @@ export async function createContract(
   return ok(data as ContractRow);
 }
 
-/** Returns the contract only when it belongs to `organizationId`. */
+/**
+ * Returns the contract only when it belongs to `organizationId`, with the linked
+ * partner's name resolved (feature round 2).
+ *
+ * The embed is a left join: `partners(name)` yields `null` for a contract with
+ * no `partner_id`, which is every pre-round-2 row. Callers show `partner_name`
+ * when it exists and fall back to `partner_text`.
+ */
 export async function getContract(
   id: string,
   organizationId: string,
-): Promise<ServiceResult<ContractRow>> {
+): Promise<ServiceResult<ContractDetail>> {
   const supabase = await createClient();
 
   const { data, error } = await supabase
     .from("contracts")
-    .select(CONTRACT_COLUMNS)
+    .select(`${CONTRACT_COLUMNS}, partners(name)`)
     .eq("id", id)
     .eq("organization_id", organizationId)
     .maybeSingle();
@@ -111,7 +159,21 @@ export async function getContract(
     return err("not_found", "Không tìm thấy hợp đồng");
   }
 
-  return ok(data as ContractRow);
+  // A many-to-one embed (`contracts.partner_id -> partners.id`) comes back as a
+  // single object at runtime, but the generated PostgREST types cannot tell it
+  // apart from a to-many embed and declare an array. Both shapes are accepted so
+  // the code is correct whichever the client hands over.
+  const row = data as unknown as ContractRow & {
+    partners: { name: string } | { name: string }[] | null;
+  };
+
+  const { partners, ...contract } = row;
+  const embedded = Array.isArray(partners) ? (partners[0] ?? null) : partners;
+
+  return ok({
+    ...contract,
+    partner_name: embedded?.name ?? null,
+  });
 }
 
 /** A contract plus the file count shown in the "Files" column (plan section 48). */
@@ -180,14 +242,47 @@ export async function listContracts({
     // the Wave 1 list.
     .is("archived_at", null);
 
-  // --- search (plan sections 50, 51) ---------------------------------------
-  // contract_number and partner_text only: both carry a pg_trgm GIN index.
-  // Adding notes here would OR in an unindexed column and force a full scan.
+  // --- search (plan sections 50, 51; feature round 2 adds the partner link) --
+  // Three sources, OR'd: the contract number, the free-text partner name that
+  // every pre-round-2 row carries, and the name of the partner the contract is
+  // now linked to.
+  //
+  // The linked-name case is resolved as a set of partner ids rather than as a
+  // join inside the filter. PostgREST cannot OR a column of an embedded
+  // resource with a column of the base table in one `or`, and folding the
+  // matching contract ids in instead would put an unbounded list in the URL.
+  // The partner directory is small by design (`listPartners` returns all of it
+  // for the filter controls), so a `partner_id.in.(…)` list stays short.
   const term = sanitizeSearchTerm(query.q);
   if (term) {
-    builder = builder.or(
-      `contract_number.ilike.%${term}%,partner_text.ilike.%${term}%`,
-    );
+    const { data: matchingPartners, error: partnerSearchError } = await supabase
+      .from("partners")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .ilike("name", `%${term}%`)
+      .limit(PARTNER_SEARCH_ID_LIMIT);
+
+    if (partnerSearchError) {
+      return dbError("listContracts", partnerSearchError);
+    }
+
+    const clauses = [
+      `contract_number.ilike.%${term}%`,
+      `partner_text.ilike.%${term}%`,
+    ];
+
+    const partnerIds = (matchingPartners ?? []).map((row) => row.id);
+
+    if (partnerIds.length > 0) {
+      clauses.push(`partner_id.in.(${partnerIds.join(",")})`);
+    }
+
+    builder = builder.or(clauses.join(","));
+  }
+
+  // --- partner filter (feature round 2) ------------------------------------
+  if (query.partnerId) {
+    builder = builder.eq("partner_id", query.partnerId);
   }
 
   // --- date filters (plan section 52) --------------------------------------
@@ -313,6 +408,28 @@ export async function updateContract(
   if ("expiryDate" in raw) patch.expiry_date = emptyToNull(values.expiryDate);
   if ("partnerText" in raw) patch.partner_text = emptyToNull(values.partnerText);
   if ("notes" in raw) patch.notes = emptyToNull(values.notes);
+
+  /**
+   * The partner link, only when the caller sent the key.
+   *
+   * `""` clears the link (back to free text), a uuid sets it — and, as in
+   * `createContract`, the partner must belong to the caller's organization, or
+   * this would be a way to attach another tenant's partner to a contract.
+   */
+  if ("partnerId" in raw) {
+    const partnerId = values.partnerId ? values.partnerId : null;
+
+    if (partnerId) {
+      const partner = await getPartner(partnerId, {
+        organizationId: context.organizationId,
+      });
+      if (!partner.ok) {
+        return err("validation", "Đối tác được chọn không thuộc tổ chức của bạn");
+      }
+    }
+
+    patch.partner_id = partnerId;
+  }
 
   if (Object.keys(patch).length === 0) {
     return err("validation", "Không có thay đổi nào để lưu");
