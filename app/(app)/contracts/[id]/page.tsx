@@ -4,8 +4,12 @@ import { Suspense } from "react";
 import { ContractDetail } from "@/components/contracts/contract-detail";
 import { Skeleton } from "@/components/ui/skeleton";
 import { requireUser, type CurrentUser } from "@/lib/auth";
-import { getContract, type ContractRow } from "@/lib/services/contracts";
+import {
+  getContract,
+  type ContractDetail as ContractDetailRow,
+} from "@/lib/services/contracts";
 import { getFileViewUrl, listContractFiles } from "@/lib/services/files";
+import { listPartners } from "@/lib/services/partners";
 
 /**
  * Contract detail — plan sections 54-60, 65, 66.
@@ -61,7 +65,7 @@ async function loadAuthorizedContract(
   id: string;
   requestedFileId: string | undefined;
   user: CurrentUser;
-  contract: ContractRow;
+  contract: ContractDetailRow;
 }> {
   const { id } = await params;
   const { file: requestedFileId } = await searchParams;
@@ -87,9 +91,15 @@ async function ContractDetailContent({
   id: string;
   requestedFileId: string | undefined;
   organizationId: string;
-  contract: ContractRow;
+  contract: ContractDetailRow;
 }) {
-  const files = await listContractFiles(organizationId, id);
+  // The partner directory is read alongside the files so the Edit Sheet's
+  // combobox has its options on first paint (feature round 2).
+  const [files, partners] = await Promise.all([
+    listContractFiles(organizationId, id),
+    listPartners({ organizationId }),
+  ]);
+
   const fileList = files.ok ? files.data : [];
 
   // `?file=<id>` deep-links a specific document; anything unknown falls back to
@@ -109,6 +119,7 @@ async function ContractDetailContent({
   return (
     <ContractDetail
       contract={contract}
+      partners={partners.ok ? partners.data : []}
       files={fileList}
       filesError={files.ok ? null : files.message}
       initialViewUrl={initialViewUrl}

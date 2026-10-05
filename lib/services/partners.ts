@@ -3,8 +3,6 @@ import "server-only";
 import {
   PartnerSchema,
   UpdatePartnerSchema,
-  type CreatePartnerInput,
-  type UpdatePartnerInput,
 } from "@schemas/partner";
 
 import { createClient } from "@/lib/supabase/server";
@@ -34,20 +32,60 @@ export type PartnerRow = {
 
 export const PARTNER_COLUMNS = "id, organization_id, name, created_at, updated_at";
 
+/**
+ * A partner plus how many contracts point at it.
+ *
+ * Archived contracts are not counted: the list hides them, the dashboard hides
+ * them, and a count that includes rows the user cannot see would never match
+ * the number of contracts on the partner's own page.
+ */
+export type PartnerWithCount = PartnerRow & { contract_count: number };
+
 export type PartnerContext = {
   organizationId: string;
 };
 
 /**
- * Every partner of the caller's organization, alphabetically.
+ * Counts contracts per partner for the given partners.
+ *
+ * One extra query rather than a PostgREST embedded count, mirroring
+ * `countFilesByContract` in `contracts.ts`: the shape stays explicit and RLS
+ * applies exactly once per row.
+ */
+async function countContractsByPartner(
+  partnerIds: string[],
+  organizationId: string,
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (partnerIds.length === 0) return counts;
+
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("contracts")
+    .select("partner_id")
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .in("partner_id", partnerIds);
+
+  for (const row of (data ?? []) as { partner_id: string | null }[]) {
+    if (!row.partner_id) continue;
+    counts.set(row.partner_id, (counts.get(row.partner_id) ?? 0) + 1);
+  }
+
+  return counts;
+}
+
+/**
+ * Every partner of the caller's organization, alphabetically, with its contract
+ * count.
  *
  * The directory is expected to be small (tens to low hundreds per
  * organization), so this returns the whole list rather than paginating: it feeds
- * a `<select>` and a filter control, both of which need every option.
+ * a `<select>` / combobox and a filter control, both of which need every option.
  */
 export async function listPartners({
   organizationId,
-}: PartnerContext): Promise<ServiceResult<PartnerRow[]>> {
+}: PartnerContext): Promise<ServiceResult<PartnerWithCount[]>> {
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -60,7 +98,15 @@ export async function listPartners({
     return dbError("listPartners", error);
   }
 
-  return ok((data ?? []) as PartnerRow[]);
+  const rows = (data ?? []) as PartnerRow[];
+  const counts = await countContractsByPartner(
+    rows.map((row) => row.id),
+    organizationId,
+  );
+
+  return ok(
+    rows.map((row) => ({ ...row, contract_count: counts.get(row.id) ?? 0 })),
+  );
 }
 
 /** Returns the partner only when it belongs to `organizationId`. */
@@ -90,9 +136,15 @@ export async function getPartner(
   return ok(data as PartnerRow);
 }
 
-/** Creates one partner for the caller's organization. */
+/**
+ * Creates one partner for the caller's organization.
+ *
+ * `input` is `unknown` on purpose: a server action hands over whatever the client
+ * sent, and `PartnerSchema.safeParse` below is the boundary that decides whether
+ * it is usable. Typing the parameter would only move the cast one layer up.
+ */
 export async function createPartner(
-  input: CreatePartnerInput,
+  input: unknown,
   { organizationId }: PartnerContext,
 ): Promise<ServiceResult<PartnerRow>> {
   const parsed = PartnerSchema.safeParse(input);
@@ -135,7 +187,7 @@ export async function createPartner(
  */
 export async function updatePartner(
   id: string,
-  input: UpdatePartnerInput,
+  input: unknown,
   { organizationId }: PartnerContext,
 ): Promise<ServiceResult<PartnerRow>> {
   const raw = (input ?? {}) as Record<string, unknown>;

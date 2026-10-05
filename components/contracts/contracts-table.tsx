@@ -3,6 +3,7 @@
 import { ArrowDown, ArrowUp, ChevronsUpDown, FilePlus2, Plus, SearchX } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import {
   type SortField,
 } from "@/lib/contracts-query";
 import { formatDateOnly, formatDateTime } from "@/lib/format";
+import { partnerDisplayName } from "@/lib/partner-display";
 import type { ContractListItem } from "@/lib/services/contracts";
 
 /**
@@ -38,15 +40,30 @@ export function ContractsTable({
   rows,
   query,
   total,
+  basePath = "/contracts",
+  emptyState,
 }: {
   rows: ContractListItem[];
   query: ContractsQuery;
   total: number;
+  /**
+   * Where this table lives. The partner detail page reuses it with
+   * `basePath="/partners/<id>"`, so the sort links stay on that page instead of
+   * throwing the user back to the full list.
+   */
+  basePath?: string;
+  /** Replaces the default empty state (the partner page has its own wording). */
+  emptyState?: ReactNode;
 }) {
   const router = useRouter();
 
+  const hrefFor = (patch: Partial<ContractsQuery>) => {
+    const href = contractsHref(patch, query);
+    return basePath === "/contracts" ? href : `${basePath}${href.slice("/contracts".length)}`;
+  };
+
   if (rows.length === 0) {
-    return <ContractsEmptyState query={query} />;
+    return <>{emptyState ?? <ContractsEmptyState query={query} basePath={basePath} />}</>;
   }
 
   return (
@@ -54,12 +71,27 @@ export function ContractsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <SortableHead field="contract_number" label="Số hợp đồng" query={query} />
+            <SortableHead
+              field="contract_number"
+              label="Số hợp đồng"
+              query={query}
+              hrefFor={hrefFor}
+            />
             <TableHead>Đối tác</TableHead>
-            <SortableHead field="signed_date" label="Ngày ký" query={query} />
+            <SortableHead
+              field="signed_date"
+              label="Ngày ký"
+              query={query}
+              hrefFor={hrefFor}
+            />
             <TableHead>Thời hạn / Hết hạn</TableHead>
             <TableHead className="text-center">Tệp</TableHead>
-            <SortableHead field="updated_at" label="Cập nhật" query={query} />
+            <SortableHead
+              field="updated_at"
+              label="Cập nhật"
+              query={query}
+              hrefFor={hrefFor}
+            />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -82,7 +114,9 @@ export function ContractsTable({
                   </Link>
                 </TableCell>
                 <TableCell className="max-w-[22rem] truncate">
-                  {row.partner_text ?? "—"}
+                  {/* The linked partner's name wins; the free-text column is the
+                      fallback for contracts that predate the directory. */}
+                  {partnerDisplayName(row)}
                 </TableCell>
                 <TableCell>{formatDateOnly(row.signed_date)}</TableCell>
                 <TableCell>
@@ -117,10 +151,12 @@ function SortableHead({
   field,
   label,
   query,
+  hrefFor,
 }: {
   field: SortField;
   label: string;
   query: ContractsQuery;
+  hrefFor: (patch: Partial<ContractsQuery>) => string;
 }) {
   const active = query.sort === field;
   // First click sorts ascending; clicking the active column flips it.
@@ -130,7 +166,7 @@ function SortableHead({
   return (
     <TableHead aria-sort={active ? (query.dir === "asc" ? "ascending" : "descending") : "none"}>
       <Link
-        href={contractsHref({ sort: field, dir: nextDir, page: 1 }, query)}
+        href={hrefFor({ sort: field, dir: nextDir, page: 1 })}
         className="inline-flex items-center gap-1 hover:underline"
       >
         {label}
@@ -141,7 +177,13 @@ function SortableHead({
 }
 
 /** Plan section 82 — the two empty states read differently on purpose. */
-function ContractsEmptyState({ query }: { query: ContractsQuery }) {
+function ContractsEmptyState({
+  query,
+  basePath,
+}: {
+  query: ContractsQuery;
+  basePath: string;
+}) {
   if (hasActiveFilters(query)) {
     return (
       <EmptyState
@@ -150,7 +192,7 @@ function ContractsEmptyState({ query }: { query: ContractsQuery }) {
         description="Thử từ khoá khác hoặc bỏ bớt bộ lọc."
         action={
           <Button variant="outline" asChild>
-            <Link href="/contracts">Xoá bộ lọc</Link>
+            <Link href={basePath}>Xoá bộ lọc</Link>
           </Button>
         }
       />

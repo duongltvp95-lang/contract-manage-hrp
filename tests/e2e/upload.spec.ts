@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  ORG_A,
   TEST_PREFIX,
   adminClient,
   buildJpeg,
@@ -12,8 +13,11 @@ import {
   login,
   R2_REQUEST,
   runId,
+  seedPartner,
+  selectPartner,
   sweep,
   writeArtifact,
+  type SeededPartner,
 } from "./helpers";
 
 test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
@@ -34,13 +38,24 @@ const jpgPath = writeArtifact(`e2e-${stamp}.jpg`, buildJpeg());
 
 test.describe.configure({ mode: "serial" });
 
+/** Every create in this spec goes through the form, which now needs a partner. */
+let partner: SeededPartner;
+
 test.describe("upload", () => {
   test.beforeAll(async () => {
-    await sweep(adminClient());
+    const admin = adminClient();
+    await sweep(admin);
+    partner = await seedPartner(admin, {
+      organizationId: ORG_A,
+      name: `${TEST_PREFIX}Đối tác tải tệp ${stamp}`,
+    });
   });
 
   test.afterAll(async () => {
-    await sweep(adminClient());
+    const admin = adminClient();
+    // Contracts first, then the partner they point at (ON DELETE RESTRICT).
+    await sweep(admin);
+    await partner?.cleanup();
   });
 
   test("uploads a PDF through the form and persists the row", async ({ page }) => {
@@ -49,6 +64,7 @@ test.describe("upload", () => {
     await login(page);
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
+    await selectPartner(page, partner.name);
     await page.setInputFiles('input[type="file"]', pdfPath);
 
     await expect(page.locator("body")).toContainText(`e2e-${stamp}.pdf`);
@@ -78,6 +94,7 @@ test.describe("upload", () => {
     await login(page);
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
+    await selectPartner(page, partner.name);
     await page.setInputFiles('input[type="file"]', [pngPath, jpgPath]);
 
     const queue = page.locator("body");
@@ -119,6 +136,7 @@ test.describe("upload", () => {
     await login(page);
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', `${TEST_PREFIX}UPLOAD-PROGRESS-${stamp}`);
+    await selectPartner(page, partner.name);
     await page.setInputFiles('input[type="file"]', pdfPath);
 
     await clickSafe(page, '[data-testid="contract-form-submit"]');
@@ -146,6 +164,7 @@ test.describe("upload", () => {
     await login(page);
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
+    await selectPartner(page, partner.name);
     await page.setInputFiles('input[type="file"]', pdfPath);
 
     await clickSafe(page, '[data-testid="contract-form-submit"]');

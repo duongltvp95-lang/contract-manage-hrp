@@ -12,6 +12,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { formatDateOnly, formatDateTime } from "@/lib/format";
+import { partnerDisplayName } from "@/lib/partner-display";
+import type { PartnerRow } from "@/lib/services/partners";
 import type { ViewUrl } from "@/lib/view-url";
 
 /**
@@ -34,6 +36,9 @@ export type ContractDetailData = {
   duration_text: string | null;
   expiry_date: string | null;
   partner_text: string | null;
+  partner_id: string | null;
+  /** Resolved through the partner link; null for a contract with free text only. */
+  partner_name?: string | null;
   notes: string | null;
   archived_at: string | null;
   created_at: string;
@@ -42,12 +47,15 @@ export type ContractDetailData = {
 
 export function ContractDetail({
   contract,
+  partners = [],
   files,
   filesError,
   initialViewUrl,
   initialSelectedId,
 }: {
   contract: ContractDetailData;
+  /** The partner directory, for the Edit Sheet's combobox. */
+  partners?: Pick<PartnerRow, "id" | "name">[];
   files: SelectableFile[];
   filesError?: string | null;
   /** Signed on the server when the page opened (plan section 59). */
@@ -62,7 +70,9 @@ export function ContractDetail({
     ["Ngày ký", formatDateOnly(contract.signed_date)],
     ["Thời hạn", contract.duration_text ?? "—"],
     ["Ngày hết hạn", formatDateOnly(contract.expiry_date)],
-    ["Đối tác", contract.partner_text ?? "—"],
+    // The linked partner's name wins; the free-text column is what an older
+    // contract still shows (feature round 2).
+    ["Đối tác", partnerDisplayName(contract)],
     ["Ghi chú", contract.notes ?? "—"],
   ];
 
@@ -97,7 +107,7 @@ export function ContractDetail({
           </>
         ) : (
           <>
-            <EditContractSheet contract={contract} />
+            <EditContractSheet contract={contract} partners={partners} />
             <ContractActionsMenu
               contractId={contract.id}
               contractNumber={contract.contract_number}

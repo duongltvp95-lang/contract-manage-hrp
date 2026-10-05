@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronUp, FileText, LayoutDashboard, Settings, User2 } from "lucide-react";
+import { Building2, ChevronUp, FileText, LayoutDashboard, Settings, User2 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -26,13 +26,17 @@ import {
 import { createClient } from "@/lib/supabase/client";
 
 /**
- * Wave 1 main navigation — docs/plan/wave1-plan-v1.1.md section 26.
- * Exactly three items. Processing / Review / AI / Partners are NOT shown.
+ * Wave 1 main navigation — docs/plan/wave1-plan-v1.1.md section 26, extended by
+ * feature round 2 with the partner directory.
+ *
+ * Order is the owner's: Tổng quan · Hợp đồng · Đối tác · Cài đặt. Processing /
+ * Review / AI are still NOT shown.
  * UI language is Vietnamese (project standard).
  */
 const items = [
   { title: "Tổng quan", url: "/dashboard", icon: LayoutDashboard },
   { title: "Hợp đồng", url: "/contracts", icon: FileText },
+  { title: "Đối tác", url: "/partners", icon: Building2 },
   { title: "Cài đặt", url: "/settings", icon: Settings },
 ];
 

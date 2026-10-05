@@ -29,12 +29,20 @@ export function ContractsPagination({
   query,
   total,
   pageCount,
+  basePath = "/contracts",
 }: {
   query: ContractsQuery;
   total: number;
   pageCount: number;
+  /** Where this pagination lives; the partner page reuses it. */
+  basePath?: string;
 }) {
   const router = useRouter();
+
+  const hrefFor = (patch: Partial<ContractsQuery>) => {
+    const href = contractsHref(patch, query);
+    return basePath === "/contracts" ? href : `${basePath}${href.slice("/contracts".length)}`;
+  };
 
   const from = total === 0 ? 0 : (query.page - 1) * query.pageSize + 1;
   const to = Math.min(query.page * query.pageSize, total);
@@ -53,9 +61,7 @@ export function ContractsPagination({
           <Select
             value={String(query.pageSize)}
             onValueChange={(value) =>
-              router.push(
-                contractsHref({ pageSize: Number(value) as PageSize, page: 1 }, query),
-              )
+              router.push(hrefFor({ pageSize: Number(value) as PageSize, page: 1 }))
             }
           >
             <SelectTrigger id="pageSize" className="w-[5.5rem]">
@@ -75,7 +81,7 @@ export function ContractsPagination({
           variant="outline"
           size="sm"
           disabled={query.page <= 1}
-          onClick={() => router.push(contractsHref({ page: query.page - 1 }, query))}
+          onClick={() => router.push(hrefFor({ page: query.page - 1 }))}
         >
           <ChevronLeft className="mr-1 h-4 w-4" />
           Trước
@@ -89,7 +95,7 @@ export function ContractsPagination({
           variant="outline"
           size="sm"
           disabled={query.page >= pageCount}
-          onClick={() => router.push(contractsHref({ page: query.page + 1 }, query))}
+          onClick={() => router.push(hrefFor({ page: query.page + 1 }))}
         >
           Sau
           <ChevronRight className="ml-1 h-4 w-4" />

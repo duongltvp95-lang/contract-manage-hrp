@@ -363,6 +363,18 @@ export async function setInput(page: Page, selector: string, value: string): Pro
   await locator.fill(value);
 }
 
+/**
+ * Picks a partner in the contract form's combobox (feature round 2).
+ *
+ * The combobox is searchable, and the search folds diacritics, so passing the
+ * full name is enough — the first option after filtering is the one wanted.
+ */
+export async function selectPartner(page: Page, name: string): Promise<void> {
+  await clickSafe(page, '[data-testid="partner-combobox"]');
+  await page.getByTestId("partner-combobox-search").fill(name);
+  await page.getByTestId("partner-option").first().click();
+}
+
 // ---------------------------------------------------------------------------
 // Data helpers
 // ---------------------------------------------------------------------------
@@ -403,6 +415,42 @@ export async function purgeContract(
   await admin.from("contracts").delete().eq("id", contractId);
 }
 
+export type SeededPartner = {
+  id: string;
+  name: string;
+  cleanup: () => Promise<void>;
+};
+
+/**
+ * Creates one partner in `organizationId` (feature round 2).
+ *
+ * Inserted with the service role, so the fixture never depends on the RLS rules
+ * the suites are there to check. The row must be removed AFTER any contract that
+ * references it: the foreign key is ON DELETE RESTRICT.
+ */
+export async function seedPartner(
+  admin: SupabaseClient,
+  { organizationId, name }: { organizationId: string; name: string },
+): Promise<SeededPartner> {
+  const { data, error } = await admin
+    .from("partners")
+    .insert({ organization_id: organizationId, name })
+    .select("id, name")
+    .single();
+
+  if (error || !data) {
+    throw new Error(`could not seed the partner: ${error?.message}`);
+  }
+
+  return {
+    id: data.id as string,
+    name: data.name as string,
+    cleanup: async () => {
+      await admin.from("partners").delete().eq("id", data.id);
+    },
+  };
+}
+
 /**
  * Creates contracts directly, for the cases where the point is what the *list*
  * does with many rows rather than how a row is created.
@@ -416,6 +464,8 @@ export async function seedContracts(
     signedDate: string | null;
     expiryDate: string | null;
     durationText?: string | null;
+    /** Feature round 2 — link the row to a partner instead of free text. */
+    partnerId?: string | null;
   }[],
 ): Promise<SeededContract[]> {
   const { data, error } = await admin
@@ -425,6 +475,7 @@ export async function seedContracts(
         organization_id: row.organizationId,
         contract_number: row.contractNumber,
         partner_text: row.partnerText,
+        partner_id: row.partnerId ?? null,
         signed_date: row.signedDate,
         expiry_date: row.expiryDate,
         duration_text: row.durationText ?? null,
@@ -511,6 +562,17 @@ export async function sweep(admin: SupabaseClient): Promise<void> {
 
   for (const contract of contracts ?? []) {
     await purgeContract(admin, contract.id);
+  }
+
+  // Partners go last: a contract that still pointed at one would block the
+  // delete (ON DELETE RESTRICT), which is the behaviour the migration intends.
+  const { data: partners } = await admin
+    .from("partners")
+    .select("id")
+    .like("name", `${TEST_PREFIX}%`);
+
+  for (const partner of partners ?? []) {
+    await admin.from("partners").delete().eq("id", partner.id);
   }
 }
 

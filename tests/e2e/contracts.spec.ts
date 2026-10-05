@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  ORG_A,
   TEST_PREFIX,
   adminClient,
   clickSafe,
@@ -10,9 +11,11 @@ import {
   login,
   pickDate,
   runId,
-  setInput,
+  seedPartner,
+  selectPartner,
   sweep,
   gotoAndSettle,
+  type SeededPartner,
 } from "./helpers";
 
 test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
@@ -26,15 +29,36 @@ test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
 const stamp = runId();
 const created: string[] = [];
 
+/**
+ * Two partners for the lifecycle: one to create the contract with, one to move
+ * it to when the edit test changes the partner (feature round 2).
+ */
+let partnerA: SeededPartner;
+let partnerB: SeededPartner;
+
 test.describe.configure({ mode: "serial" });
 
 test.describe("contract lifecycle", () => {
   test.beforeAll(async () => {
-    await sweep(adminClient());
+    const admin = adminClient();
+    await sweep(admin);
+
+    partnerA = await seedPartner(admin, {
+      organizationId: ORG_A,
+      name: `${TEST_PREFIX}Đối tác tạo mới ${stamp}`,
+    });
+    partnerB = await seedPartner(admin, {
+      organizationId: ORG_A,
+      name: `${TEST_PREFIX}Đối tác đổi sang ${stamp}`,
+    });
   });
 
   test.afterAll(async () => {
-    await sweep(adminClient());
+    const admin = adminClient();
+    // Contracts first, then the partners they point at (ON DELETE RESTRICT).
+    await sweep(admin);
+    await partnerA?.cleanup();
+    await partnerB?.cleanup();
   });
 
   test("creates a contract through the form", async ({ page }) => {
@@ -45,7 +69,9 @@ test.describe("contract lifecycle", () => {
     await gotoAndSettle(page, "/contracts/new");
 
     await page.fill('input[name="contractNumber"]', contractNumber);
-    await page.fill('input[name="partnerText"]', "Công ty TNHH Samsung Electronics Việt Nam");
+    // A new contract must name a partner (feature round 2); the free-text field
+    // is gone from the create form.
+    await selectPartner(page, partnerA.name);
     await page.fill('input[name="durationText"]', "12 tháng");
     await page.fill('textarea[name="notes"]', "Tạo bởi bộ kiểm thử tự động");
 
@@ -61,18 +87,20 @@ test.describe("contract lifecycle", () => {
     const admin = adminClient();
     const { data } = await admin
       .from("contracts")
-      .select("contract_number, partner_text, expiry_date, archived_at")
+      .select("contract_number, partner_id, partner_text, expiry_date, archived_at")
       .eq("id", id)
       .single();
 
     expect(data?.contract_number).toBe(contractNumber);
-    expect(data?.partner_text).toBe("Công ty TNHH Samsung Electronics Việt Nam");
+    expect(data?.partner_id).toBe(partnerA.id);
     expect(data?.expiry_date).toBe(expiry);
     expect(data?.archived_at).toBeNull();
 
-    // The detail page reflects what was saved.
+    // The detail page reflects what was saved — including the partner, which is
+    // resolved through the link rather than the old free-text column.
     await expect(page.getByRole("heading", { name: contractNumber })).toBeVisible();
     await expect(page.getByText(dmy(expiry), { exact: false }).first()).toBeVisible();
+    await expect(page.locator("body")).toContainText(partnerA.name);
   });
 
   test("edits the expiry date from the detail Sheet and the list follows", async ({ page }) => {
@@ -91,7 +119,8 @@ test.describe("contract lifecycle", () => {
 
     await clickSafe(page, "#expiryDate");
     await pickDate(page, newExpiry);
-    await setInput(page, 'input[name="partnerText"]', "Đối tác đã sửa");
+    // Change the partner too: the edit path must allow re-pointing a contract.
+    await selectPartner(page, partnerB.name);
 
     await clickSafe(page, '[data-testid="contract-form-submit"]');
     await expect(page.locator('[data-testid="edit-contract-sheet"]')).toBeHidden({
@@ -101,18 +130,19 @@ test.describe("contract lifecycle", () => {
     const admin = adminClient();
     const { data } = await admin
       .from("contracts")
-      .select("expiry_date, partner_text")
+      .select("expiry_date, partner_id")
       .eq("id", id)
       .single();
 
     expect(data?.expiry_date).toBe(newExpiry);
-    expect(data?.partner_text).toBe("Đối tác đã sửa");
+    expect(data?.partner_id).toBe(partnerB.id);
 
     // Detail shows the new values without a manual reload.
     await page.reload();
     const detail = page.locator("body");
     await expect(detail).toContainText(dmy(newExpiry));
-    await expect(detail).toContainText("Đối tác đã sửa");
+    await expect(detail).toContainText(partnerB.name);
+    await expect(detail).not.toContainText(partnerA.name);
 
     // And so does the list.
     await gotoAndSettle(page, `/contracts?q=${encodeURIComponent(contractNumber)}`);

@@ -19,6 +19,10 @@ import {
   updateContractAction,
 } from "@/app/(app)/contracts/actions";
 import { DateField } from "@/components/contracts/date-field";
+import {
+  PartnerCombobox,
+  type PartnerOption,
+} from "@/components/partners/partner-combobox";
 import { UploadDropzone } from "@/components/documents/upload-dropzone";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -40,7 +44,9 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { isLegacyPartnerText } from "@/lib/partner-display";
 import type { ContractRow } from "@/lib/services/contracts";
+import type { PartnerRow } from "@/lib/services/partners";
 import { putFileWithProgress, type PendingFile } from "@/lib/upload";
 
 /**
@@ -75,6 +81,7 @@ const EMPTY_VALUES: CreateContractInput = {
   durationText: "",
   expiryDate: "",
   partnerText: "",
+  partnerId: "",
   notes: "",
 };
 
@@ -87,8 +94,12 @@ export type EditableContract = Pick<
   | "duration_text"
   | "expiry_date"
   | "partner_text"
+  | "partner_id"
   | "notes"
->;
+> & {
+  /** Resolved by `getContract`; used only to tell a legacy row from a linked one. */
+  partner_name?: string | null;
+};
 
 function toFormValues(contract: EditableContract | null | undefined): CreateContractInput {
   if (!contract) return EMPTY_VALUES;
@@ -99,6 +110,7 @@ function toFormValues(contract: EditableContract | null | undefined): CreateCont
     durationText: contract.duration_text ?? "",
     expiryDate: contract.expiry_date ?? "",
     partnerText: contract.partner_text ?? "",
+    partnerId: contract.partner_id ?? "",
     notes: contract.notes ?? "",
   };
 }
@@ -107,6 +119,7 @@ export function ContractForm({
   mode = "create",
   maxUploadSizeMb = 0,
   contract = null,
+  partners = [],
   onUpdated,
   onCancel,
 }: {
@@ -115,6 +128,8 @@ export function ContractForm({
   maxUploadSizeMb?: number;
   /** Edit only — the contract being changed. */
   contract?: EditableContract | null;
+  /** The organization's partner directory, read on the server. */
+  partners?: PartnerOption[];
   /** Edit only — called after a successful save, before the refresh. */
   onUpdated?: (row: ContractRow) => void;
   /** Edit only — dismisses the containing Sheet. */
@@ -127,6 +142,38 @@ export function ContractForm({
     resolver: zodResolver(CreateContractSchema),
     defaultValues: toFormValues(contract),
   });
+
+  /**
+   * The directory as this form knows it: the server's list plus anything created
+   * from inside the combobox. A partner added inline is selected immediately, so
+   * it has to exist here before the next render.
+   */
+  const [partnerOptions, setPartnerOptions] = useState<PartnerOption[]>(partners);
+
+  function addPartnerOption(partner: PartnerRow) {
+    setPartnerOptions((current) =>
+      current.some((option) => option.id === partner.id)
+        ? current
+        : [...current, { id: partner.id, name: partner.name }].sort((a, b) =>
+            a.name.localeCompare(b.name, "vi"),
+          ),
+    );
+  }
+
+  /**
+   * A contract that predates the directory: free text, no link.
+   *
+   * Its text is shown read-only and the partner stays optional, so re-saving an
+   * old contract cannot rewrite what it says.
+   */
+  const legacyPartnerText =
+    isEdit &&
+    isLegacyPartnerText({
+      partner_name: contract?.partner_name ?? null,
+      partner_text: contract?.partner_text ?? null,
+    })
+      ? (contract?.partner_text ?? null)
+      : null;
 
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -309,17 +356,37 @@ export function ContractForm({
 
       <FormField
         control={form.control}
-        name="partnerText"
+        name="partnerId"
+        rules={{
+          validate: (value) => {
+            // Only a NEW contract must name a partner (owner decision, round 2).
+            // A contract created before the directory existed keeps its free text
+            // and is never forced to choose one.
+            if (isEdit) return true;
+            return value && value.length > 0 ? true : "Vui lòng chọn đối tác";
+          },
+        }}
         render={({ field }) => (
           <FormItem>
             <FormLabel>Đối tác</FormLabel>
             <FormControl>
-              <Input
-                placeholder="VD: Công ty TNHH Samsung Electronics Việt Nam"
+              <PartnerCombobox
+                id="partnerId"
+                value={field.value ?? ""}
+                onChange={field.onChange}
+                partners={partnerOptions}
+                onPartnerCreated={addPartnerOption}
                 disabled={busy}
-                {...field}
+                invalid={Boolean(form.formState.errors.partnerId)}
               />
             </FormControl>
+            {legacyPartnerText ? (
+              <FormDescription data-testid="legacy-partner-text">
+                Hợp đồng cũ ghi đối tác dạng văn bản: “{legacyPartnerText}”. Chọn
+                một đối tác ở trên nếu muốn liên kết với danh bạ; để trống thì hợp
+                đồng giữ nguyên nội dung cũ.
+              </FormDescription>
+            ) : null}
             <FormMessage />
           </FormItem>
         )}

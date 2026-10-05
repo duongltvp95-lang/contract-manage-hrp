@@ -8,6 +8,7 @@ import {
   ContractForm,
   type EditableContract,
 } from "@/components/contracts/contract-form";
+import type { PartnerOption } from "@/components/partners/partner-combobox";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -26,7 +27,14 @@ import {
  * re-reads the contract on the server, so the detail header and the list both
  * show the new values without any client-side cache to keep in sync.
  */
-export function EditContractSheet({ contract }: { contract: EditableContract }) {
+export function EditContractSheet({
+  contract,
+  partners = [],
+}: {
+  contract: EditableContract;
+  /** The partner directory, for the form's combobox. */
+  partners?: PartnerOption[];
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
@@ -59,6 +67,7 @@ export function EditContractSheet({ contract }: { contract: EditableContract }) 
             key={contract.id}
             mode="edit"
             contract={contract}
+            partners={partners}
             onCancel={() => setOpen(false)}
             onUpdated={() => {
               setOpen(false);

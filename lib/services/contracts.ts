@@ -85,6 +85,19 @@ export async function createContract(
   const values = parsed.data;
 
   /**
+   * A new contract must name a partner (owner decision, feature round 2).
+   *
+   * Enforced here as well as in the form because this is the layer an API
+   * caller, an import script or a future client cannot bypass. `updateContract`
+   * deliberately does NOT require it: contracts created before the partners
+   * table exist with free text only, and re-saving one must not force a partner
+   * onto it.
+   */
+  if (!values.partnerId) {
+    return err("validation", "Vui lòng chọn đối tác cho hợp đồng");
+  }
+
+  /**
    * A chosen partner must belong to the caller's organization.
    *
    * RLS checks the *contract's* organization, not the organization that owns
@@ -93,7 +106,7 @@ export async function createContract(
    * satisfied and the other tenant's partner name would then render on this
    * contract. The check is explicit for that reason.
    */
-  const partnerId = values.partnerId ? values.partnerId : null;
+  const partnerId = values.partnerId;
 
   if (partnerId) {
     const partner = await getPartner(partnerId, { organizationId });
@@ -176,8 +189,18 @@ export async function getContract(
   });
 }
 
-/** A contract plus the file count shown in the "Files" column (plan section 48). */
-export type ContractListItem = ContractRow & { file_count: number };
+/**
+ * A contract plus the file count shown in the "Files" column (plan section 48)
+ * and the resolved partner name (feature round 2).
+ *
+ * `partner_name` is null for a contract with no linked partner — every row
+ * created before the partners table existed. The list falls back to
+ * `partner_text` in that case.
+ */
+export type ContractListItem = ContractRow & {
+  file_count: number;
+  partner_name: string | null;
+};
 
 export type ContractListResult = {
   rows: ContractListItem[];
@@ -236,7 +259,7 @@ export async function listContracts({
 
   let builder = supabase
     .from("contracts")
-    .select(CONTRACT_COLUMNS, { count: "exact" })
+    .select(`${CONTRACT_COLUMNS}, partners(name)`, { count: "exact" })
     .eq("organization_id", organizationId)
     // Archiving is a soft delete (plan section 66): archived rows stay out of
     // the Wave 1 list.
@@ -307,15 +330,24 @@ export async function listContracts({
     return dbError("listContracts", error);
   }
 
-  const rows = (data ?? []) as ContractRow[];
-  const fileCounts = await countFilesByContract(rows.map((row) => row.id));
-  const total = count ?? rows.length;
+  const rawRows = (data ?? []) as unknown as (ContractRow & {
+    partners: { name: string } | { name: string }[] | null;
+  })[];
+  const fileCounts = await countFilesByContract(rawRows.map((row) => row.id));
+  const total = count ?? rawRows.length;
 
   return ok({
-    rows: rows.map((row) => ({
-      ...row,
-      file_count: fileCounts.get(row.id) ?? 0,
-    })),
+    rows: rawRows.map(({ partners, ...row }) => {
+      // A many-to-one embed arrives as an object; the generated types cannot
+      // tell it apart from a to-many embed, so both shapes are accepted.
+      const embedded = Array.isArray(partners) ? (partners[0] ?? null) : partners;
+
+      return {
+        ...row,
+        file_count: fileCounts.get(row.id) ?? 0,
+        partner_name: embedded?.name ?? null,
+      };
+    }),
     total,
     page: query.page,
     pageSize: query.pageSize,
