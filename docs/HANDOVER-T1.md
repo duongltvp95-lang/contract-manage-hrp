@@ -33,7 +33,7 @@ Browser → Next.js (Vercel) → Supabase (Auth + PostgreSQL + RLS)
 - **Stack**: Next.js 16 (App Router, Turbopack, `cacheComponents`), TypeScript, pnpm.
 - **Thư viện đã chốt**: shadcn/ui, react-hook-form, zod, react-dropzone, react-pdf (PDF.js), date-fns, lucide-react, Sonner, `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner`. Table dùng shadcn Table (server-side sort/filter, chưa cần TanStack). Test: **Vitest + Playwright**.
 - **Supabase**: project ref `vohrerrbthbrkwjllnlj`, region `ap-northeast-2` (Seoul), PostgreSQL 17.11. Auth email/password (không public sign-up).
-- **R2**: bucket `hrp-contract` (PRIVATE), account `7cb198fcbb0d90e7b902bb69010506b9`.
+- **R2**: bucket `hrp-contract` (PRIVATE), account `7cb198fc…` (xem `.env.local`).
 
 ### Dữ liệu cốt lõi (bảng DB)
 
@@ -111,7 +111,7 @@ f936724  docs: record the production smoke test result
 | Supabase URL | `https://vohrerrbthbrkwjllnlj.supabase.co` | public |
 | Supabase anon key | `sb_publishable_…` (format mới) | public, client |
 | Supabase service_role | `sb_secret_…` (format mới) | **Secret**, server-only |
-| R2 account/endpoint | `7cb198fcbb0d90e7b902bb69010506b9` / `https://….r2.cloudflarestorage.com` | |
+| R2 account/endpoint | `7cb198fc…` / `https://….r2.cloudflarestorage.com` | |
 | R2 access key + secret | trong `D:\HRP-app\R2-contract.txt` (nếu còn) | **Secret** |
 | R2 bucket | `hrp-contract` | private |
 

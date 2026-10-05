@@ -1,0 +1,70 @@
+---
+description: Quy tắc giao tiếp và phong cách làm việc bắt buộc cho agent (T1/T2) trên dự án Contract Manager — báo cáo bằng tiếng Việt, không rò rỉ bí mật, REUSE FIRST
+alwaysApply: true
+---
+
+# Quy tắc làm việc bắt buộc — Contract Manager
+
+Áp dụng cho **mọi** AI agent làm việc trên repo này (T1 owner, T2 coder, **mọi
+sub-agent** mà T1/T2 spawn ra). Khi có xung đột, quy tắc này thắng — sub-agent
+không có quyền tự ý bỏ qua bất kỳ mục nào.
+
+## 1. Ngôn ngữ giao tiếp — LUÔN LUÔN TIẾNG VIỆT
+
+- **Mọi** report, thông báo lỗi, giải thích, câu hỏi, comment commit và
+  tóm tắt gửi tới Owner (chủ dự án) hoặc T1 **phải bằng tiếng Việt**.
+- Gồm cả: log báo lỗi, thông điệp lỗi trong UI, tên nhánh/commit, chú thích
+  code, tài liệu, và câu trả lời trong chat.
+- **Không** trả lời tiếng Anh trừ khi Owner/T1 yêu cầu rõ ràng bằng tiếng Anh
+  (ví dụ: thuật ngữ kỹ thuật không dịch được vẫn giữ nguyên: `use client`,
+  `RLS`, `middleware`, tên hàm/biến).
+- Suy ra từ hiện trạng dự án: toàn bộ UI người dùng đã là tiếng Việt
+  (`Thêm người dùng`, `Cài đặt`, `Tổng quan`, …) và 100% tài liệu trong
+  `docs/` cũng là tiếng Việt. Báo cáo tiếng Anh sẽ phá vỡ tính nhất quán này.
+
+## 2. Không bao giờ rò rỉ bí mật
+
+- **Không** in ra chat, log, commit message, ảnh chụp màn hình, hay báo cáo:
+  mật khẩu, `SUPABASE_SERVICE_ROLE_KEY`, PAT, R2 access key/secret, mật khẩu tạm
+  của user, token phiên.
+- Khi cần xác nhận "biến đã set", chỉ báo **tên** biến + trạng thái SET/EMPTY.
+- Nếu phát hiện credential bị lộ (commit, log, ảnh): **báo ngay T1/Owner**,
+  không tự ý quay vòng xử lý.
+- Owner dán nhầm secret vào chat → nhắc họ thu hồi/rotate, không lưu lại.
+
+## 3. REUSE FIRST
+
+Thứ tự khi cần viết code: **base repo hiện có → shadcn/ui → thư viện có sẵn →
+reference repo → mới custom**. Không tự viết lại thứ đã có.
+
+## 4. Không tự ý đổi quyết định của Owner (T1)
+
+- T2 **không** tự đổi scope, cấu trúc dữ liệu, thứ tự ưu tiên, hay quy ước bảo mật.
+- Phát hiện lỗi thật (đặc biệt bảo mật) → **báo T1 kèm bằng chứng** và đề
+  xuất phương án, không tự sửa rồi im lặng.
+- Được phép tự quyết: sửa lỗi typo, lint, test, và refactor nội bộ không đổi hành vi.
+
+## 5. Quy trình báo cáo
+
+Mỗi lần giao việc, T2 gửi report gồm:
+1. **Đã làm** — theo từng bước, kèm commit hash / file đã đổi.
+2. **Kết quả kiểm chứng** — lệnh đã chạy + kết quả thật (test pass mấy/bao nhiêu,
+   build pass/fail). Không nói "đã xong" mà không có bằng chứng.
+3. **Lệch so với prompt** — nếu làm khác chỉ dẫn, nói rõ và giải thích lý do.
+4. **Tự động commit/push?** — luôn hỏi T1 trước; không push khi chưa được duyệt.
+5. **Vấn đề còn lại / rủi ro** — kể cả thứ mình không kiểm được.
+
+## 6. Dữ liệu thật và dọn dẹp
+
+- Test/e2e chạy trên **Supabase + R2 thật** (xem `tests/e2e/helpers.ts`).
+  Sau khi chạy, dữ liệu test phải được dọn về 0 (suite có `sweep()` tự làm —
+  nhưng vẫn phải **kiểm tra lại** và xác nhận trong report).
+- Không xoá dữ liệu/tài khoản của Owner (`duongltvp95@gmail.com`).
+- App **cố ý không có** chức năng xoá user/đối tác/hợp đồng — đây là quyết
+  định nghiệp vụ, không phải thiếu sót. Khi cần dọn dữ liệu test thì dùng
+  service role hoặc Supabase Dashboard, không sửa app để thêm nút xoá.
+- Script dọn dẹp/diagnostic (dạng `scripts/verify-*.mjs`, `scripts/check-*.mjs`)
+  được phép tạo tạm thời khi cần verify, nhưng **không commit lên repo**. Sau khi
+  chạy xong, xoá file và xác nhận `git status` sạch trước khi commit thay đổi
+  thật. Chỉ giữ trong repo những script chạy lặp lại (seed, sweep, fixtures) mà
+  CI hoặc người khác cần dùng.
