@@ -89,7 +89,7 @@ export function UsersTable({
                   {formatDateTime(row.createdAt)}
                 </TableCell>
                 <TableCell className="text-right">
-                  <UserRowActions user={row} />
+                  <UserRowActions user={row} isSelf={isSelf} />
                 </TableCell>
               </TableRow>
             );

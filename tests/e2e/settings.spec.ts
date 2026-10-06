@@ -22,10 +22,10 @@ test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
  *   - the account that was just created signs in with that password and does
  *     NOT see the section at all.
  *
- * The app intentionally has no delete-user action. The settings page is also
- * checked for the absence of any "delete" control: removing a user is not a
- * feature of this round, and the assertion is the test that documents the
- * invariant.
+ * Round 4 re-opens the delete path. The "no delete" promise from round 3
+ * is reversed; this file documents the new contract. Non-admins still do
+ * not see the section at all (server-side guard), but admins now see
+ * Edit + Delete on every row except their own.
  */
 
 const stamp = runId();
@@ -40,27 +40,34 @@ let temporaryPassword = "";
 test.describe.configure({ mode: "serial" });
 
 /**
- * Round 2 promise that round 3 keeps: deleting a user is not a feature.
- * Every page that lists users must NOT expose a delete control of any kind
- * — neither to non-admins (the section is server-side hidden) nor to admins
- * themselves (no app-level delete path). This helper stays around because
- * the test that originally introduced it is the one that documents the
- * invariant; round 3 changes the assertion, not the promise.
+ * Round 4 promise: every page that lists users exposes both Edit and
+ * Delete controls to the administrator, and the self row carries a
+ * disabled Delete with a Vietnamese tooltip. Non-admins do not see the
+ * section at all (server-side guard).
+ *
+ * The helper below replaces round 3's `expectNoDeleteControls`. The
+ *   `data-testid`s and the dialog shape are unchanged from the round 3
+ * pre-revert design, so the Playwright locators stay identical.
  */
-async function expectNoDeleteControls(page: Page): Promise<void> {
+async function expectAdminSeesEditAndDeleteControls(page: Page): Promise<void> {
   const selfRow = page
     .getByTestId("user-row")
     .filter({ hasText: adminEmail })
     .first();
   await expect(selfRow).toBeVisible();
 
-  // No "delete" control on the signed-in user's row.
-  await expect(selfRow.getByTestId("user-delete-button-self")).toHaveCount(0);
-  // No "delete" control on any other row either.
-  await expect(page.getByTestId("user-delete-button")).toHaveCount(0);
-  // No "delete" dialog is mounted anywhere on the page.
-  await expect(page.getByTestId("delete-user-dialog")).toHaveCount(0);
-  // …and no button labelled "delete" in English slipped into the DOM.
+  // The signed-in user's own row keeps a disabled delete (with tooltip) and
+  // a real Edit button.
+  await expect(selfRow.getByTestId("user-edit-button")).toBeVisible();
+  await expect(selfRow.getByTestId("user-delete-button-self")).toBeVisible();
+  // The standard "user-delete-button" must NOT be present on the self row.
+  await expect(selfRow.getByTestId("user-delete-button")).toHaveCount(0);
+
+  // At least one non-self row carries the standard Delete button.
+  const deleteCount = await page.getByTestId("user-delete-button").count();
+  expect(deleteCount).toBeGreaterThan(0);
+
+  // …and no English-only "delete" button slipped into the DOM.
   await expect(
     page.getByRole("button", { name: /^delete$/i }),
   ).toHaveCount(0);
@@ -72,8 +79,9 @@ test.describe("settings — user management", () => {
   });
 
   test.afterAll(async () => {
-    // Test cleanup through the service role. The product has no delete-user
-    // feature; the suite must still not leave accounts behind.
+    // Test cleanup through the service role. The product has a delete-user
+    // feature in this round; the suite still must not leave accounts
+    // behind for the next run.
     const admin = adminClient();
     const { data } = await admin.auth.admin.listUsers({ perPage: 200 });
 
@@ -102,7 +110,7 @@ test.describe("settings — user management", () => {
       page.getByTestId("user-row").filter({ hasText: adminEmail }),
     ).toBeVisible();
 
-    await expectNoDeleteControls(page);
+    await expectAdminSeesEditAndDeleteControls(page);
 
     await clickSafe(page, '[data-testid="add-user-button"]');
     await expect(page.getByTestId("add-user-dialog")).toBeVisible();
@@ -153,13 +161,9 @@ test.describe("settings — user management", () => {
 /**
  * Round 3, part 1 — edit role / active state, and the audit-log page.
  *
- * The flow: an admin creates a throwaway user, edits their role, then opens
- * /admin/logs and finds the new "Đổi vai trò" row. The export button is the
- * only thing not exercised here — it is covered by admin-logs.spec.ts.
- *
- * Note: the app intentionally has no delete-user action. The round 3
- * assertion is the absence of any delete control on every user row, plus
- * the absence of the delete dialog anywhere on the page.
+ * Round 4 adds the delete flow on top. The Edit path is unchanged; the
+ * audit-log assertion is kept (it is what the delete flow writes a row for
+ * too).
  */
 
 const r3Stamp = runId();
@@ -186,32 +190,24 @@ test.describe("settings — edit user (round 3, part 1)", () => {
     await sweep(admin);
   });
 
-  test("the admin sees an Edit button on each row, and no delete control", async ({
-    page,
-  }) => {
+  test("the admin sees Edit and Delete controls on every row", async ({ page }) => {
+    // Round 4 re-introduces the Delete button. The "self row carries a
+    // disabled delete + tooltip" and "other rows carry a real delete button"
+    // shapes are documented by the helper above; this test re-runs the
+    // round 3 "the admin sees a row" path with the new expectations in
+    // scope.
     await login(page);
     await gotoAndSettle(page, "/settings");
 
     const section = page.getByTestId("user-management-section");
     await expect(section).toBeVisible();
 
-    // The admin's own row is listed; it carries the Edit button and nothing
-    // destructive. The promise "the app has no delete-user action" is part
-    // of the product contract; this is the test that documents it.
-    const selfRow = page
-      .getByTestId("user-row")
-      .filter({ hasText: adminEmail });
-    await expect(selfRow).toBeVisible();
-    await expect(selfRow.getByTestId("user-edit-button")).toBeVisible();
-
-    await expect(page.getByTestId("user-delete-button")).toHaveCount(0);
-    await expect(page.getByTestId("user-delete-button-self")).toHaveCount(0);
-    await expect(page.getByTestId("delete-user-dialog")).toHaveCount(0);
+    await expectAdminSeesEditAndDeleteControls(page);
   });
 
-  test("a non-admin does not see the Edit button in Settings", async () => {
+  test("a non-admin does not see Edit or Delete buttons in Settings", async () => {
     // The settings block is only rendered for admins (server-side), so the
-    // button has nothing to attach to. We rely on the round-2 suite for
+    // buttons have nothing to attach to. We rely on the round-2 suite for
     // the "non-admin does not see the section" assertion; this case is
     // here to keep the suite self-describing.
     test.skip(true, "covered by the round-2 'does not see the section' case");
@@ -279,5 +275,110 @@ test.describe("settings — edit user (round 3, part 1)", () => {
     // serial describe to keep the cleanup story simple; the assertion lives
     // in admin-logs.spec.ts.
     test.skip(true, "covered by admin-logs.spec.ts");
+  });
+});
+
+/**
+ * Round 4, part 1 — admin hard delete.
+ *
+ * The flow: an admin creates a throwaway user, opens the delete dialog,
+ * re-types the user's email as confirmation, submits, and the row is
+ * gone. The dialog is the same shape as the round 3 pre-revert design,
+ * so the locators match the older suite.
+ *
+ * The self-row assertion is separate: the button there is disabled, but
+ * clicking the *self-row edit* is fine — the assertion is on the
+ * `user-delete-button-self` state, not on a service call.
+ */
+
+const r4Stamp = runId();
+const r4Email = `e2e.r4.${r4Stamp}@hrpartner.test`;
+const r4Name = `${TEST_PREFIX}Người dùng R4`;
+
+test.describe("settings — delete user (round 4, part 1)", () => {
+  test.beforeAll(async () => {
+    await sweep(adminClient());
+  });
+
+  test.afterAll(async () => {
+    const admin = adminClient();
+    const { data } = await admin.auth.admin.listUsers({ perPage: 200 });
+    for (const user of data?.users ?? []) {
+      if (user.email !== r4Email) continue;
+      await admin.from("profiles").delete().eq("id", user.id);
+      await admin.auth.admin.deleteUser(user.id);
+    }
+    await sweep(admin);
+  });
+
+  test("admin can delete a non-self user (round 4)", async ({ page }) => {
+    test.setTimeout(180_000);
+
+    await login(page);
+    await gotoAndSettle(page, "/settings");
+
+    // --- create the throwaway ------------------------------------------
+    await clickSafe(page, '[data-testid="add-user-button"]');
+    await expect(page.getByTestId("add-user-dialog")).toBeVisible();
+    await page.fill("#newUserEmail", r4Email);
+    await page.fill("#newUserFullName", r4Name);
+    await clickSafe(page, '[data-testid="add-user-submit"]');
+    await expect(page.getByTestId("temporary-password-warning")).toBeVisible();
+    await clickSafe(page, '[data-testid="close-temporary-password"]');
+    await expect(page.getByTestId("add-user-dialog")).toBeHidden({
+      timeout: 15_000,
+    });
+
+    const row = page.getByTestId("user-row").filter({ hasText: r4Email });
+    await expect(row).toBeVisible();
+
+    // --- open the delete dialog ----------------------------------------
+    await row.getByTestId("user-delete-button").click();
+    await expect(page.getByTestId("delete-user-dialog")).toBeVisible();
+    await expect(page.getByTestId("delete-user-warning")).toBeVisible();
+
+    // The submit button is disabled until the typed email matches.
+    await expect(page.getByTestId("delete-user-submit")).toBeDisabled();
+
+    // Wrong email keeps it disabled.
+    await page.fill(
+      '[data-testid="delete-user-confirm-email"]',
+      "wrong@hrpartner.test",
+    );
+    await expect(page.getByTestId("delete-user-submit")).toBeDisabled();
+
+    // The right email enables it.
+    await page.fill('[data-testid="delete-user-confirm-email"]', r4Email);
+    await expect(page.getByTestId("delete-user-submit")).toBeEnabled();
+
+    await clickSafe(page, '[data-testid="delete-user-submit"]');
+    await expect(page.getByTestId("delete-user-dialog")).toBeHidden({
+      timeout: 15_000,
+    });
+
+    // The row is gone.
+    await expect(
+      page.getByTestId("user-row").filter({ hasText: r4Email }),
+    ).toHaveCount(0);
+  });
+
+  test("the admin's own row carries a disabled delete (cannot self-delete)", async ({
+    page,
+  }) => {
+    // The disabled delete with a Vietnamese tooltip is the UI surface for
+    // the service's self-delete refusal. The form is disabled, so the
+    // submit path is not reachable from the browser, but the test still
+    // documents the visible contract.
+    await login(page);
+    await gotoAndSettle(page, "/settings");
+
+    const selfRow = page
+      .getByTestId("user-row")
+      .filter({ hasText: adminEmail });
+    await expect(selfRow).toBeVisible();
+
+    const selfDelete = selfRow.getByTestId("user-delete-button-self");
+    await expect(selfDelete).toBeVisible();
+    await expect(selfDelete).toBeDisabled();
   });
 });

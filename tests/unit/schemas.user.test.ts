@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CreateUserSchema,
+  DeleteUserSchema,
   UpdateUserSchema,
   USER_ROLE_LABELS,
   USER_ROLES,
@@ -133,6 +134,61 @@ describe("UpdateUserSchema", () => {
   it("rejects a non-uuid userId", () => {
     expect(
       UpdateUserSchema.safeParse({ userId: "not-a-uuid", role: "admin" }).success,
+    ).toBe(false);
+  });
+});
+
+/**
+ * Round 4, part 1 — admin hard delete payload.
+ *
+ * `DeleteUserSchema` is the typed-confirmation step: the admin has to type
+ * the target's email again before the service is asked to drop the auth row.
+ * The schema's job is to refuse malformed inputs at the form layer so the
+ * service never has to answer "what does a wrong email confirmation mean?".
+ */
+
+describe("DeleteUserSchema", () => {
+  it("accepts a valid uuid + email pair", () => {
+    const parsed = DeleteUserSchema.safeParse({
+      userId,
+      confirmEmail: "a@hrpartner.vn",
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.confirmEmail).toBe("a@hrpartner.vn");
+  });
+
+  it("trims the confirmation email", () => {
+    const parsed = DeleteUserSchema.safeParse({
+      userId,
+      confirmEmail: "  a@hrpartner.vn  ",
+    });
+
+    expect(parsed.data?.confirmEmail).toBe("a@hrpartner.vn");
+  });
+
+  it("rejects an empty or whitespace-only confirmation email", () => {
+    for (const email of ["", "   "]) {
+      expect(
+        DeleteUserSchema.safeParse({ userId, confirmEmail: email }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("rejects a malformed confirmation email", () => {
+    for (const email of ["không-phải-email", "a@", "@b.vn", "a b@c.vn"]) {
+      expect(
+        DeleteUserSchema.safeParse({ userId, confirmEmail: email }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("rejects a non-uuid userId", () => {
+    expect(
+      DeleteUserSchema.safeParse({
+        userId: "not-a-uuid",
+        confirmEmail: "a@b.vn",
+      }).success,
     ).toBe(false);
   });
 });

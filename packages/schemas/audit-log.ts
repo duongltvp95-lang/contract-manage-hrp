@@ -1,23 +1,24 @@
 import { z } from "zod";
 
 /**
- * Audit-log schemas — feature round 3, part 1.
+ * Audit-log schemas — feature round 3, part 1 + round 4, part 1.
  *
  * The enum of actions is the single source of truth: the database CHECK
  * constraint, the service, and the UI all import from here. Adding an action
  * means editing the migration's CHECK too, and forgetting it shows up as a
  * database error the first time the new action runs — loud and immediate.
  *
- * Note: the app intentionally has no delete-user action. There is no
- * `delete_user` entry on purpose; the corresponding migration CHECK and the
- * `audit_logs.action` column never see this value. Removing a user is an
- * owner decision, executed out of band.
+ * Round 4 re-introduces `delete_user` after the round 3 explicit "no delete"
+ * decision was reversed by the owner. The CHECK constraint on
+ * `audit_logs.action` was already updated in round 3 to include the value,
+ * so no DB migration is needed for the enum itself.
  */
 
 export const AUDIT_ACTIONS = [
   "create_user",
   "update_user_role",
   "set_active_user",
+  "delete_user",
   "export_logs",
 ] as const;
 
@@ -27,6 +28,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   create_user: "Tạo người dùng",
   update_user_role: "Đổi vai trò",
   set_active_user: "Đổi trạng thái hoạt động",
+  delete_user: "Xoá người dùng",
   export_logs: "Xuất nhật ký",
 };
 

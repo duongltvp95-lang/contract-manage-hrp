@@ -35,6 +35,7 @@ const PROBE_ROUTES = [
   { source: "hardening-probe", target: `${repoRoot}app/api/hardening-probe/route.ts` },
   { source: "users-probe", target: `${repoRoot}app/api/users-probe/route.ts` },
   { source: "users-actions-probe", target: `${repoRoot}app/api/users-actions-probe/route.ts` },
+  { source: "partners-contracts-probe", target: `${repoRoot}app/api/partners-contracts-probe/route.ts` },
 ].map((route) => ({
   ...route,
   source: fileURLToPath(new URL(`./fixtures/${route.source}.route.ts`, import.meta.url)),

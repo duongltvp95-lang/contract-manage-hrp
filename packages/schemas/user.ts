@@ -1,16 +1,17 @@
 import { z } from "zod";
 
 /**
- * User-management schemas — feature round 2, part 3 + round 3, part 1.
+ * User-management schemas — feature round 2, part 3 + round 3, part 1 +
+ * round 4, part 1.
  *
- * Shared by the Add/Edit forms and the service layer. No `organizationId`
- * field: the organization always comes from the administrator's session, never
- * from the client.
+ * Shared by the Add/Edit/Delete forms and the service layer. No
+ * `organizationId` field: the organization always comes from the
+ * administrator's session, never from the client.
  *
- * The app intentionally has no delete-user action. Removing access is an
- * owner decision, so the schema, the dialog, and the service are all
- * delete-free. Use Supabase Dashboard or service-role helpers for any cleanup
- * the owner approves out of band.
+ * Round 4 re-opens the delete path. The "intentionally no delete" promise
+ * from round 3 is reversed by the owner (documented in
+ * docs/HANDOVER-T2.md mục 0). The product guard — `confirmEmail` re-typing
+ * — stays in the schema so a typo cannot take an account down.
  */
 
 export const USER_ROLES = ["admin", "user"] as const;
@@ -71,3 +72,22 @@ export const UpdateUserSchema = z
   );
 
 export type UpdateUserInput = z.infer<typeof UpdateUserSchema>;
+
+/**
+ * Round 4, part 1 — hard delete a user.
+ *
+ * The client has to type the user's email again as a confirmation step. The
+ * service re-checks the match against the row in auth.users server-side, so a
+ * stale form value cannot bypass it.
+ */
+export const DeleteUserSchema = z.object({
+  userId: z.uuid({ message: "ID người dùng không hợp lệ" }),
+  confirmEmail: z
+    .string()
+    .trim()
+    .min(1, "Vui lòng nhập email xác nhận")
+    .max(254, "Email tối đa 254 ký tự")
+    .pipe(z.email("Email không hợp lệ")),
+});
+
+export type DeleteUserInput = z.infer<typeof DeleteUserSchema>;

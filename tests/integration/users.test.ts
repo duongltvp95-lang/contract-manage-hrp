@@ -240,10 +240,16 @@ suite("user management — administrators only (feature round 2)", () => {
  * Two tenants (orgA = admin, orgB = non-admin) plus throwaway users in orgA.
  * The last-admin rule is the heart of this suite: the only way to demote the
  * last admin is to create a second one first.
+ *
+ * Round 4, part 1 adds the hard-delete suite below. The fixture's
+ * `delete` action is round 4; the shared `probeActions` is widened to
+ * accept it. The shape of each round 4 test follows the same pattern as
+ * the round 3 ones: call through the probe, assert the response, and check
+ * the database (auth.users, profiles, audit_logs) afterwards.
  */
 
 async function probeActions(
-  action: "update",
+  action: "update" | "delete",
   payload: Record<string, unknown>,
   cookie: string,
 ): Promise<{ status: number; body: unknown }> {
@@ -500,5 +506,359 @@ suite("user update — administrators only (feature round 3, part 1)", () => {
       .eq("target_id", target.id);
 
     expect(after.count ?? 0).toBe(before.count ?? 0);
+  });
+});
+
+
+/**
+ * Round 4, part 1 � admin hard delete.
+ *
+ * The probe forwards to `deleteUser()`. The service is the gate. The tests
+ * here prove:
+ *
+ *   - happy path: a non-admin target drops cleanly from `auth.users`, the
+ *     cascade drops their `profiles` row, and the audit log carries a
+ *     `delete_user` row with the right metadata.
+ *   - non-admin: refused by the service even though the form would be
+ *     disabled in the UI; the service is the source of truth.
+ *   - self-delete: refused.
+ *   - last-admin path: covered by the round 3 demote test which uses the
+ *     same guard.
+ *   - email mismatch: refused, no audit row, the auth row stays.
+ *   - tombstone re-point: an actor who is then deleted has every
+ *     `audit_logs.actor_id` row moved to the well-known tombstone id
+ *     before the auth delete lands.
+ *   - contracts: `contracts.created_by` is `set null` by the FK, not
+ *     blocked; the contract itself survives.
+ */
+suite("user delete � administrators only (feature round 4, part 1)", () => {
+  let admin: SupabaseClient;
+  let orgA: TestSession;
+  let orgB: TestSession;
+  let adminB: { id: string; email: string; password: string; cookie: string };
+
+  const createdUserIds: string[] = [];
+  const stamp = Date.now().toString(36);
+
+  beforeAll(async () => {
+    admin = adminClient();
+    await sweepTestRows(admin);
+
+    orgA = await signInAsAdmin();
+    orgB = await createSecondTenant(admin, "users-delete");
+
+    // Second admin in ORG_A so the "delete another admin" test has a peer.
+    // The peer is deleted mid-suite; the last-admin guarantee is then
+    // covered by the round 3 demote test which uses the same guard.
+    const second = await createTestUser(admin, {
+      organizationId: ORG_A,
+      role: "admin",
+      label: `r4-adminB-${stamp}`,
+    });
+    createdUserIds.push(second.id);
+    const session = await signInNewUser(second.email, second.password);
+    adminB = { ...second, cookie: session.cookie };
+  }, 180_000);
+
+  afterAll(async () => {
+    for (const id of createdUserIds) {
+      try {
+        await admin.from("audit_logs").delete().eq("actor_id", id);
+        await admin.from("audit_logs").delete().eq("target_id", id);
+        await admin.from("profiles").delete().eq("id", id);
+        await admin.auth.admin.deleteUser(id);
+      } catch {
+        /* already gone */
+      }
+    }
+    if (orgB) await destroySecondTenant(admin, orgB);
+    if (admin) await sweepTestRows(admin);
+  }, 180_000);
+
+  async function createUser(
+    role: "user" | "admin",
+  ): Promise<{ id: string; email: string; password: string }> {
+    const email = `w1test.r4.${role}.${stamp}.${crypto.randomUUID().slice(0, 8)}@hrpartner.test`;
+    const result = await probe(
+      "create",
+      { email, fullName: `${TEST_PREFIX}Round 4 ${role}`, role },
+      orgA.cookie,
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      user: { id: string; email: string };
+      temporaryPassword: string;
+    };
+    createdUserIds.push(body.user.id);
+    return { id: body.user.id, email, password: body.temporaryPassword };
+  }
+
+  async function resetPassword(userId: string, newPassword: string) {
+    const update = await admin.auth.admin.updateUserById(userId, {
+      password: newPassword,
+    });
+    if (update.error) {
+      throw new Error(`Could not reset password for ${userId}: ${update.error.message}`);
+    }
+  }
+
+  it("a non-administrator cannot delete a user", async () => {
+    const target = await createUser("user");
+    const result = await probeActions(
+      "delete",
+      { userId: target.id, confirmEmail: target.email },
+      orgB.cookie,
+    );
+
+    expect(result.status).toBe(403);
+
+    // The user still exists in auth.users.
+    const { data: users } = await admin.auth.admin.listUsers({ perPage: 200 });
+    expect(users?.users?.some((u) => u.id === target.id)).toBe(true);
+  });
+
+  it("an administrator deletes a non-admin user and the row is gone from auth.users", async () => {
+    const target = await createUser("user");
+    const result = await probeActions(
+      "delete",
+      { userId: target.id, confirmEmail: target.email },
+      orgA.cookie,
+    );
+
+    expect(result.status).toBe(200);
+    expect((result.body as { deletedUserId: string }).deletedUserId).toBe(
+      target.id,
+    );
+
+    // The auth.users row is gone.
+    const { data: users } = await admin.auth.admin.listUsers({ perPage: 200 });
+    expect(users?.users?.some((u) => u.id === target.id)).toBe(false);
+
+    // The profiles row is gone (cascade).
+    const { data: profile } = await admin
+      .from("profiles")
+      .select("id")
+      .eq("id", target.id)
+      .maybeSingle();
+    expect(profile).toBeNull();
+
+    // An audit row was written, with target_id pointing at the now-deleted
+    // id (no FK on target_id, so the column is allowed to hold a missing
+    // reference).
+    const log = await findAuditLog(admin, "delete_user", target.id);
+    expect(log).not.toBeNull();
+    expect((log?.metadata as { email?: string }).email).toBe(target.email);
+  });
+
+  it("an administrator cannot delete themselves", async () => {
+    const { data: authData } = await admin.auth.admin.getUserById(orgA.userId);
+    const email = authData?.user?.email ?? "";
+
+    const result = await probeActions(
+      "delete",
+      { userId: orgA.userId, confirmEmail: email },
+      orgA.cookie,
+    );
+    expect(result.status).toBe(403);
+    expect(String((result.body as { error?: string })?.error)).toContain(
+      "không thể xoá chính mình",
+    );
+
+    // The auth.users row is still here.
+    const { data: users } = await admin.auth.admin.listUsers({ perPage: 200 });
+    expect(users?.users?.some((u) => u.id === orgA.userId)).toBe(true);
+  });
+
+  it("an administrator can delete another admin while another admin remains", async () => {
+    // adminB is the second admin in orgA; the seed (orgA) is also an admin.
+    // Deleting adminB is allowed because the seed remains an active admin
+    // afterwards. The round 3 demote suite uses the same shape.
+    const removeAdminB = await probeActions(
+      "delete",
+      { userId: adminB.id, confirmEmail: adminB.email },
+      orgA.cookie,
+    );
+    expect(removeAdminB.status).toBe(200);
+    expect((removeAdminB.body as { deletedUserId: string }).deletedUserId).toBe(
+      adminB.id,
+    );
+
+    // The auth.users row is gone; adminB can never sign in again.
+    const { data: users } = await admin.auth.admin.listUsers({ perPage: 200 });
+    expect(users?.users?.some((u) => u.id === adminB.id)).toBe(false);
+
+    // Replace the in-memory adminB so later tests see the documented
+    // single-admin setup.
+    adminB = { id: "", email: "", password: "", cookie: "" };
+  });
+
+  it("delete with a wrong confirmation email is refused, no audit row, auth.users stays", async () => {
+    const target = await createUser("user");
+
+    // Count the existing audit rows for this target. A refused delete must
+    // not add a row.
+    const before = await admin
+      .from("audit_logs")
+      .select("id", { count: "exact", head: true })
+      .eq("target_id", target.id);
+
+    const result = await probeActions(
+      "delete",
+      { userId: target.id, confirmEmail: "wrong@hrpartner.test" },
+      orgA.cookie,
+    );
+
+    expect(result.status).toBe(422);
+    expect(String((result.body as { error?: string })?.error)).toContain(
+      "không khớp",
+    );
+
+    // The user still exists.
+    const { data: profile } = await admin
+      .from("profiles")
+      .select("id")
+      .eq("id", target.id)
+      .maybeSingle();
+    expect(profile).not.toBeNull();
+
+    // No new audit row for the refused call.
+    const after = await admin
+      .from("audit_logs")
+      .select("id", { count: "exact", head: true })
+      .eq("target_id", target.id);
+    expect(after.count ?? 0).toBe(before.count ?? 0);
+  });
+
+  it("an audit row's actor_id is re-pointed to the tombstone when the actor is deleted", async () => {
+    // Setup: a throwaway admin, who updates another throwaway user. The
+    // update writes an audit row with actor_id = throwaway admin. We
+    // then delete the throwaway admin and assert that row no longer
+    // names the throwaway admin as actor.
+    const { id: actorId, email: actorEmail } = await createUser("admin");
+    const { id: targetId } = await createUser("user");
+
+    // Reset the password to a known value so the sign-in step is
+    // deterministic.
+    const actorPassword = `R4T-actor-${stamp}-${actorId.slice(0, 6)}`;
+    await resetPassword(actorId, actorPassword);
+    const actorSession = await signInAs(actorEmail, actorPassword);
+
+    const updateViaActor = await probeActions(
+      "update",
+      { userId: targetId, isActive: false },
+      actorSession.cookie,
+    );
+    // The actor is an admin in the org, so the service accepts the call.
+    expect(updateViaActor.status).toBe(200);
+
+    // Sanity: at least one audit row now names the actor.
+    const beforeCount = await admin
+      .from("audit_logs")
+      .select("id", { count: "exact", head: true })
+      .eq("actor_id", actorId);
+    expect(beforeCount.count ?? 0).toBeGreaterThan(0);
+
+    // Delete the actor. The re-point UPDATE moves the row(s) to the
+    // tombstone profile, and the auth delete then succeeds.
+    const remove = await probeActions(
+      "delete",
+      { userId: actorId, confirmEmail: actorEmail },
+      orgA.cookie,
+    );
+    expect(remove.status).toBe(200);
+
+    // No audit row still names the victim as actor � the re-point moved
+    // every such row to the tombstone profile id before the auth delete.
+    const afterCount = await admin
+      .from("audit_logs")
+      .select("id", { count: "exact", head: true })
+      .eq("actor_id", actorId);
+    expect(afterCount.count ?? 0).toBe(0);
+  });
+
+  it("a user with contracts can be deleted, and contracts.created_by is set null", async () => {
+    // The target creates a contract, gets it persisted with created_by =
+    // target.id, then the admin deletes the target. The contracts row
+    // must survive, with created_by flipped to null by the
+    // `on delete set null` clause on the FK.
+    const { id: targetId, email: targetEmail } = await createUser("user");
+
+    // Reset the password to a known value so the sign-in step is
+    // deterministic (the original temporary password is not stored).
+    const targetPassword = `R4T-tgt-${stamp}-${targetId.slice(0, 6)}`;
+    await resetPassword(targetId, targetPassword);
+    const targetSession = await signInAs(targetEmail, targetPassword);
+
+    // Create a partner, then a contract owned by the target. Both
+    // forward through the partners-contracts-probe fixture, which is
+    // copied into the app by global-setup.ts for the duration of the
+    // run.
+    const partnerName = `${TEST_PREFIX}R4 partner ${stamp}`;
+    const partnerResult = await fetch(
+      `${BASE_URL}/api/partners-contracts-probe`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          cookie: targetSession.cookie,
+        },
+        body: JSON.stringify({
+          action: "createPartner",
+          name: partnerName,
+          taxCode: "",
+          address: "",
+        }),
+      },
+    );
+    expect(partnerResult.status).toBe(200);
+    const partnerBody = (await partnerResult.json()) as { id?: string };
+    const partnerId = partnerBody.id;
+    expect(partnerId).toBeTruthy();
+
+    const contractNumber = `W1TEST-R4-${stamp}-${crypto.randomUUID().slice(0, 6)}`;
+    const contractResult = await fetch(
+      `${BASE_URL}/api/partners-contracts-probe`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          cookie: targetSession.cookie,
+        },
+        body: JSON.stringify({
+          action: "createContract",
+          contractNumber,
+          signedDate: "2026-01-01",
+          durationText: "12 tháng",
+          expiryDate: "2027-01-01",
+          partnerText: "",
+          partnerId,
+          notes: "round 4 delete-with-contracts test",
+        }),
+      },
+    );
+    const contractBody = (await contractResult.json().catch(() => ({}))) as {
+      id?: string;
+    };
+    expect(contractResult.status).toBe(200);
+    expect(contractBody.id).toBeTruthy();
+    const contractId = contractBody.id;
+    expect(contractId).toBeTruthy();
+
+    // Now delete the target as the admin.
+    const remove = await probeActions(
+      "delete",
+      { userId: targetId, confirmEmail: targetEmail },
+      orgA.cookie,
+    );
+    expect(remove.status).toBe(200);
+
+    // The contract is still there, and created_by is now null.
+    const { data: contractAfter } = await admin
+      .from("contracts")
+      .select("id, created_by")
+      .eq("id", contractId!)
+      .single();
+    expect(contractAfter?.id).toBe(contractId);
+    expect(contractAfter?.created_by).toBeNull();
   });
 });

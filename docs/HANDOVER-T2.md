@@ -169,11 +169,18 @@ Suite có `sweep()` trong `tests/e2e/helpers.ts` và `sweepTestRows()` trong
 `tests/integration/helpers.ts`, nhưng **vẫn phải kiểm tra lại bằng truy vấn
 trực tiếp** trước khi báo cáo "xong". Xem mục 6.
 
-### App cố ý không có chức năng xoá
+### App cố ý không có chức năng xoá đối tác / hợp đồng
 
-Xoá user / đối tác / hợp đồng là **quyết định nghiệp vụ đã chốt**, không phải
-thiếu sót. Muốn dọn dữ liệu test thì dùng service role hoặc Supabase Dashboard
-— **không** sửa app để thêm nút xoá.
+Xoá đối tác / hợp đồng là **quyết định nghiệp vụ đã chốt**, không phải
+thiếu sót. Khi cần dọn dữ liệu thì dùng service role hoặc Supabase Dashboard.
+
+Xoá **user** đã có từ **round 4** (admin only, có confirmEmail, chặn
+self-delete và last-admin). Xem `lib/services/users.ts` (`deleteUser`) và
+helper `ensureTombstoneProfile` trong cùng file — tombstone được **tự tạo lúc
+runtime** (id resolve qua `listUsers` + `createUser` với service role), không
+cần migration SQL. Khi xoá một actor đã từng ghi audit log, `actor_id` của
+các row cũ được re-point sang tombstone (cùng `organization_id = ORG_A`) để
+tránh FK `on delete restrict` trên `audit_logs.actor_id`.
 
 ---
 

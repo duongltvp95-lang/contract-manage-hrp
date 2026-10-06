@@ -4,6 +4,7 @@ import { resolveAccess } from "@/lib/auth";
 import { statusForCode, type ServiceResult } from "@/lib/services/types";
 import {
   createUser,
+  deleteUser,
   listUsers,
   updateUser,
 } from "@/lib/services/users";
@@ -11,10 +12,10 @@ import {
 /**
  * TEST FIXTURE — not part of the application.
  *
- * `createUser()`, `listUsers()`, and `updateUser()` read the session from
- * cookies and are invoked from the browser as server actions, so a Vitest
- * process cannot call them directly. This route gives the integration suite
- * a way in.
+ * `createUser()`, `listUsers()`, `updateUser()`, and `deleteUser()` read the
+ * session from cookies and are invoked from the browser as server actions, so
+ * a Vitest process cannot call them directly. This route gives the integration
+ * suite a way in.
  *
  * What it deliberately does NOT do is check the role itself: it forwards to
  * the service and returns whatever the service decided. That is the point —
@@ -28,9 +29,10 @@ import {
  * `tests/integration/global-setup.ts` for the duration of the run, answers 404
  * unless `TEST_PROBE=1`, and is never part of a production build.
  *
- * Round 3, part 1 — extends the round-2 fixture (which only had `list` and
- * `create`) with `update`. The app intentionally has no delete-user action,
- * so no `delete` action is exported from this probe.
+ * Round 4, part 1 — extends the round-3 fixture (which had `list`,
+ * `create`, `update`) with `delete`. The round 3 promise "the app
+ * intentionally has no delete-user action" was reversed by the owner; the
+ * route comes back with the same forwarding contract.
  */
 
 function respond<T>(result: ServiceResult<T>) {
@@ -85,6 +87,17 @@ export async function POST(request: NextRequest) {
       access.user.id,
     );
     return respond(update);
+  }
+
+  if (action === "delete") {
+    const remove = await deleteUser(
+      {
+        userId: String(body.userId ?? ""),
+        confirmEmail: String(body.confirmEmail ?? ""),
+      },
+      access.user.id,
+    );
+    return respond(remove);
   }
 
   return NextResponse.json({ error: "unknown action" }, { status: 404 });

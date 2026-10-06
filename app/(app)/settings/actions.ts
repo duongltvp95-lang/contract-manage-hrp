@@ -2,10 +2,12 @@
 
 import {
   createUser,
+  deleteUser,
   updateUser,
   type CreatedUser,
   type ManagedUser,
 } from "@/lib/services/users";
+import type { DeleteUserInput } from "@schemas/user";
 import { updateProfile, type ProfileSummary } from "@/lib/services/profiles";
 import { authorized, fromService, type ActionResult } from "@/lib/server-action";
 
@@ -22,8 +24,9 @@ import { authorized, fromService, type ActionResult } from "@/lib/server-action"
  * place that decides the action is allowed, and the action's job is to lift
  * the session and the form payload into the call.
  *
- * The app intentionally has no delete-user action; this file does not export
- * a `deleteUserAction` on purpose.
+ * Round 4, part 1 adds the delete action. The five guards (admin, email
+ * confirmation, self-delete, last-admin, audit-trail re-pointing) all live
+ * in `services/users.deleteUser`; this file is still just a thin lift.
  */
 
 export async function updateProfileAction(
@@ -74,6 +77,29 @@ export async function updateUserAction(
   // surfaces as a 422 instead of a type error. The cast is here only to
   // satisfy the type-checker at the call site.
   const result = await updateUser(input as Parameters<typeof updateUser>[0], access.user.id);
+
+  return fromService(result);
+}
+
+/**
+ * Round 4, part 1 — hard delete a user.
+ *
+ * The service re-checks the admin role, refuses self-delete, refuses
+ * last-admin, re-checks the typed email against the auth.users row, and
+ * re-points any existing `audit_logs.actor_id` rows at the tombstone
+ * profile before dropping the auth row. The action is again just a thin
+ * lift.
+ */
+export async function deleteUserAction(
+  input: unknown,
+): Promise<ActionResult<{ deletedUserId: string }>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  const result = await deleteUser(
+    input as DeleteUserInput,
+    access.user.id,
+  );
 
   return fromService(result);
 }

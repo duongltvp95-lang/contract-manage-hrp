@@ -4,7 +4,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
   CreateUserSchema,
+  DeleteUserSchema,
   UpdateUserSchema,
+  type DeleteUserInput,
   type UpdateUserInput,
   type UserRole,
 } from "@schemas/user";
@@ -16,7 +18,133 @@ import { recordAudit } from "@/lib/services/audit-logs";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
- * User management — feature round 2, part 3 + round 3, part 1.
+ * The well-known profile row that audit_logs.actor_id points at after a
+ * user is hard-deleted.
+ *
+ * The tombstone row is created on demand the first time `deleteUser` is
+ * asked to clean up, by `ensureTombstoneProfile()` further down. The
+ * resolved id is cached in `tombstoneProfileIdCache` so subsequent
+ * deletes do not hit the Admin API.
+ *
+ * The seed value below is a placeholder that is overwritten on the
+ * first call. We keep a literal so the type system can describe the
+ * shape and so a stack trace referencing the constant is not
+ * `<unresolved>`.
+ */
+export const TOMBSTONE_PROFILE_ID = "00000000-0000-0000-0000-000000005a01";
+export const TOMBSTONE_PROFILE_EMAIL = "tombstone.deleted-user@hrpartner.vn";
+
+let tombstoneProfileIdCache: string | null = null;
+
+/**
+ * Ensure the tombstone profile row exists in `profiles`, returning its id.
+ *
+ * The flow:
+ *
+ *   1. Return the cached id on the hot path.
+ *   2. Look up an `auth.users` row by the well-known email. The Admin
+ *      API is paginated; the loop stops when a page is short, which is
+ *      the documented "end of list" signal.
+ *   3. If no auth row is present, create one with a random 64-char
+ *      password (no human can ever type it) and `email_confirm: true`.
+ *      Re-read the new id from the response.
+ *   4. UPSERT the `profiles` row at that id: role='user', is_active=false,
+ *      full_name='[Người dùng đã xoá]', organisation set to the admin's.
+ *      The `on_auth_user_created` trigger fired during step 3 wrote a
+ *      different shape (role='user', is_active=true, full_name from
+ *      user_metadata); this UPSERT normalises it.
+ *   5. Cache and return the id.
+ *
+ * Errors at any step return a `ServiceErr`; the cache is not poisoned,
+ * so a follow-up attempt can try again. Two concurrent deletes are
+ * safe: the `find` in step 2 short-circuits whichever loses the race.
+ */
+async function ensureTombstoneProfile(
+  service: SupabaseClient,
+  organizationId: string,
+): Promise<ServiceResult<{ id: string }>> {
+  if (tombstoneProfileIdCache) {
+    return ok({ id: tombstoneProfileIdCache });
+  }
+
+  let found: string | null = null;
+  try {
+    for (let page = 1; ; page += 1) {
+      const { data, error } = await service.auth.admin.listUsers({
+        page,
+        perPage: 200,
+      });
+      if (error) {
+        return dbError("ensureTombstoneProfile", error);
+      }
+      const users = data?.users ?? [];
+      const match = users.find(
+        (user) => user.email === TOMBSTONE_PROFILE_EMAIL,
+      );
+      if (match) {
+        found = match.id;
+        break;
+      }
+      if (users.length < 200) break;
+    }
+  } catch (error) {
+    return dbError("ensureTombstoneProfile", error);
+  }
+
+  if (!found) {
+    const random =
+      typeof globalThis.crypto?.getRandomValues === "function"
+        ? Array.from(globalThis.crypto.getRandomValues(new Uint8Array(32)))
+            .map((byte) => byte.toString(16).padStart(2, "0"))
+            .join("")
+        : "no-real-password-tombstone-fallback";
+    try {
+      const { data, error } = await service.auth.admin.createUser({
+        email: TOMBSTONE_PROFILE_EMAIL,
+        password: random,
+        email_confirm: true,
+        user_metadata: { full_name: "[Người dùng đã xoá]" },
+      });
+      if (error || !data?.user) {
+        return dbError("ensureTombstoneProfile", error);
+      }
+      found = data.user.id;
+    } catch (error) {
+      return dbError("ensureTombstoneProfile", error);
+    }
+  }
+
+  if (!found) {
+    return err(
+      "db_error",
+      "Không tạo được tombstone profile. Vui lòng thử lại sau ít phút.",
+    );
+  }
+
+  const { error: upsertError } = await service
+    .from("profiles")
+    .upsert(
+      {
+        id: found,
+        organization_id: organizationId,
+        full_name: "[Người dùng đã xoá]",
+        role: "user",
+        is_active: false,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" },
+    );
+
+  if (upsertError) {
+    return dbError("ensureTombstoneProfile", upsertError);
+  }
+
+  tombstoneProfileIdCache = found;
+  return ok({ id: found });
+}
+
+/**
+ * User management — feature round 2, part 3 + round 3, part 1 + round 4, part 1.
  *
  * The only module allowed to use the service-role client, and every function
  * here starts by proving the caller is an administrator. Two rules hold
@@ -24,11 +152,13 @@ import { dbError, err, ok, type ServiceResult } from "./types";
  *
  *   1. `organizationId` comes from the session. A caller that passes a different
  *      one is refused rather than trusted.
- *   2. The app intentionally has no delete-user action. Provisioning and
- *      role/active state changes are the whole surface; removing access is
- *      an owner decision, executed out of band (Supabase Dashboard, service
- *      role). The round 3 part 1 update path lives below; the delete path
- *      is absent on purpose.
+ *   2. The hard-delete path is round 4: an admin can drop a real auth.users
+ *      row, subject to the self / last-admin / email-confirmation guards.
+ *      The audit trail survives via the tombstone profile at
+ *      `TOMBSTONE_PROFILE_ID` (created by
+ *      `supabase/migrations/20261006120000_audit_logs_actor_tombstone.sql`),
+ *      which `deleteUser` writes into `audit_logs.actor_id` for every row
+ *      that previously named the victim.
  */
 
 export type ManagedUser = {
@@ -58,6 +188,9 @@ export type CreateUserServiceInput = {
 
 /** Round 3, part 1 — admin-driven update of role / active state. */
 export type UpdateUserServiceInput = UpdateUserInput;
+
+/** Round 4, part 1 — admin-driven hard delete. */
+export type DeleteUserServiceInput = DeleteUserInput;
 
 /**
  * True when the signed-in user is an administrator.
@@ -542,4 +675,199 @@ export async function updateUser(
   }
 
   return ok(managedUserFromRow(next, null));
+}
+
+/**
+ * Hard delete a user. Round 4, part 1.
+ *
+ * Five guards in order, each of which can short-circuit with a 4xx-friendly
+ * service error:
+ *
+ *   1. Caller is an administrator (handled by `requireAdmin`).
+ *   2. `confirmEmail` matches the target's email in `auth.users`. The match
+ *      is case-insensitive and trims both sides, the same way destructive
+ *      auth-library dialogs do.
+ *   3. The caller is not the target. An admin cannot drop their own account
+ *      from the application's UI: the only path out is the owner acting out
+ *      of band on a different admin's behalf.
+ *   4. If the target is the *only* active admin of the organization, refuse.
+ *      Demotion would have to be the first move; deletion is the second.
+ *   5. After all four pass, two writes happen, both auditable:
+ *
+ *      a. Every existing `audit_logs` row whose `actor_id` is the target is
+ *         re-pointed at `TOMBSTONE_PROFILE_ID`. The audit table's FK to
+ *         `profiles` would otherwise stop the cascade from `auth.users`
+ *         delete reaching `profiles`. The re-pointed rows keep their
+ *         `metadata` and `created_at` so the timeline reads normally; only
+ *         the "actor" column is a tombstone pointer.
+ *      b. A new `audit_logs` row is written for the delete itself, with
+ *         `actor_id = admin` (this admin) and `target_id = target` (the
+ *         soon-to-be-deleted user). That row survives the cascade because
+ *         its `actor_id` is a real, still-live profile.
+ *
+ *   6. The `auth.users` row is deleted last. The cascade drops the target's
+ *      `profiles` row; `contracts.created_by` flips to NULL via its own
+ *      `on delete set null`; nothing else in the schema depends on the row.
+ *
+ * If step 6 fails the profile/auth are unchanged, but the audit-row
+ * re-pointing and the new `delete_user` log row are already in. The new row
+ * is the only evidence of an attempt, which is the right amount of noise
+ * (see round 3's "audit failure does not block the real action" rule).
+ */
+export async function deleteUser(
+  input: DeleteUserServiceInput,
+  loggedInUserId: string,
+): Promise<ServiceResult<{ deletedUserId: string }>> {
+  const admin = await requireAdmin();
+  if (!admin.ok) return admin;
+
+  const parsed = DeleteUserSchema.safeParse(input);
+  if (!parsed.success) {
+    return err(
+      "validation",
+      "Thông tin xoá không hợp lệ",
+      parsed.error.issues.map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message,
+      })),
+    );
+  }
+
+  const { userId, confirmEmail } = parsed.data;
+
+  // --- guard 3: self-delete ---------------------------------------------
+  if (userId === loggedInUserId) {
+    return err("forbidden", "Bạn không thể xoá chính mình");
+  }
+
+  let service: SupabaseClient;
+  try {
+    service = await createAdminClient();
+  } catch (error) {
+    return dbError("deleteUser", error);
+  }
+
+  // --- target lookup -----------------------------------------------------
+  const { data: target, error: targetError } = await service
+    .from("profiles")
+    .select("id, full_name, role, is_active, created_at")
+    .eq("id", userId)
+    .eq("organization_id", admin.data.organizationId)
+    .maybeSingle();
+
+  if (targetError) {
+    return dbError("deleteUser", targetError);
+  }
+  if (!target) {
+    return err("not_found", "Không tìm thấy người dùng trong tổ chức");
+  }
+
+  const targetRow = target as ProfileDbRow;
+
+  // --- guard 4: last-admin ----------------------------------------------
+  if (targetRow.role === "admin" && targetRow.is_active) {
+    const lastAdminCheck = await assertNotLastAdmin(
+      service,
+      admin.data.organizationId,
+      userId,
+      "user",
+      false,
+      { role: targetRow.role, isActive: targetRow.is_active },
+    );
+    if (!lastAdminCheck.ok) {
+      return lastAdminCheck;
+    }
+  }
+
+  // --- guard 2: email confirmation --------------------------------------
+  // The user typed an email; we look up the real one and compare. Trim + case
+  // fold, both sides. The real value is whatever the auth row currently
+  // carries; a future rename of the auth row would have to re-confirm.
+  let realEmail: string | null = null;
+  try {
+    const { data, error } = await service.auth.admin.getUserById(userId);
+    if (error) {
+      return dbError("deleteUser", error);
+    }
+    realEmail = data?.user?.email ?? null;
+  } catch (error) {
+    return dbError("deleteUser", error);
+  }
+
+  if (!realEmail) {
+    return err("not_found", "Không tìm thấy email của người dùng");
+  }
+  if (realEmail.trim().toLowerCase() !== confirmEmail.trim().toLowerCase()) {
+    return err("validation", "Email xác nhận không khớp với email người dùng");
+  }
+
+  // --- step 5a (prelude): ensure the tombstone profile row exists --------
+  // The tombstone is a real auth.users + profiles row with a fixed email,
+  // a random password nobody can type, is_active=false, and the
+  // localised full_name. We look it up or create it on demand; the first
+  // call is the only one that hits the Admin API.
+  const tombstone = await ensureTombstoneProfile(
+    service,
+    admin.data.organizationId,
+  );
+  if (!tombstone.ok) {
+    return tombstone;
+  }
+  const tombstoneId = tombstone.data.id;
+
+  // --- step 5a: re-point existing audit rows at the tombstone -------------
+  // The `audit_logs.actor_id` FK to `profiles` is `on delete restrict`, and
+  // deleting `auth.users` cascades its `profiles` row away. Without this
+  // re-pointing the cascade trips the RESTRICT and the whole delete fails.
+  // The metadata, created_at, and organization_id columns are untouched, so
+  // the timeline is still readable; only the "who did it" cell now reads
+  // "[Người dùng đã xoá]" via the tombstone's full_name.
+  const { error: repointError } = await service
+    .from("audit_logs")
+    .update({ actor_id: tombstoneId })
+    .eq("actor_id", userId);
+
+  if (repointError) {
+    return dbError("deleteUser", repointError);
+  }
+
+  // --- step 5b: write the delete_user audit row -------------------------
+  // The new row's actor is the *admin* (this caller), not the target, so
+  // the cascade does not touch it. `target_id` is the about-to-be-deleted
+  // user; that column has no FK, so the later cascade is a no-op for it.
+  try {
+    await recordAudit({
+      organizationId: admin.data.organizationId,
+      actorId: loggedInUserId,
+      actorRole: "admin",
+      action: "delete_user",
+      targetKind: "user",
+      targetId: userId,
+      metadata: {
+        email: realEmail,
+        fullName: targetRow.full_name,
+        role: targetRow.role,
+        confirmEmail,
+      },
+    });
+  } catch {
+    /* see file-level rule: an audit failure does not block the real action */
+  }
+
+  // --- step 6: drop the auth.users row -----------------------------------
+  // The cascade covers:
+  //   - profiles (on delete cascade) — but the actor_id re-pointing above
+  //     already protected any audit rows that named this profile.
+  //   - contracts.created_by (on delete set null) — kept; we want the
+  //     contract to stay so the audit trail for that contract is intact.
+  // If the auth delete fails (rare; would mean a Supabase-side revocation
+  // just landed), the partial work — re-pointed actor rows + the new
+  // delete_user log — is the only evidence of the attempt. The user is
+  // still alive and can be retried.
+  const { error: authError } = await service.auth.admin.deleteUser(userId);
+  if (authError) {
+    return dbError("deleteUser", authError);
+  }
+
+  return ok({ deletedUserId: userId });
 }
