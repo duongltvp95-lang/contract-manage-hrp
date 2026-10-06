@@ -12,6 +12,7 @@ import {
 import { getR2Bucket } from "@/lib/r2/client";
 import { formatBytes } from "@/lib/format";
 import { createClient } from "@/lib/supabase/server";
+import { recordCurrentUserAudit } from "./audit-logs";
 import { getContract } from "./contracts";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
@@ -248,7 +249,17 @@ export async function completeUpload(
     return dbError("completeUpload", error);
   }
 
-  return ok(data as ContractFileRow);
+  const row = data as ContractFileRow;
+
+  // `completeUpload` runs with a signed-in session user as the actor.
+  await recordCurrentUserAudit({
+    action: "upload_file",
+    targetKind: "file",
+    targetId: row.id,
+    metadata: { filename: row.original_filename, size: row.file_size },
+  });
+
+  return ok(row);
 }
 
 /** Plan section 77 — files of one contract, newest first. */

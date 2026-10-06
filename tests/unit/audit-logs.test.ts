@@ -4,11 +4,12 @@ import {
   AUDIT_ACTIONS,
   AUDIT_ACTION_LABELS,
   AUDIT_TARGET_KINDS,
+  AUDIT_TARGET_KIND_LABELS,
   LogsFilterSchema,
 } from "@schemas/audit-log";
 
 /**
- * Round 3, part 1 — shared filter / enum schemas.
+ * Round 3, part 1 + round 8, part 1 — shared filter / enum schemas.
  *
  * The page and the export endpoint both read the same shape. The list of
  * actions is the single source of truth for the UI label, the action
@@ -22,8 +23,30 @@ describe("audit-log enums", () => {
     }
   });
 
-  it("only declares the target kinds the migration knows about", () => {
-    expect(AUDIT_TARGET_KINDS).toEqual(["user", "logs"]);
+  it("declares every target kind the round 8 migration knows about", () => {
+    expect(AUDIT_TARGET_KINDS).toEqual([
+      "user",
+      "logs",
+      "partner",
+      "contract",
+      "file",
+      "profile",
+    ]);
+  });
+
+  it("labels every target kind", () => {
+    for (const kind of AUDIT_TARGET_KINDS) {
+      expect(AUDIT_TARGET_KIND_LABELS[kind]).toBeTruthy();
+    }
+  });
+
+  it("labels the round 8 business actions in Vietnamese", () => {
+    expect(AUDIT_ACTION_LABELS.create_partner).toBe("Tạo đối tác");
+    expect(AUDIT_ACTION_LABELS.import_partners).toBe("Nhập đối tác từ Excel");
+    expect(AUDIT_ACTION_LABELS.create_contract).toBe("Tạo hợp đồng");
+    expect(AUDIT_ACTION_LABELS.archive_contract).toBe("Lưu trữ hợp đồng");
+    expect(AUDIT_ACTION_LABELS.upload_file).toBe("Tải tệp lên");
+    expect(AUDIT_ACTION_LABELS.update_profile).toBe("Cập nhật hồ sơ");
   });
 });
 
@@ -52,6 +75,21 @@ describe("LogsFilterSchema", () => {
     expect(
       LogsFilterSchema.safeParse({ action: "delete_everything" }).success,
     ).toBe(false);
+  });
+
+  it("accepts every round 8 business action as a filter value", () => {
+    for (const action of [
+      "create_partner",
+      "update_partner",
+      "import_partners",
+      "create_contract",
+      "update_contract",
+      "archive_contract",
+      "upload_file",
+      "update_profile",
+    ]) {
+      expect(LogsFilterSchema.parse({ action }).action).toBe(action);
+    }
   });
 
   it("accepts a valid actorId uuid", () => {

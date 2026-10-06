@@ -4,6 +4,7 @@ import { UpdateProfileSchema } from "@schemas/profile";
 
 import { createClient } from "@/lib/supabase/server";
 
+import { recordCurrentUserAudit } from "./audit-logs";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
@@ -66,6 +67,13 @@ export async function updateProfile(
     organization_id: string;
     role: string;
   };
+
+  await recordCurrentUserAudit({
+    action: "update_profile",
+    targetKind: "profile",
+    targetId: userId,
+    metadata: { changed: ["fullName"] },
+  });
 
   return ok({
     id: row.id,

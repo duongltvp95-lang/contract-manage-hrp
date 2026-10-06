@@ -403,6 +403,11 @@ export async function destroySecondTenant(
   admin: SupabaseClient,
   session: TestSession,
 ): Promise<void> {
+  // Business actions write audit rows attributed to this user (round 8), and
+  // audit_logs.actor_id is ON DELETE RESTRICT against profiles. Remove those
+  // rows first, or the user delete below would fail.
+  await purgeAuditRowsForUser(admin, session.userId);
+
   // Anything the suite created inside the second tenant goes first: contracts
   // reference the organization, so the organization cannot be removed while
   // they exist.
@@ -496,8 +501,27 @@ export async function sweepTestRows(admin: SupabaseClient): Promise<void> {
   const { data: users } = await admin.auth.admin.listUsers({ perPage: 200 });
   for (const user of users?.users ?? []) {
     if (user.email?.includes("w1test.")) {
+      await purgeAuditRowsForUser(admin, user.id);
       await admin.from("profiles").update({ organization_id: ORG_A }).eq("id", user.id);
       await admin.auth.admin.deleteUser(user.id);
     }
   }
+}
+
+/**
+ * Removes every audit row that names `userId` as actor or target.
+ *
+ * `audit_logs.actor_id` is ON DELETE RESTRICT against `profiles`, so a business
+ * action performed by a throwaway user (round 8 onwards) would otherwise block
+ * that user's cleanup. `target_id` has no foreign key, but clearing it keeps the
+ * append-only table free of dangling references.
+ */
+async function purgeAuditRowsForUser(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<void> {
+  await admin
+    .from("audit_logs")
+    .delete()
+    .or(`actor_id.eq.${userId},target_id.eq.${userId}`);
 }

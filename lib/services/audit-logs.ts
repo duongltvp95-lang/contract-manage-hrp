@@ -118,6 +118,49 @@ export async function recordAudit(input: {
 }
 
 /**
+ * Fire-and-forget audit write that attributes the entry to the CURRENT user.
+ *
+ * Round 8 business actions call this from inside a server action / route, where
+ * the signed-in user is the actor. It resolves the actor (id + role + org) from
+ * the session and swallows every failure: a missing log line must never block
+ * the business action that produced it (see the file-level comment).
+ *
+ * The error is logged server-side when a write fails, so it is observable
+ * without ever propagating to the caller.
+ */
+export async function recordCurrentUserAudit(input: {
+  action: AuditAction;
+  targetKind: AuditTargetKind;
+  targetId: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return;
+
+    const result = await recordAudit({
+      organizationId: user.organizationId,
+      actorId: user.id,
+      actorRole: user.role,
+      action: input.action,
+      targetKind: input.targetKind,
+      targetId: input.targetId,
+      metadata: input.metadata,
+    });
+
+    if (!result.ok) {
+      console.error(
+        "[audit:recordCurrentUserAudit]",
+        result.code,
+        result.message ?? "",
+      );
+    }
+  } catch (error) {
+    console.error("[audit:recordCurrentUserAudit]", error);
+  }
+}
+
+/**
  * Read logs for an organization, newest first. RLS restricts the row set to the
  * signed-in admin's organization, so we don't repeat that filter at the SQL
  * layer (the policy already does it). We DO sort/paginate here because the

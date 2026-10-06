@@ -5,6 +5,7 @@ import { PartnerSchema, UpdatePartnerSchema } from "@schemas/partner";
 import type { PartnerImportRow, PartnerImportRowReport } from "@/lib/partner-import";
 import { createClient } from "@/lib/supabase/server";
 import { PARTNER_SEARCH_LIMIT } from "@/lib/partner-display";
+import { recordCurrentUserAudit } from "./audit-logs";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
@@ -314,7 +315,17 @@ export async function createPartner(
     return dbError("createPartner", error);
   }
 
-  return ok(data as PartnerRow);
+  const created = data as PartnerRow;
+
+  // Fire-and-forget: a failed write must never block the create.
+  await recordCurrentUserAudit({
+    action: "create_partner",
+    targetKind: "partner",
+    targetId: created.id,
+    metadata: { name: created.name, taxCode: created.tax_code ?? null },
+  });
+
+  return ok(created);
 }
 
 /**
@@ -391,7 +402,19 @@ export async function updatePartner(
     return err("not_found", "Không tìm thấy đối tác");
   }
 
-  return ok(data as PartnerRow);
+  const updated = data as PartnerRow;
+  const changed = Object.keys(patch).map((key) =>
+    key === "tax_code" ? "taxCode" : key,
+  );
+
+  await recordCurrentUserAudit({
+    action: "update_partner",
+    targetKind: "partner",
+    targetId: updated.id,
+    metadata: { name: updated.name, changed },
+  });
+
+  return ok(updated);
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +556,17 @@ export async function importPartners(
         error: "Không thể tạo đối tác này. Vui lòng thử lại.",
       });
     }
+  }
+
+  // One audit row for the whole batch, with the outcome counts.
+  if (results.length > 0) {
+    const created = results.filter((row) => row.ok).length;
+    await recordCurrentUserAudit({
+      action: "import_partners",
+      targetKind: "partner",
+      targetId: null,
+      metadata: { created, failed: results.length - created },
+    });
   }
 
   return ok(results);

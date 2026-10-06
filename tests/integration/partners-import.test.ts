@@ -91,10 +91,13 @@ suite("partner import — Excel (round 7)", () => {
   const numericStamp = String(Date.now()).slice(-8);
   const taxInDb = `03${numericStamp}`;
   const taxOther = `04${numericStamp}`;
+  let startedAt: string;
 
   beforeAll(async () => {
     admin = adminClient();
     await sweepTestRows(admin);
+
+    startedAt = new Date().toISOString();
 
     orgA = await signInAsAdmin();
     orgB = await createSecondTenant(admin, "partnerimport");
@@ -110,6 +113,16 @@ suite("partner import — Excel (round 7)", () => {
     if (seeded) await seeded.cleanup();
     if (orgB) await destroySecondTenant(admin, orgB);
     if (admin) await sweepTestRows(admin);
+
+    // Round 8: an import now writes an `import_partners` audit row (NULL target,
+    // so sweepTestRows does not remove it). Clear the rows this file produced.
+    if (admin && startedAt) {
+      await admin
+        .from("audit_logs")
+        .delete()
+        .eq("action", "import_partners")
+        .gte("created_at", startedAt);
+    }
   }, 180_000);
 
   it("refuses an anonymous caller with 401", async () => {

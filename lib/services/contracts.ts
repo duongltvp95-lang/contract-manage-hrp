@@ -10,6 +10,7 @@ import {
 
 import { resolveExpiryPreset, sanitizeSearchTerm, type ContractsQuery } from "@/lib/contracts-query";
 import { createClient } from "@/lib/supabase/server";
+import { recordCurrentUserAudit } from "./audit-logs";
 import { getPartner } from "./partners";
 import { dbError, err, ok, type ServiceErr, type ServiceResult } from "./types";
 
@@ -108,11 +109,14 @@ export async function createContract(
    */
   const partnerId = values.partnerId;
 
+  let partnerName: string | null = null;
+
   if (partnerId) {
     const partner = await getPartner(partnerId, { organizationId });
     if (!partner.ok) {
       return err("validation", "Đối tác được chọn không thuộc tổ chức của bạn");
     }
+    partnerName = partner.data.name;
   }
 
   const supabase = await createClient();
@@ -138,7 +142,16 @@ export async function createContract(
     return dbError("createContract", error);
   }
 
-  return ok(data as ContractRow);
+  const created = data as ContractRow;
+
+  await recordCurrentUserAudit({
+    action: "create_contract",
+    targetKind: "contract",
+    targetId: created.id,
+    metadata: { contractNumber: created.contract_number ?? null, partnerName },
+  });
+
+  return ok(created);
 }
 
 /**
@@ -486,7 +499,26 @@ export async function updateContract(
     return explainMissingContract(id, context.organizationId, "update");
   }
 
-  return ok(data as ContractRow);
+  const updated = data as ContractRow;
+  const FIELD_LABELS: Record<string, string> = {
+    contract_number: "contractNumber",
+    signed_date: "signedDate",
+    duration_text: "durationText",
+    expiry_date: "expiryDate",
+    partner_text: "partnerText",
+    partner_id: "partnerId",
+    notes: "notes",
+  };
+  const changed = Object.keys(patch).map((key) => FIELD_LABELS[key] ?? key);
+
+  await recordCurrentUserAudit({
+    action: "update_contract",
+    targetKind: "contract",
+    targetId: updated.id,
+    metadata: { contractNumber: updated.contract_number ?? null, changed },
+  });
+
+  return ok(updated);
 }
 
 /**
@@ -521,5 +553,14 @@ export async function archiveContract(
     return explainMissingContract(id, organizationId, "archive");
   }
 
-  return ok(data as ContractRow);
+  const archived = data as ContractRow;
+
+  await recordCurrentUserAudit({
+    action: "archive_contract",
+    targetKind: "contract",
+    targetId: archived.id,
+    metadata: { contractNumber: archived.contract_number ?? null },
+  });
+
+  return ok(archived);
 }
