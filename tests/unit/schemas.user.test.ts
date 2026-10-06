@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { CreateUserSchema, USER_ROLE_LABELS, USER_ROLES } from "@schemas/user";
+import {
+  CreateUserSchema,
+  UpdateUserSchema,
+  USER_ROLE_LABELS,
+  USER_ROLES,
+} from "@schemas/user";
 
 /**
  * Feature round 2, part 3 — shared validation for the Add User form.
@@ -75,3 +80,60 @@ describe("CreateUserSchema", () => {
     expect(USER_ROLE_LABELS.user).toBe("Người dùng");
   });
 });
+
+/**
+ * Round 3, part 1 — admin update + delete payloads.
+ *
+ * The schemas here are the contract between the Edit/Delete dialogs and the
+ * service layer. `UpdateUserSchema` requires at least one of { role, isActive }
+ * because a "no change" request would be a wasted round-trip and an audit
+ * row that says nothing happened.
+ */
+
+const userId = "11111111-1111-4111-8111-111111111111";
+
+describe("UpdateUserSchema", () => {
+  it("accepts a role change", () => {
+    const parsed = UpdateUserSchema.safeParse({ userId, role: "admin" });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.role).toBe("admin");
+  });
+
+  it("accepts an isActive change", () => {
+    const parsed = UpdateUserSchema.safeParse({ userId, isActive: false });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.isActive).toBe(false);
+  });
+
+  it("accepts both fields at once", () => {
+    const parsed = UpdateUserSchema.safeParse({
+      userId,
+      role: "user",
+      isActive: false,
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects a payload that changes nothing", () => {
+    const parsed = UpdateUserSchema.safeParse({ userId });
+
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.message).toBe("Không có thay đổi nào để lưu");
+  });
+
+  it("rejects an unknown role", () => {
+    expect(
+      UpdateUserSchema.safeParse({ userId, role: "owner" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a non-uuid userId", () => {
+    expect(
+      UpdateUserSchema.safeParse({ userId: "not-a-uuid", role: "admin" }).success,
+    ).toBe(false);
+  });
+});
+

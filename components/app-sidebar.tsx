@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, ChevronUp, FileText, LayoutDashboard, Settings, User2 } from "lucide-react";
+import { Building2, ChevronUp, FileText, LayoutDashboard, ScrollText, Settings, User2 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -27,16 +27,18 @@ import { createClient } from "@/lib/supabase/client";
 
 /**
  * Wave 1 main navigation — docs/plan/wave1-plan-v1.1.md section 26, extended by
- * feature round 2 with the partner directory.
+ * feature round 2 with the partner directory and round 3 with the admin audit
+ * log.
  *
- * Order is the owner's: Tổng quan · Hợp đồng · Đối tác · Cài đặt. Processing /
- * Review / AI are still NOT shown.
- * UI language is Vietnamese (project standard).
+ * Order is the owner's: Tổng quan · Hợp đồng · Đối tác · Nhật ký · Cài đặt.
+ * The "Nhật ký" item is hidden for non-administrators — the page also redirects
+ * them to /dashboard, so the link would only be a dead end.
  */
-const items = [
+const items: { title: string; url: string; icon: typeof FileText; admin?: boolean }[] = [
   { title: "Tổng quan", url: "/dashboard", icon: LayoutDashboard },
   { title: "Hợp đồng", url: "/contracts", icon: FileText },
   { title: "Đối tác", url: "/partners", icon: Building2 },
+  { title: "Nhật ký", url: "/admin/logs", icon: ScrollText, admin: true },
   { title: "Cài đặt", url: "/settings", icon: Settings },
 ];
 
@@ -44,6 +46,7 @@ export function AppSidebar() {
   const router = useRouter();
   const pathname = usePathname();
   const [accountLabel, setAccountLabel] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     const supabase = createClient();
@@ -54,21 +57,28 @@ export function AppSidebar() {
         const user = data.user;
         if (!user) {
           setAccountLabel(null);
+          setIsAdmin(false);
           return;
         }
 
         // Prefer the profile's display name so a change in Settings shows up
-        // here too; the email stays the fallback when no name is set.
+        // here too; the email stays the fallback when no name is set. The role
+        // controls the "Nhật ký" item — the page redirects non-admins, so the
+        // link must be hidden too.
         const { data: profile } = await supabase
           .from("profiles")
-          .select("full_name")
+          .select("full_name, role")
           .eq("id", user.id)
           .maybeSingle();
 
-        const fullName = (profile as { full_name: string | null } | null)?.full_name;
-        setAccountLabel(fullName?.trim() || user.email || null);
+        const typed = profile as { full_name: string | null; role: string } | null;
+        setAccountLabel(typed?.full_name?.trim() || user.email || null);
+        setIsAdmin(typed?.role === "admin");
       })
-      .catch(() => setAccountLabel(null));
+      .catch(() => {
+        setAccountLabel(null);
+        setIsAdmin(false);
+      });
   }, []);
 
   const handleSignOut = async () => {
@@ -85,19 +95,21 @@ export function AppSidebar() {
           <SidebarGroupLabel>Quản lý hợp đồng</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {items.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname.startsWith(item.url)}
-                  >
-                    <Link href={item.url}>
-                      <item.icon />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              {items
+                .filter((item) => !item.admin || isAdmin)
+                .map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={pathname.startsWith(item.url)}
+                    >
+                      <Link href={item.url}>
+                        <item.icon />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

@@ -2,15 +2,21 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { CreateUserSchema, type UserRole } from "@schemas/user";
+import {
+  CreateUserSchema,
+  UpdateUserSchema,
+  type UpdateUserInput,
+  type UserRole,
+} from "@schemas/user";
 
 import { getCurrentUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateTemporaryPassword } from "@/lib/temp-password";
+import { recordAudit } from "@/lib/services/audit-logs";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
- * User management — feature round 2, part 3.
+ * User management — feature round 2, part 3 + round 3, part 1.
  *
  * The only module allowed to use the service-role client, and every function
  * here starts by proving the caller is an administrator. Two rules hold
@@ -18,8 +24,11 @@ import { dbError, err, ok, type ServiceResult } from "./types";
  *
  *   1. `organizationId` comes from the session. A caller that passes a different
  *      one is refused rather than trusted.
- *   2. There is no delete and no deactivate. Provisioning is the whole feature
- *      this round; removing access is an owner decision for later.
+ *   2. The app intentionally has no delete-user action. Provisioning and
+ *      role/active state changes are the whole surface; removing access is
+ *      an owner decision, executed out of band (Supabase Dashboard, service
+ *      role). The round 3 part 1 update path lives below; the delete path
+ *      is absent on purpose.
  */
 
 export type ManagedUser = {
@@ -46,6 +55,9 @@ export type CreateUserServiceInput = {
   fullName: string;
   role: UserRole;
 };
+
+/** Round 3, part 1 — admin-driven update of role / active state. */
+export type UpdateUserServiceInput = UpdateUserInput;
 
 /**
  * True when the signed-in user is an administrator.
@@ -297,4 +309,237 @@ export async function createUser(
     },
     temporaryPassword,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Round 3, part 1 — update + delete, admin only
+// ---------------------------------------------------------------------------
+
+/** Count how many *other* active admins an organization has. */
+async function countOtherAdmins(
+  service: SupabaseClient,
+  organizationId: string,
+  excludeUserId: string,
+): Promise<ServiceResult<{ count: number }>> {
+  const { count, error } = await service
+    .from("profiles")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", organizationId)
+    .eq("role", "admin")
+    .eq("is_active", true)
+    .neq("id", excludeUserId);
+
+  if (error) {
+    return dbError("countOtherAdmins", error);
+  }
+
+  return ok({ count: count ?? 0 });
+}
+
+/**
+ * Blocks the path that would demote or disable the last active admin of an
+ * organization.
+ *
+ * The target's *current* role and is_active decide whether a change can
+ * possibly remove the last admin. A change against a non-admin is a no-op
+ * (the caller's intent still has to be valid, but the last-admin rule is
+ * irrelevant); only when the target is already an active admin do we look at
+ * the *proposed* change (`targetRole`, `targetActive`).
+ *
+ * Caller is expected to pass `currentRole` / `currentIsActive` when it has
+ * already read the row (the call site has `target.role` / `target.is_active`
+ * in scope). When omitted, the values default to the proposed change, which
+ * is the conservative answer for a caller that has not inspected the row.
+ */
+async function assertNotLastAdmin(
+  service: SupabaseClient,
+  organizationId: string,
+  targetUserId: string,
+  targetRole: UserRole | undefined,
+  targetActive: boolean | undefined,
+  current: { role: string; isActive: boolean } = { role: "user", isActive: true },
+): Promise<ServiceResult<{ ok: true }>> {
+  // Only active admins can lose admin coverage. Everyone else is a no-op.
+  if (current.role !== "admin" || current.isActive !== true) {
+    return ok({ ok: true });
+  }
+
+  const losingAdmin =
+    targetRole === "user" || targetActive === false;
+
+  if (!losingAdmin) {
+    return ok({ ok: true });
+  }
+
+  const result = await countOtherAdmins(service, organizationId, targetUserId);
+  if (!result.ok) {
+    return result;
+  }
+
+  if (result.data.count === 0) {
+    return err(
+      "forbidden",
+      "Không thể hạ cấp hoặc vô hiệu hoá quản trị viên cuối cùng của tổ chức",
+    );
+  }
+
+  return ok({ ok: true });
+}
+
+type ProfileDbRow = {
+  id: string;
+  full_name: string | null;
+  role: string;
+  is_active: boolean;
+  created_at: string;
+};
+
+function managedUserFromRow(
+  row: ProfileDbRow,
+  email: string | null,
+): ManagedUser {
+  return {
+    id: row.id,
+    email,
+    fullName: row.full_name,
+    role: (row.role === "admin" ? "admin" : "user") as UserRole,
+    isActive: row.is_active,
+    createdAt: row.created_at,
+  };
+}
+
+/**
+ * Update role / active state. The action's `loggedInUserId` comes from the
+ * session; the target's `userId` comes from the form. An admin cannot
+ * demote or disable the last remaining active admin in the organization
+ * (`assertNotLastAdmin`).
+ *
+ * The change is audited regardless of whether role or isActive changed —
+ * one event per call, because that is what the UI fires.
+ */
+export async function updateUser(
+  input: UpdateUserServiceInput,
+  loggedInUserId: string,
+): Promise<ServiceResult<ManagedUser>> {
+  const admin = await requireAdmin();
+  if (!admin.ok) return admin;
+
+  const parsed = UpdateUserSchema.safeParse(input);
+  if (!parsed.success) {
+    return err(
+      "validation",
+      "Thông tin cập nhật không hợp lệ",
+      parsed.error.issues.map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message,
+      })),
+    );
+  }
+
+  const { userId, role, isActive } = parsed.data;
+
+  let service: SupabaseClient;
+  try {
+    service = await createAdminClient();
+  } catch (error) {
+    return dbError("updateUser", error);
+  }
+
+  // --- the target row has to exist in our organization ---------------------
+  const { data: existing, error: existingError } = await service
+    .from("profiles")
+    .select("id, full_name, role, is_active, created_at")
+    .eq("id", userId)
+    .eq("organization_id", admin.data.organizationId)
+    .maybeSingle();
+
+  if (existingError) {
+    return dbError("updateUser", existingError);
+  }
+  if (!existing) {
+    return err("not_found", "Không tìm thấy người dùng trong tổ chức");
+  }
+
+  const target = existing as ProfileDbRow;
+
+  // --- last-admin guard ---------------------------------------------------
+  const lastAdminCheck = await assertNotLastAdmin(
+    service,
+    admin.data.organizationId,
+    userId,
+    role,
+    isActive,
+    { role: target.role, isActive: target.is_active },
+  );
+  if (!lastAdminCheck.ok) {
+    return lastAdminCheck;
+  }
+
+  // --- build the patch ----------------------------------------------------
+  const patch: Record<string, unknown> = {};
+  if (role !== undefined && role !== target.role) {
+    patch.role = role;
+  }
+  if (isActive !== undefined && isActive !== target.is_active) {
+    patch.is_active = isActive;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    // Nothing actually changed. Return the current row without writing.
+    return ok(managedUserFromRow(target, null));
+  }
+
+  // --- write --------------------------------------------------------------
+  const { data: updated, error: updateError } = await service
+    .from("profiles")
+    .update(patch)
+    .eq("id", userId)
+    .select("id, full_name, role, is_active, created_at")
+    .single();
+
+  if (updateError || !updated) {
+    return dbError("updateUser", updateError);
+  }
+
+  const next = updated as ProfileDbRow;
+
+  // --- audit --------------------------------------------------------------
+  // One event per *kind* of change. If both role and isActive changed, the
+  // row is the same but the action label is different, so we write two rows
+  // and let the table show both. A log write that fails must not block the
+  // change, so the result is discarded after a warning.
+  const metadata: Record<string, unknown> = { from: { role: target.role, isActive: target.is_active } };
+  if (patch.role !== undefined) {
+    metadata.role_to = next.role;
+    try {
+      await recordAudit({
+        organizationId: admin.data.organizationId,
+        actorId: loggedInUserId,
+        actorRole: "admin",
+        action: "update_user_role",
+        targetKind: "user",
+        targetId: userId,
+        metadata: { from: target.role, to: next.role },
+      });
+    } catch {
+      // already swallowed by recordAudit returning a ServiceResult
+    }
+  }
+  if (patch.is_active !== undefined) {
+    try {
+      await recordAudit({
+        organizationId: admin.data.organizationId,
+        actorId: loggedInUserId,
+        actorRole: "admin",
+        action: "set_active_user",
+        targetKind: "user",
+        targetId: userId,
+        metadata: { from: target.is_active, to: next.is_active },
+      });
+    } catch {
+      /* see comment above */
+    }
+  }
+
+  return ok(managedUserFromRow(next, null));
 }

@@ -316,7 +316,79 @@ export async function seedContractWithFile(
   };
 }
 
-/** Removes a second tenant created by `createSecondTenant`, including its rows. */
+/**
+ * Creates a fresh user in `organizationId` with the given role, confirmed and
+ * ready to sign in.
+ *
+ * Used by the round 3 part 1 suite to spin up a second administrator without
+ * going through the public sign-up form (which is disabled in this project).
+ * The user is created through the admin API; the profile is then moved to
+ * `organizationId` so the "organization match" check in the service passes.
+ */
+export async function createTestUser(
+  admin: SupabaseClient,
+  {
+    organizationId,
+    role,
+    label,
+  }: {
+    organizationId: string;
+    role: "user" | "admin";
+    label: string;
+  },
+): Promise<{ id: string; email: string; password: string }> {
+  const email = `w1test.${label}.${Date.now().toString(36)}.${crypto
+    .randomUUID()
+    .slice(0, 8)}@hrpartner.test`;
+  const password = `W1Test-${Math.random().toString(36).slice(2, 12)}!aA1`;
+
+  const { data, error } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { full_name: `${TEST_PREFIX}${label}` },
+  });
+
+  if (error || !data?.user) {
+    throw new Error(
+      `could not create test user ${label}: ${error?.message ?? "no user"}`,
+    );
+  }
+
+  // The handle_new_user trigger puts the profile in the default organization;
+  // we move it to the requested one so RLS and organization checks see the
+  // right tenant.
+  const { error: moveError } = await admin
+    .from("profiles")
+    .update({ organization_id: organizationId, role, is_active: true })
+    .eq("id", data.user.id);
+
+  if (moveError) {
+    // Roll back the auth row so a failed setup does not leave a half-built
+    // account behind.
+    await admin.auth.admin.deleteUser(data.user.id).catch(() => {});
+    throw new Error(
+      `could not move ${label} into the test organization: ${moveError.message}`,
+    );
+  }
+
+  return { id: data.user.id, email, password };
+}
+
+/**
+ * Signs a freshly-created test user in, returning a cookie session.
+ *
+ * The user was created by `createTestUser` with a known password; this is the
+ * matching sign-in so the suite can call protected routes as that user.
+ */
+export async function signInNewUser(
+  email: string,
+  password: string,
+): Promise<TestSession> {
+  return signInAs(email, password);
+}
+
+
 export async function destroySecondTenant(
   admin: SupabaseClient,
   session: TestSession,

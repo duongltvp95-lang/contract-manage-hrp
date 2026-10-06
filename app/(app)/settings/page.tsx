@@ -82,8 +82,9 @@ async function SettingsContent() {
             <div className="space-y-1.5">
               <CardTitle>Quản lý người dùng</CardTitle>
               <CardDescription>
-                Thêm tài khoản cho tổ chức. Chưa có chức năng xoá hay vô hiệu
-                hoá người dùng.
+                Thêm tài khoản cho tổ chức. Hệ thống không hỗ trợ xoá hay vô
+                hiệu hoá người dùng từ giao diện; thay đổi trạng thái hoạt
+                động thông qua nút Sửa.
               </CardDescription>
             </div>
             {serviceReady ? <AddUserDialog /> : null}
