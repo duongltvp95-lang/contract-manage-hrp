@@ -16,7 +16,7 @@ import {
 } from "./helpers";
 
 /**
- * Feature round 2, part 3 â user management.
+ * Feature round 2, part 3 — user management.
  *
  * The admin path is exercised through the real service (via the test-only probe
  * route, because the service reads the session from cookies and is normally
@@ -44,7 +44,7 @@ async function probe(
   return { status: response.status, body: await response.json().catch(() => null) };
 }
 
-suite("user management â administrators only (feature round 2)", () => {
+suite("user management — administrators only (feature round 2)", () => {
   let admin: SupabaseClient;
   let orgA: TestSession;
   let orgB: TestSession;
@@ -62,7 +62,7 @@ suite("user management â administrators only (feature round 2)", () => {
 
   afterAll(async () => {
     // Remove the accounts this suite created. This is test cleanup through the
-    // service role â there is no delete-user feature in the product.
+    // service role — there is no delete-user feature in the product.
     for (const id of createdUserIds) {
       await admin.from("profiles").delete().eq("id", id);
       await admin.auth.admin.deleteUser(id);
@@ -98,7 +98,7 @@ suite("user management â administrators only (feature round 2)", () => {
     const email = `w1test.notadmin.${stamp}@hrpartner.test`;
     const result = await probe(
       "create",
-      { email, fullName: "KhÃ´ng pháº£i admin", role: "user" },
+      { email, fullName: "Không phải admin", role: "user" },
       orgB.cookie,
     );
 
@@ -113,7 +113,7 @@ suite("user management â administrators only (feature round 2)", () => {
   it("an anonymous caller cannot create a user", async () => {
     const result = await probe(
       "create",
-      { email: `w1test.anon.${stamp}@hrpartner.test`, fullName: "áº¨n danh", role: "user" },
+      { email: `w1test.anon.${stamp}@hrpartner.test`, fullName: "Ẩn danh", role: "user" },
       "",
     );
 
@@ -122,7 +122,7 @@ suite("user management â administrators only (feature round 2)", () => {
 
   it("an administrator creates a user who can sign in with the temporary password", async () => {
     const email = `w1test.created.${stamp}@hrpartner.test`;
-    const fullName = `${TEST_PREFIX}NgÆ°á»i dÃ¹ng má»i`;
+    const fullName = `${TEST_PREFIX}Người dùng mới`;
 
     const result = await probe(
       "create",
@@ -144,14 +144,14 @@ suite("user management â administrators only (feature round 2)", () => {
     expect(created.user.isActive).toBe(true);
     expect(created.temporaryPassword.length).toBeGreaterThanOrEqual(12);
 
-    // The auth row existsâ¦
+    // The auth row exists…
     const { data: users } = await admin.auth.admin.listUsers({ perPage: 200 });
     const authUser = users?.users?.find((user) => user.email === email);
     expect(authUser?.id).toBe(created.user.id);
-    // â¦with the email already confirmed, because public sign-up is disabled.
+    // …with the email already confirmed, because public sign-up is disabled.
     expect(authUser?.email_confirmed_at).toBeTruthy();
 
-    // â¦and the profile carries the organization and the role the service wrote.
+    // …and the profile carries the organization and the role the service wrote.
     const { data: profile } = await admin
       .from("profiles")
       .select("organization_id, full_name, role, is_active")
@@ -163,7 +163,7 @@ suite("user management â administrators only (feature round 2)", () => {
     expect(profile?.role).toBe("user");
     expect(profile?.is_active).toBe(true);
 
-    // The password really works â the whole point of returning it.
+    // The password really works — the whole point of returning it.
     const session = await signInAs(email, created.temporaryPassword);
     expect(session.userId).toBe(created.user.id);
   }, 120_000);
@@ -173,7 +173,7 @@ suite("user management â administrators only (feature round 2)", () => {
 
     const result = await probe(
       "create",
-      { email, fullName: `${TEST_PREFIX}Quáº£n trá» má»i`, role: "admin" },
+      { email, fullName: `${TEST_PREFIX}Quản trị mới`, role: "admin" },
       orgA.cookie,
     );
 
@@ -200,7 +200,7 @@ suite("user management â administrators only (feature round 2)", () => {
 
     const first = await probe(
       "create",
-      { email, fullName: `${TEST_PREFIX}TrÃ¹ng email`, role: "user" },
+      { email, fullName: `${TEST_PREFIX}Trùng email`, role: "user" },
       orgA.cookie,
     );
     expect(first.status).toBe(200);
@@ -208,18 +208,18 @@ suite("user management â administrators only (feature round 2)", () => {
 
     const second = await probe(
       "create",
-      { email, fullName: `${TEST_PREFIX}TrÃ¹ng email láº§n hai`, role: "user" },
+      { email, fullName: `${TEST_PREFIX}Trùng email lần hai`, role: "user" },
       orgA.cookie,
     );
 
     expect(second.status).toBe(422);
-    expect(String((second.body as { error?: string })?.error)).toContain("ÄÃ£ tá»n táº¡i");
+    expect(String((second.body as { error?: string })?.error)).toContain("đã tồn tại");
   }, 120_000);
 
   it("refuses an invalid payload", async () => {
     const result = await probe(
       "create",
-      { email: "khÃ´ng-pháº£i-email", fullName: "", role: "user" },
+      { email: "không-phải-email", fullName: "", role: "user" },
       orgA.cookie,
     );
 
@@ -229,7 +229,7 @@ suite("user management â administrators only (feature round 2)", () => {
 });
 
 /**
- * Round 3, part 1 â admin update + audit log.
+ * Round 3, part 1 — admin update + audit log.
  *
  * The app intentionally has no delete-user action, so the round 3 surface
  * here is the update path and the audit rows it writes. Same shape as the
@@ -288,7 +288,7 @@ async function findAuditLog(
   } | null);
 }
 
-suite("user update â administrators only (feature round 3, part 1)", () => {
+suite("user update — administrators only (feature round 3, part 1)", () => {
   let admin: SupabaseClient;
   let orgA: TestSession;
   let orgB: TestSession;
@@ -419,7 +419,7 @@ suite("user update â administrators only (feature round 3, part 1)", () => 
   it("an administrator can demote another admin while another admin remains", async () => {
     // adminB is the second admin in orgA; the seed (orgA) is also an admin.
     // Demoting adminB is allowed because the seed remains an active admin
-    // afterwards â the last-admin rule is exactly the case where this would
+    // afterwards — the last-admin rule is exactly the case where this would
     // be refused.
     const demoteAdminB = await probeActions(
       "update",
@@ -463,7 +463,7 @@ suite("user update â administrators only (feature round 3, part 1)", () => 
     expect((restoreAdminB.body as { isActive: boolean }).isActive).toBe(true);
   });
 
-  // Skipped: the service returns the Zod "ThÃ´ng tin cáº­p nháº­t khÃ´ng há»£p lá»"
+  // Skipped: the service returns the Zod "Thông tin cập nhật không hợp lệ"
   // message before reaching the empty-patch branch. The 422 status is right;
   // the wording mismatch is a product decision that lives outside this 3c
   // fix. Tracked separately.
@@ -496,7 +496,7 @@ suite("user update â administrators only (feature round 3, part 1)", () => 
 
     await probeActions(
       "update",
-      { userId: target.id, role: "owner" }, // bad role â 422
+      { userId: target.id, role: "owner" }, // bad role → 422
       orgA.cookie,
     );
 
@@ -511,7 +511,7 @@ suite("user update â administrators only (feature round 3, part 1)", () => 
 
 
 /**
- * Round 4, part 1 ï¿½ admin hard delete.
+ * Round 4, part 1 — admin hard delete.
  *
  * The probe forwards to `deleteUser()`. The service is the gate. The tests
  * here prove:
@@ -531,7 +531,7 @@ suite("user update â administrators only (feature round 3, part 1)", () => 
  *   - contracts: `contracts.created_by` is `set null` by the FK, not
  *     blocked; the contract itself survives.
  */
-suite("user delete ï¿½ administrators only (feature round 4, part 1)", () => {
+suite("user delete — administrators only (feature round 4, part 1)", () => {
   let admin: SupabaseClient;
   let orgA: TestSession;
   let orgB: TestSession;
@@ -661,7 +661,7 @@ suite("user delete ï¿½ administrators only (feature round 4, part 1)", () => 
     );
     expect(result.status).toBe(403);
     expect(String((result.body as { error?: string })?.error)).toContain(
-      "khÃ´ng thá» xoÃ¡ chÃ­nh mÃ¬nh",
+      "không thể xoá chính mình",
     );
 
     // The auth.users row is still here.
@@ -710,7 +710,7 @@ suite("user delete ï¿½ administrators only (feature round 4, part 1)", () => 
 
     expect(result.status).toBe(422);
     expect(String((result.body as { error?: string })?.error)).toContain(
-      "khÃ´ng khá»p",
+      "không khớp",
     );
 
     // The user still exists.
@@ -767,7 +767,7 @@ suite("user delete ï¿½ administrators only (feature round 4, part 1)", () => 
     );
     expect(remove.status).toBe(200);
 
-    // No audit row still names the victim as actor ï¿½ the re-point moved
+    // No audit row still names the victim as actor — the re-point moved
     // every such row to the tombstone profile id before the auth delete.
     const afterCount = await admin
       .from("audit_logs")
@@ -793,7 +793,7 @@ suite("user delete ï¿½ administrators only (feature round 4, part 1)", () => 
     // forward through the partners-contracts-probe fixture, which is
     // copied into the app by global-setup.ts for the duration of the
     // run.
-    const partnerName = `${TEST_PREFIX}R4 partner ${stamp}`;
+    const partnerName = `${TEST_PREFIX}Người dùng mới`;
     const partnerResult = await fetch(
       `${BASE_URL}/api/partners-contracts-probe`,
       {
@@ -828,7 +828,7 @@ suite("user delete ï¿½ administrators only (feature round 4, part 1)", () => 
           action: "createContract",
           contractNumber,
           signedDate: "2026-01-01",
-          durationText: "12 thÃ¡ng",
+          durationText: "12 tháng",
           expiryDate: "2027-01-01",
           partnerText: "",
           partnerId,
