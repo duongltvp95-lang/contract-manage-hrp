@@ -130,6 +130,7 @@ async function ensureTombstoneProfile(
         full_name: "[Người dùng đã xoá]",
         role: "user",
         is_active: false,
+        is_tombstone: true,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "id" },
@@ -281,6 +282,7 @@ export async function listUsers({
     .from("profiles")
     .select("id, full_name, role, is_active, created_at")
     .eq("organization_id", organizationId)
+    .eq("is_tombstone", false)
     .order("created_at", { ascending: true });
 
   if (error) {

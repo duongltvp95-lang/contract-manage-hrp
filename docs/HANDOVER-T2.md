@@ -177,10 +177,15 @@ thiếu sót. Khi cần dọn dữ liệu thì dùng service role hoặc Supabas
 Xoá **user** đã có từ **round 4** (admin only, có confirmEmail, chặn
 self-delete và last-admin). Xem `lib/services/users.ts` (`deleteUser`) và
 helper `ensureTombstoneProfile` trong cùng file — tombstone được **tự tạo lúc
-runtime** (id resolve qua `listUsers` + `createUser` với service role), không
-cần migration SQL. Khi xoá một actor đã từng ghi audit log, `actor_id` của
-các row cũ được re-point sang tombstone (cùng `organization_id = ORG_A`) để
-tránh FK `on delete restrict` trên `audit_logs.actor_id`.
+runtime** qua `service.auth.admin.createUser` (id không thể resolve sẵn), nên
+cột đánh dấu trong `profiles` phải là **cờ `is_tombstone`** (migration
+`20261006130000_profiles_is_tombstone.sql`, round 5) chứ không phải so sánh
+id. `listUsers` lọc `is_tombstone = false` nên UI Quản lý người dùng không
+hiện dòng giả; cờ này tách biệt với `is_active=false` (user thật bị
+deactivate vẫn hiện trên UI với badge ngược, round 3). Khi xoá một actor đã
+từng ghi audit log, `actor_id` của các row cũ được re-point sang tombstone
+(cùng `organization_id`) để tránh FK `on delete restrict` trên
+`audit_logs.actor_id`.
 
 ---
 
