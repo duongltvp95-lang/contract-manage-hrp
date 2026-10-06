@@ -3,7 +3,36 @@
 > Tài liệu dành cho T2 mới tiếp quản. Đọc hết trước khi nhận việc đầu tiên.
 >
 > Tiếp quản: 2026-10-05 (sau đợt xác minh 48/48 trên production).
+> Cập nhật: 2026-10-06 — bổ sung **Round 3** (audit logs + admin user actions).
 > File này **không** chứa mật khẩu / PAT / service_role / R2 secret.
+
+---
+
+## 0. Round 3 đang dở — đọc trước khi làm việc khác
+
+Trên working tree hiện có **code round 3 đã viết nhưng CHƯA được verify, CHƯA được commit, CHƯA được push**. Đây là phần việc T2 phải xử lý xong trước khi nhận task mới.
+
+**Scope round 3** (Owner đã duyệt ngày 2026-10-06):
+
+1. **Audit logs**: bảng `audit_logs` (migration `20261006090000_create_audit_logs.sql`), service `lib/services/audit-logs.ts`, schema `packages/schemas/audit-log.ts`, trang `/admin/logs` với bảng + form lọc + export CSV. Ghi 4 action: `create_user`, `update_user_role`, `set_active_user`, `export_logs`. **App cố ý không có action xoá user** (round 3 đã drop `delete-user-dialog`, `DeleteUserSchema`, `deleteUser` service, `delete_user` audit action) — đây là quyết định nghiệp vụ, không phải thiếu sót.
+2. **Admin user actions hoàn chỉnh**: `users-table.tsx` thêm nút Edit Role/Activate, dialog `edit-user-dialog.tsx`, `user-row-actions.tsx`. Service `lib/services/users.ts` có `createUser`, `updateUserRole`, `setUserActive`. Sidebar đã có link Users, link Logs mới.
+4. **Test mới**: `tests/e2e/admin-logs.spec.ts`, `tests/integration/users.test.ts` (đã viết), `tests/unit/audit-logs.test.ts` (đã viết).
+
+**Quyết định của T1 (Owner) — không tự ý đổi:**
+
+- Một PR gộp round 3 (không tách).
+- Áp migration trên **cả local lẫn remote Supabase** (cùng đợt với commit — đợt trước quên push migration là phải fix nóng).
+- T2 **được** sửa những gì cần để pass test, nhưng phải báo rõ lệch trong report.
+
+**File KHÔNG ĐƯỢC COMMIT (xoá trước khi `git add`):**
+
+- `queries/*.cjs` — 6 file diagnostic cũ (check-login, check-owner, probe-change, probe-password, recreate-owner, restore-owner, set-owner-password). Đã dùng để khôi phục tài khoản Owner ngày 2026-10-05, hết việc → xoá.
+- `scripts/_cleanup-3c.cjs`, `scripts/_verify-3c.cjs` — script chạy một lần khi viết round 3, hết việc → xoá.
+- `AGENTS.md`, `CLAUDE.md` — T1 chưa duyệt nội dung. **DỪNG LẠI hỏi T1** trước khi add.
+
+**File MỚI cần xem trước khi review:**
+
+- `tests/integration/fixtures/users-actions-probe.route.ts` — fixture phục vụ `users.test.ts`. Đọc để chắc nó wire đúng với service role.
 
 Quy tắc làm việc bắt buộc nằm ở `.cursor/rules/agent-working-rules.mdc`
 (`alwaysApply: true`) — đọc file đó trước. Tóm tắt: **tiếng Việt**, **không in

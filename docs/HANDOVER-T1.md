@@ -63,6 +63,7 @@ Người dùng yêu cầu thêm 2 tính năng:
 - Part 1: Partners DB + services + schemas ✅
 - Part 2: Partners UI + tích hợp form hợp đồng ✅
 - Part 3: Admin user management ✅
+- Part 4: Address + tax code + partners e2e + Sidebar ✅
 
 Test sau round 2: **unit 145 · integration 61 · e2e 48** (đều pass, không regression).
 
@@ -76,6 +77,31 @@ Test sau round 2: **unit 145 · integration 61 · e2e 48** (đều pass, không 
 2. **Người dùng Redeploy Vercel**.
 3. **T2 smoke test production** (Demo cũ + luồng Partners + luồng Users) → xoá tài khoản test `test.wave1@hrpartner.vn` → báo cáo.
 4. T1 chốt round 2.
+
+### 🆕 Round 3 — CODE ĐÃ VIẾT, ĐANG Ở BƯỚC DỌN + VERIFY (chưa commit)
+
+> **Cập nhật 2026-10-06**: scope đã chốt với Owner, handover T2 đã cập nhật (mục 0),
+> prompt cho T2 lưu ở `docs/prompts/round3.md`.
+
+**Scope** (Owner duyệt):
+
+1. **Audit logs**: bảng `audit_logs` + service + trang `/admin/logs` (bảng + form lọc + export CSV). Ghi: `create_user`, `update_user_role`, `set_active_user`, `export_logs`. **App cố ý không có action xoá user** (round 3 đã drop `delete-user-dialog`, `DeleteUserSchema`, `deleteUser` service) — không có sự kiện xoá để log.
+2. **Admin user actions hoàn chỉnh**: nút Edit Role/Activate trong `users-table.tsx`, dialog + action handlers.
+3. **Test mới**: 3 file (`admin-logs.spec.ts`, `users.test.ts`, `audit-logs.test.ts`).
+
+**Quyết định của Owner (không tự ý đổi):**
+
+- Một PR gộp round 3.
+- Áp migration `audit_logs` trên **cả local lẫn remote Supabase** cùng đợt với commit.
+- `delete-user-dialog.tsx` (nếu còn) phải được xử lý — app không có nút xoá user.
+
+**File KHÔNG ĐƯỢC COMMIT trong round 3:**
+
+- `queries/*.cjs` (6 file diagnostic cũ) — xoá.
+- `scripts/_cleanup-3c.cjs`, `scripts/_verify-3c.cjs` — xoá.
+- `AGENTS.md`, `CLAUDE.md` — **dừng hỏi T1** trước khi `git add`.
+
+**Trạng thái Git:** working tree có 9 file M + 15 file ?? thuộc round 3; tất cả uncommitted. Chưa push.
 
 ### 📦 Git hiện tại (đã đồng bộ)
 
@@ -182,7 +208,10 @@ Origins: `http://localhost:3000`, `https://contract-manage-hrp.vercel.app`, `htt
 1. **Người dùng** thêm `SUPABASE_SERVICE_ROLE_KEY` (Secret) vào Vercel → Redeploy.
 2. **T2 smoke** production: Demo cũ + luồng Partners + luồng Users (thêm user thật sự chạy được) → xoá `test.wave1@hrpartner.vn`.
 3. **T1 chốt Feature round 2.**
-4. Hỏi người dùng có tiếp tục (nối domain / Wave 2 / tính năng mới) không.
+4. **Round 3**: đợi T2 dọn + verify + commit (theo `docs/prompts/round3.md`). Sau khi T2 gửi report:
+   - Review report → duyệt / duyệt kèm lệch.
+   - Push lên `origin/main` (hoặc nhờ Owner push).
+   - Hỏi người dùng có tiếp tục (nối domain / Wave 2 / tính năng mới) không.
 
 ### Ghi chú kỹ thuật còn sót (không gấp, xử khi tiện)
 
