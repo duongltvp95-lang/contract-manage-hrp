@@ -1,9 +1,21 @@
 "use server";
 
 import {
+  parsePartnerWorkbook,
+  summarisePartnerImport,
+  validatePartnerImportFile,
+  validatePartnerImportRows,
+  type PartnerImportReport,
+  type PartnerImportRow,
+  type PartnerImportRowReport,
+} from "@/lib/partner-import";
+import {
   createPartner,
+  importPartners,
+  previewPartnerImport,
   searchPartners,
   updatePartner,
+  type PartnerImportServiceRow,
   type PartnerRow,
   type PartnerSearchRow,
 } from "@/lib/services/partners";
@@ -74,4 +86,131 @@ export async function updatePartnerAction(
   });
 
   return fromService(result);
+}
+
+// ---------------------------------------------------------------------------
+// Round 7, part 1 — import từ Excel
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads, type-checks, parses and schema-validates the uploaded workbook.
+ *
+ * Both import actions re-parse the FILE from scratch: the client never sends a
+ * list of rows, so "what gets imported" is always what the file actually
+ * contains, not what a crafted request claims.
+ */
+async function readPartnerImportRows(
+  formData: FormData,
+): Promise<
+  { ok: true; rows: PartnerImportRow[] } | { ok: false; message: string }
+> {
+  const file = formData.get("file");
+
+  if (!(file instanceof File)) {
+    return { ok: false, message: "Vui lòng chọn một file .xlsx để tải lên." };
+  }
+
+  const checked = validatePartnerImportFile({
+    name: file.name,
+    type: file.type,
+    size: file.size,
+  });
+
+  if (!checked.ok) {
+    return { ok: false, message: checked.message };
+  }
+
+  const parsed = await parsePartnerWorkbook(await file.arrayBuffer());
+
+  if (!parsed.ok) {
+    return { ok: false, message: parsed.message };
+  }
+
+  return { ok: true, rows: validatePartnerImportRows(parsed.rows) };
+}
+
+/**
+ * Preview: per-row report with a summary. Nothing is written.
+ *
+ * Rows that failed the schema or carry an in-file duplicate tax code keep their
+ * error; the valid ones additionally get the database-duplicate check (scoped
+ * to the caller's organization).
+ */
+export async function previewPartnersImportAction(
+  formData: FormData,
+): Promise<ActionResult<PartnerImportReport>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  const read = await readPartnerImportRows(formData);
+  if (!read.ok) {
+    return validationFailure(read.message, [{ path: "file", message: read.message }]);
+  }
+
+  const reportRows: PartnerImportRowReport[] = [];
+  const validRows: PartnerImportServiceRow[] = [];
+
+  for (const row of read.rows) {
+    if (!row.ok) {
+      reportRows.push(row);
+      continue;
+    }
+    validRows.push({
+      rowNumber: row.rowNumber,
+      name: row.name,
+      address: row.address,
+      taxCode: row.taxCode,
+    });
+  }
+
+  const preview = await previewPartnerImport(validRows, {
+    organizationId: access.user.organizationId,
+  });
+
+  if (!preview.ok) return fromService(preview);
+
+  return { ok: true, data: summarisePartnerImport([...reportRows, ...preview.data]) };
+}
+
+/**
+ * Import: parse + validate + insert the valid rows, one by one.
+ *
+ * A row that fails validation is reported and skipped; a row that collides with
+ * an existing tax code is refused; everything else is inserted. One bad row
+ * never stops the batch.
+ */
+export async function importPartnersAction(
+  formData: FormData,
+): Promise<ActionResult<PartnerImportReport>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  const read = await readPartnerImportRows(formData);
+  if (!read.ok) {
+    return validationFailure(read.message, [{ path: "file", message: read.message }]);
+  }
+
+  const reportRows: PartnerImportRowReport[] = [];
+  const validRows: PartnerImportServiceRow[] = [];
+
+  for (const row of read.rows) {
+    if (!row.ok) {
+      reportRows.push(row);
+      continue;
+    }
+    validRows.push({
+      rowNumber: row.rowNumber,
+      name: row.name,
+      address: row.address,
+      taxCode: row.taxCode,
+    });
+  }
+
+  const imported = await importPartners(validRows, {
+    organizationId: access.user.organizationId,
+  });
+
+  if (!imported.ok) return fromService(imported);
+
+  return { ok: true, data: summarisePartnerImport([...reportRows, ...imported.data]) };
 }

@@ -190,11 +190,21 @@ export type SeededPartner = {
  */
 export async function seedPartner(
   admin: SupabaseClient,
-  { organizationId, name }: { organizationId: string; name: string },
+  {
+    organizationId,
+    name,
+    address,
+    taxCode,
+  }: { organizationId: string; name: string; address?: string; taxCode?: string },
 ): Promise<SeededPartner> {
   const { data, error } = await admin
     .from("partners")
-    .insert({ organization_id: organizationId, name })
+    .insert({
+      organization_id: organizationId,
+      name,
+      address: address ?? null,
+      tax_code: taxCode ?? null,
+    })
     .select("id, name")
     .single();
 

@@ -58,3 +58,6 @@ supabase/.temp
 # also answers 404 unless TEST_PROBE=1.
 /app/api/hardening-probe/
 /app/api/users-probe/
+/app/api/users-actions-probe/
+/app/api/partners-contracts-probe/
+/app/api/partners-import-probe/

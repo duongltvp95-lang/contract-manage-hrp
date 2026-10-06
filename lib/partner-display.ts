@@ -54,8 +54,12 @@ export function isLegacyPartnerText(input: PartnerNamed): boolean {
  *
  * Vietnamese users type "doi tac" at least as often as "đối tác"; without the
  * folding, the combobox would silently find nothing for the unaccented spelling.
+ *
+ * Exported (round 7) because the Excel import reuses the same rule to recognise
+ * spreadsheet headers: "TÊN ĐỐI TÁC", "Ten doi tac" and "ten doi tac" must all
+ * resolve to the same column.
  */
-function fold(value: string): string {
+export function foldText(value: string): string {
   return value
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
@@ -76,8 +80,8 @@ export function filterPartners<T extends { name: string }>(
   partners: T[],
   term: string,
 ): T[] {
-  const needle = fold(term);
+  const needle = foldText(term);
   if (!needle) return partners;
 
-  return partners.filter((partner) => fold(partner.name).includes(needle));
+  return partners.filter((partner) => foldText(partner.name).includes(needle));
 }

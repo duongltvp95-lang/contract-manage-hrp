@@ -1,10 +1,8 @@
 import "server-only";
 
-import {
-  PartnerSchema,
-  UpdatePartnerSchema,
-} from "@schemas/partner";
+import { PartnerSchema, UpdatePartnerSchema } from "@schemas/partner";
 
+import type { PartnerImportRow, PartnerImportRowReport } from "@/lib/partner-import";
 import { createClient } from "@/lib/supabase/server";
 import { PARTNER_SEARCH_LIMIT } from "@/lib/partner-display";
 import { dbError, err, ok, type ServiceResult } from "./types";
@@ -182,6 +180,47 @@ export async function getPartner(
 }
 
 /**
+ * Every same-organization partner that shares one of `taxCodes`, grouped by tax
+ * code. One chunked `in` query for the whole batch rather than one query per
+ * row: the single-code lookup below and the round 7 import both reuse this.
+ *
+ * Empty strings and non-strings are ignored, so callers can hand over raw
+ * import rows without pre-cleaning them.
+ */
+async function findPartnersByTaxCodes(
+  taxCodes: string[],
+  organizationId: string,
+): Promise<Map<string, PartnerRow[]>> {
+  const result = new Map<string, PartnerRow[]>();
+  const unique = [
+    ...new Set(
+      taxCodes.map((code) => (typeof code === "string" ? code.trim() : "")).filter(Boolean),
+    ),
+  ];
+
+  if (unique.length === 0) return result;
+
+  const supabase = await createClient();
+
+  // PostgREST URLs have a practical length limit; chunk to stay well inside it.
+  for (let start = 0; start < unique.length; start += 100) {
+    const chunk = unique.slice(start, start + 100);
+    const { data } = await supabase
+      .from("partners")
+      .select(PARTNER_COLUMNS)
+      .eq("organization_id", organizationId)
+      .in("tax_code", chunk);
+
+    for (const row of (data ?? []) as PartnerRow[]) {
+      if (!row.tax_code) continue;
+      result.set(row.tax_code, [...(result.get(row.tax_code) ?? []), row]);
+    }
+  }
+
+  return result;
+}
+
+/**
  * Finds a same-organization partner that shares `taxCode`. Used to surface a
  * readable Vietnamese duplicate-message before the database would return a
  * generic constraint error. There is no UNIQUE on `tax_code` (Owner-approved
@@ -195,24 +234,13 @@ async function findPartnerByTaxCode(
   organizationId: string,
   excludeId?: string,
 ): Promise<PartnerRow | null> {
-  const supabase = await createClient();
-  let query = supabase
-    .from("partners")
-    .select(PARTNER_COLUMNS)
-    .eq("organization_id", organizationId)
-    .eq("tax_code", taxCode)
-    .limit(1);
+  const matches = (await findPartnersByTaxCodes([taxCode], organizationId)).get(
+    taxCode.trim(),
+  );
 
-  if (excludeId) {
-    query = query.neq("id", excludeId);
-  }
+  if (!matches || matches.length === 0) return null;
 
-  const { data, error } = await query.maybeSingle();
-
-  if (error) {
-    return null;
-  }
-  return (data as PartnerRow | null) ?? null;
+  return matches.find((row) => !excludeId || row.id !== excludeId) ?? null;
 }
 
 /**
@@ -364,4 +392,148 @@ export async function updatePartner(
   }
 
   return ok(data as PartnerRow);
+}
+
+// ---------------------------------------------------------------------------
+// Round 7, part 1 — bulk import from Excel
+// ---------------------------------------------------------------------------
+
+/** The shape both import functions consume: validated rows, nothing more. */
+export type PartnerImportServiceRow = Pick<
+  PartnerImportRow,
+  "rowNumber" | "name" | "address" | "taxCode"
+>;
+
+const IMPORT_DUPLICATE_MESSAGE = (ownerName: string) =>
+  `Mã số thuế đã được dùng cho đối tác khác trong tổ chức (Đã thuộc về “${ownerName}”)`;
+
+/**
+ * Preview: marks which rows collide with an existing tax code in the database,
+ * WITHOUT writing anything.
+ *
+ * The organization always comes from the caller's session; a tax code that
+ * exists in ANOTHER organization is not a conflict, because partners are
+ * organization-scoped.
+ */
+export async function previewPartnerImport(
+  rows: PartnerImportServiceRow[],
+  { organizationId }: PartnerContext,
+): Promise<ServiceResult<PartnerImportRowReport[]>> {
+  const existing = await findPartnersByTaxCodes(
+    rows.map((row) => row.taxCode),
+    organizationId,
+  );
+
+  return ok(
+    rows.map((row): PartnerImportRowReport => {
+      const code = row.taxCode.trim();
+      const conflicts = code ? existing.get(code) : undefined;
+
+      if (conflicts && conflicts.length > 0) {
+        return {
+          rowNumber: row.rowNumber,
+          name: row.name,
+          address: row.address,
+          taxCode: row.taxCode,
+          ok: false,
+          error: IMPORT_DUPLICATE_MESSAGE(conflicts[0].name),
+        };
+      }
+
+      return {
+        rowNumber: row.rowNumber,
+        name: row.name,
+        address: row.address,
+        taxCode: row.taxCode,
+        ok: true,
+      };
+    }),
+  );
+}
+
+/**
+ * Imports the given validated rows, one by one.
+ *
+ * One failing row never stops the batch: the per-row result carries its own
+ * `ok`/`error`, and the caller reports the summary. Rows whose tax code already
+ * exists in the organization are refused BEFORE any insert (same message the
+ * preview shows), so a previewed batch does not change meaning between the two
+ * steps.
+ */
+export async function importPartners(
+  rows: PartnerImportServiceRow[],
+  { organizationId }: PartnerContext,
+): Promise<ServiceResult<PartnerImportRowReport[]>> {
+  const existing = await findPartnersByTaxCodes(
+    rows.map((row) => row.taxCode),
+    organizationId,
+  );
+
+  const supabase = await createClient();
+  const results: PartnerImportRowReport[] = [];
+
+  for (const row of rows) {
+    const code = row.taxCode.trim();
+    const conflicts = code ? existing.get(code) : undefined;
+
+    if (conflicts && conflicts.length > 0) {
+      results.push({
+        rowNumber: row.rowNumber,
+        name: row.name,
+        address: row.address,
+        taxCode: row.taxCode,
+        ok: false,
+        error: IMPORT_DUPLICATE_MESSAGE(conflicts[0].name),
+      });
+      continue;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("partners")
+        .insert({
+          // From the session, never from the request body.
+          organization_id: organizationId,
+          name: row.name,
+          address: row.address.trim() === "" ? null : row.address.trim(),
+          tax_code: code === "" ? null : code,
+        })
+        .select("id")
+        .single();
+
+      if (error) {
+        // The raw driver error goes to the server log; the user gets a safe line.
+        console.error("[service:importPartners]", error);
+        results.push({
+          rowNumber: row.rowNumber,
+          name: row.name,
+          address: row.address,
+          taxCode: row.taxCode,
+          ok: false,
+          error: "Không thể tạo đối tác này. Vui lòng thử lại.",
+        });
+        continue;
+      }
+
+      results.push({
+        rowNumber: row.rowNumber,
+        name: row.name,
+        address: row.address,
+        taxCode: row.taxCode,
+        ok: true,
+        partnerId: (data as { id: string } | null)?.id,
+      });
+    } catch {
+      results.push({
+        rowNumber: row.rowNumber,
+        name: row.name,
+        address: row.address,
+        taxCode: row.taxCode,
+        ok: false,
+        error: "Không thể tạo đối tác này. Vui lòng thử lại.",
+      });
+    }
+  }
+
+  return ok(results);
 }
