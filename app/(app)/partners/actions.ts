@@ -2,8 +2,10 @@
 
 import {
   createPartner,
+  searchPartners,
   updatePartner,
   type PartnerRow,
+  type PartnerSearchRow,
 } from "@/lib/services/partners";
 import {
   authorized,
@@ -34,6 +36,22 @@ export async function createPartnerAction(
   const result = await createPartner((input ?? {}) as Record<string, unknown>, {
     organizationId: access.user.organizationId,
   });
+
+  return fromService(result);
+}
+
+/**
+ * Quick search for the combobox (round 6). The term comes from the user's
+ * keystrokes; the organization always comes from the session.
+ */
+export async function searchPartnersAction(
+  term: unknown,
+): Promise<ActionResult<PartnerSearchRow[]>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  const query = typeof term === "string" ? term : "";
+  const result = await searchPartners(query);
 
   return fromService(result);
 }

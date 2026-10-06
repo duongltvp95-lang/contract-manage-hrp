@@ -9,7 +9,7 @@ import {
   type ContractDetail as ContractDetailRow,
 } from "@/lib/services/contracts";
 import { getFileViewUrl, listContractFiles } from "@/lib/services/files";
-import { listPartners } from "@/lib/services/partners";
+import { searchPartners } from "@/lib/services/partners";
 
 /**
  * Contract detail — plan sections 54-60, 65, 66.
@@ -93,11 +93,12 @@ async function ContractDetailContent({
   organizationId: string;
   contract: ContractDetailRow;
 }) {
-  // The partner directory is read alongside the files so the Edit Sheet's
-  // combobox has its options on first paint (feature round 2).
+  // The partner directory's first page is read alongside the files so the Edit
+  // Sheet's combobox has its options on first paint; typing searches the whole
+  // directory through a server action (round 6).
   const [files, partners] = await Promise.all([
     listContractFiles(organizationId, id),
-    listPartners({ organizationId }),
+    searchPartners(""),
   ]);
 
   const fileList = files.ok ? files.data : [];

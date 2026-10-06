@@ -6,6 +6,7 @@ import {
 } from "@schemas/partner";
 
 import { createClient } from "@/lib/supabase/server";
+import { PARTNER_SEARCH_LIMIT } from "@/lib/partner-display";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
@@ -118,6 +119,39 @@ export async function listPartners({
   return ok(
     rows.map((row) => ({ ...row, contract_count: counts.get(row.id) ?? 0 })),
   );
+}
+
+/** A partner as returned by the quick-search RPC (round 6). */
+export type PartnerSearchRow = Pick<
+  PartnerRow,
+  "id" | "name" | "address" | "tax_code"
+>;
+
+/**
+ * Quick search over the whole directory — round 6.
+ *
+ * The contract form combobox needs a fast lookup when the directory is large;
+ * loading every partner into the page (the round 2 behaviour) stops scaling.
+ * The RPC folds diacritics the same way `filterPartners` does and matches the
+ * tax code as well, and its `security invoker` runs under RLS, so a caller can
+ * only ever see their own organization's partners.
+ */
+export async function searchPartners(
+  term: string,
+): Promise<ServiceResult<PartnerSearchRow[]>> {
+  const supabase = await createClient();
+  const query = term.trim().slice(0, 100);
+
+  const { data, error } = await supabase.rpc("search_partners", {
+    term: query,
+    lim: PARTNER_SEARCH_LIMIT,
+  });
+
+  if (error) {
+    return dbError("searchPartners", error);
+  }
+
+  return ok((data ?? []) as PartnerSearchRow[]);
 }
 
 /** Returns the partner only when it belongs to `organizationId`. */

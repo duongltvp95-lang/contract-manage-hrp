@@ -292,4 +292,71 @@ suite("partners — RLS and search (feature round 2)", () => {
     expect(html).not.toContain(`${TEST_PREFIX}PARTNER-ORGB-${stamp}`);
     expect(html).not.toContain(`${TEST_PREFIX}PARTNER-LINKED-${stamp}`);
   });
+
+  // -------------------------------------------------------------------------
+  // Quick search (round 6) — through the real server
+  // -------------------------------------------------------------------------
+
+  async function probePartnerSearch(term: string, cookie: string) {
+    const response = await fetch(`${BASE_URL}/api/partners-contracts-probe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", cookie },
+      body: JSON.stringify({ action: "search", term }),
+    });
+
+    return {
+      status: response.status,
+      body: (await response.json().catch(() => null)) as {
+        id: string;
+        name: string;
+        tax_code: string | null;
+      }[],
+    };
+  }
+
+  it("quick search finds a partner by accented name (round 6)", async () => {
+    const result = await probePartnerSearch(`Đối tác Alpha ${stamp}`, orgA.cookie);
+
+    expect(result.status).toBe(200);
+    expect(result.body.some((row) => row.id === partnerA.id)).toBe(true);
+  });
+
+  it("quick search finds a partner by unaccented name (round 6)", async () => {
+    // "doi tac alpha" has no diacritics at all — the RPC folds the stored name
+    // the same way the client filter does, so it must still match.
+    const result = await probePartnerSearch(`doi tac alpha ${stamp}`, orgA.cookie);
+
+    expect(result.status).toBe(200);
+    expect(result.body.some((row) => row.id === partnerA.id)).toBe(true);
+  });
+
+  it("quick search finds a partner by tax code (round 6)", async () => {
+    const taxCode = `99${stamp.slice(-8)}`;
+    await admin
+      .from("partners")
+      .update({ tax_code: taxCode })
+      .eq("id", partnerA.id);
+
+    const result = await probePartnerSearch(taxCode, orgA.cookie);
+
+    expect(result.status).toBe(200);
+    expect(result.body.some((row) => row.id === partnerA.id)).toBe(true);
+  });
+
+  it("quick search does not leak another organization's partners (round 6)", async () => {
+    const result = await probePartnerSearch(`tenant B ${stamp}`, orgA.cookie);
+
+    expect(result.status).toBe(200);
+    expect(result.body.some((row) => row.id === partnerB.id)).toBe(false);
+  });
+
+  it("quick search refuses an anonymous caller (round 6)", async () => {
+    const response = await fetch(`${BASE_URL}/api/partners-contracts-probe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "search", term: "alpha" }),
+    });
+
+    expect(response.status).toBe(401);
+  });
 });

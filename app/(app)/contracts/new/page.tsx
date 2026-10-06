@@ -4,7 +4,7 @@ import { MAX_UPLOAD_SIZE_MB } from "@schemas/file";
 
 import { ContractForm } from "@/components/contracts/contract-form";
 import { requireUser } from "@/lib/auth";
-import { listPartners } from "@/lib/services/partners";
+import { searchPartners } from "@/lib/services/partners";
 
 /**
  * Add Contract — plan section 45.
@@ -15,8 +15,11 @@ import { listPartners } from "@/lib/services/partners";
  * must name a partner (feature round 2).
  */
 async function NewContractContent() {
-  const me = await requireUser();
-  const partners = await listPartners({ organizationId: me.organizationId });
+  // Auth guard: unauthenticated users never reach the form.
+  await requireUser();
+  // First alphabetical page only — the combobox searches the whole directory
+  // through a server action while typing (round 6).
+  const partners = await searchPartners("");
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-8">
@@ -29,7 +32,11 @@ async function NewContractContent() {
 
       <ContractForm
         maxUploadSizeMb={MAX_UPLOAD_SIZE_MB}
-        partners={partners.ok ? partners.data : []}
+        partners={
+          partners.ok
+            ? partners.data.map(({ id, name, tax_code }) => ({ id, name, tax_code }))
+            : []
+        }
       />
     </div>
   );

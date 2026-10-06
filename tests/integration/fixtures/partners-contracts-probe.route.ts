@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { resolveAccess } from "@/lib/auth";
 import { statusForCode, type ServiceResult } from "@/lib/services/types";
 import { createContract, type ContractRow } from "@/lib/services/contracts";
-import { createPartner, type PartnerRow } from "@/lib/services/partners";
+import { createPartner, searchPartners, type PartnerRow } from "@/lib/services/partners";
 
 /**
  * TEST FIXTURE — not part of the application.
@@ -52,6 +52,11 @@ export async function POST(request: NextRequest) {
     const result = await createPartner(body, {
       organizationId: access.user.organizationId,
     });
+    return respond(result);
+  }
+
+  if (action === "search") {
+    const result = await searchPartners(String(body.term ?? ""));
     return respond(result);
   }
 

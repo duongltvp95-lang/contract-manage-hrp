@@ -11,6 +11,15 @@ export type PartnerNamed = {
   partner_text?: string | null;
 };
 
+/**
+ * How many partners one quick-search call returns (round 6).
+ *
+ * Shared by the server service (the RPC limit) and the combobox (to know when
+ * to show the "keep typing" hint). Lives here because this module is pure and
+ * usable from both sides.
+ */
+export const PARTNER_SEARCH_LIMIT = 50;
+
 /** The dash shown when a contract has no partner information at all. */
 export const NO_PARTNER = "—";
 

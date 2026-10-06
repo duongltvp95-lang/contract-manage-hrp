@@ -175,6 +175,16 @@ export function ContractForm({
       ? (contract?.partner_text ?? null)
       : null;
 
+  /**
+   * The partner the contract is already linked to. Passed to the combobox so
+   * the selected name still shows (and stays selectable) when it sorts past
+   * the first page of a large directory (round 6).
+   */
+  const selectedPartner =
+    contract?.partner_id && contract?.partner_name
+      ? { id: contract.partner_id, name: contract.partner_name }
+      : null;
+
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [phase, setPhase] = useState<Phase>("idle");
   const [formError, setFormError] = useState<string | null>(null);
@@ -375,6 +385,7 @@ export function ContractForm({
                 value={field.value ?? ""}
                 onChange={field.onChange}
                 partners={partnerOptions}
+                selectedPartner={selectedPartner}
                 onPartnerCreated={addPartnerOption}
                 disabled={busy}
                 invalid={Boolean(form.formState.errors.partnerId)}
