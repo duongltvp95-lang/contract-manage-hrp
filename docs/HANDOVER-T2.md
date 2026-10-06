@@ -187,6 +187,16 @@ từng ghi audit log, `actor_id` của các row cũ được re-point sang tombs
 (cùng `organization_id`) để tránh FK `on delete restrict` trên
 `audit_logs.actor_id`.
 
+> **Round 5.1 (Owner duyệt 2026-10-06):** script `scripts/apply-round5-prod.mjs`
+> đã chuẩn bị xong (dùng `public.exec_sql` + `service.from("profiles").update()`).
+> Tại thời điểm commit round 5.1, function `public.exec_sql` **chưa tồn tại trên
+> Supabase remote** — Owner cần dán nội dung
+> `supabase/migrations/20261006140000_create_exec_sql.sql` vào SQL Editor trước,
+> rồi mới chạy `node scripts/apply-round5-prod.mjs`. Sau khi script pass, row
+> tombstone production (`81c03089-de31-4799-9361-ead99bc525f3`) đã được backfill
+> `is_tombstone=true`. **Code production vẫn chưa lọc** cho đến khi T1 push
+> `c3fbda6` (round 5 code) + redeploy Vercel.
+
 ---
 
 ## 5. App chạy ở đâu
