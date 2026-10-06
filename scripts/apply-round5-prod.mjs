@@ -17,7 +17,9 @@
 //      statement uses `if not exists` / `drop constraint if exists`);
 //   4. patches the row that round 4 created (`is_tombstone = true`);
 //   5. prints three verify results:
-//        - `information_schema.columns` says the column exists
+//        - the `profiles.is_tombstone` column exists (checked by selecting
+//          it through PostgREST — `exec_sql` returns void and therefore
+//          cannot hand back a SELECT result set)
 //        - the tombstone row has `is_tombstone = true`
 //        - exactly one row in `profiles` has `is_tombstone = true`
 //   6. exits 0 on success, non-zero on any failure.
@@ -131,32 +133,26 @@ if (rowCount === 0) {
 // 5. verify (3 queries)
 // ---------------------------------------------------------------------------
 
-console.log("[verify] Q1 — information_schema.columns …");
+console.log("[verify] Q1 — profiles.is_tombstone column present …");
 
-const Q1 = `
-  select column_name, data_type, is_nullable, column_default
-  from information_schema.columns
-  where table_schema = 'public'
-    and table_name = 'profiles'
-    and column_name = 'is_tombstone';
-`.trim();
+// `public.exec_sql` is declared `returns void`, so a SELECT sent through it
+// can never return rows (the plpgsql `execute` discards the result set).
+// Verify the column exists by selecting it through PostgREST instead: the
+// request errors when the column is missing and succeeds when it exists.
+const { error: q1Error } = await service
+  .from("profiles")
+  .select("id, is_tombstone")
+  .limit(1);
 
-const { data: q1, error: q1Error } = await service.rpc("exec_sql", {
-  sql: Q1,
-});
-
-if (q1Error) {
-  console.error("[fatal] Q1 verify failed:", q1Error.message);
-  process.exit(1);
-}
-
-const q1Rows = Array.isArray(q1) ? q1 : [];
-const columnAdded = q1Rows.length > 0;
+const columnAdded = !q1Error;
 console.log(
-  `[verify] Q1 rows=${q1Rows.length} ${q1Rows.length > 0 ? JSON.stringify(q1Rows[0]) : ""}`,
+  `[verify] Q1 column present: ${columnAdded}${q1Error ? ` (${q1Error.message})` : ""}`,
 );
 if (!columnAdded) {
-  console.error("[fatal] is_tombstone column not present after DDL");
+  console.error(
+    "[fatal] is_tombstone column not present after DDL:",
+    q1Error.message,
+  );
   process.exit(1);
 }
 
