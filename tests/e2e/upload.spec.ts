@@ -126,6 +126,12 @@ test.describe("upload", () => {
   });
 
   test("shows real progress while the bytes are in flight", async ({ page }) => {
+    // The test deliberately slows the PUT so the progress UI is observable, and
+    // a slow R2 round-trip can then push the whole flow past the default 90s
+    // test timeout. Give THIS test its own generous ceiling — the behaviour
+    // under test is unchanged, only the allowed wall-clock is raised.
+    test.setTimeout(240_000);
+
     // Slow the PUT down so the progress UI is observable; without this the
     // upload of a tiny fixture finishes before a single frame is painted.
     await page.route(R2_PUT, async (route) => {

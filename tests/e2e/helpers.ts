@@ -364,15 +364,27 @@ export async function setInput(page: Page, selector: string, value: string): Pro
 }
 
 /**
- * Picks a partner in the contract form's combobox (feature round 2).
+ * Picks a partner in the contract form's combobox (feature round 2; quick
+ * search round 6).
  *
- * The combobox is searchable, and the search folds diacritics, so passing the
- * full name is enough — the first option after filtering is the one wanted.
+ * Round 6 serves the results from the server after a 250ms debounce, so
+ * clicking `.first()` straight after typing can grab a stale row — the list
+ * briefly shows the linked partner (or the local first page) before the server
+ * answer lands. Instead: wait for the option whose name matches EXACTLY, then
+ * click that one. This holds whether the partner is already in the first
+ * alphabetical page (the local filter answers instantly) or has to come back
+ * from the server.
  */
 export async function selectPartner(page: Page, name: string): Promise<void> {
   await clickSafe(page, '[data-testid="partner-combobox"]');
   await page.getByTestId("partner-combobox-search").fill(name);
-  await page.getByTestId("partner-option").first().click();
+
+  const option = page
+    .getByTestId("partner-option")
+    .filter({ has: page.getByText(name, { exact: true }) });
+
+  await option.waitFor({ state: "visible", timeout: 30_000 });
+  await option.click();
 }
 
 // ---------------------------------------------------------------------------
