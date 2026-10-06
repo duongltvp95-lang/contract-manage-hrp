@@ -335,3 +335,34 @@ export function summarisePartnerImport(rows: PartnerImportRowReport[]): PartnerI
     },
   };
 }
+
+export const PARTNER_IMPORT_TEMPLATE_FILENAME = "mau-nhap-doi-tac.xlsx";
+
+/**
+ * The downloadable sample workbook: the three recognised headers plus one
+ * example row.
+ *
+ * Generated with the same exceljs that parses uploads, so the template is
+ * guaranteed to parse. The unit suite asserts exactly that — the template is
+ * round-tripped through `parsePartnerWorkbook`.
+ */
+export async function buildPartnerImportTemplate(): Promise<Uint8Array> {
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Đối tác");
+
+  sheet.columns = [
+    { header: "Tên đối tác", key: "name", width: 36 },
+    { header: "Địa chỉ", key: "address", width: 44 },
+    { header: "Mã số thuế", key: "taxCode", width: 16 },
+  ];
+  sheet.getRow(1).font = { bold: true };
+
+  sheet.addRow({
+    name: "Công ty TNHH Ví dụ",
+    address: "123 Đường ABC, Quận 1, TP. Hồ Chí Minh",
+    taxCode: "0312345678",
+  });
+
+  return (await workbook.xlsx.writeBuffer()) as unknown as Uint8Array;
+}

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   PARTNER_IMPORT_MAX_BYTES,
   PARTNER_IMPORT_MAX_ROWS,
+  buildPartnerImportTemplate,
   parsePartnerWorkbook,
   summarisePartnerImport,
   validatePartnerImportFile,
@@ -266,5 +267,23 @@ describe("summarisePartnerImport", () => {
     ]);
 
     expect(report.summary).toEqual({ total: 3, ok: 2, failed: 1 });
+  });
+});
+
+describe("buildPartnerImportTemplate", () => {
+  it("produces a workbook that parses back to the expected headers and row", async () => {
+    const template = await buildPartnerImportTemplate();
+    const parsed = await parsePartnerWorkbook(template);
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0]).toMatchObject({
+      rowNumber: 2,
+      name: "Công ty TNHH Ví dụ",
+      taxCode: "0312345678",
+    });
+    expect(parsed.rows[0]?.address).toContain("TP. Hồ Chí Minh");
   });
 });

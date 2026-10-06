@@ -1,6 +1,8 @@
 "use server";
 
 import {
+  buildPartnerImportTemplate,
+  PARTNER_IMPORT_TEMPLATE_FILENAME,
   parsePartnerWorkbook,
   summarisePartnerImport,
   validatePartnerImportFile,
@@ -213,4 +215,25 @@ export async function importPartnersAction(
   if (!imported.ok) return fromService(imported);
 
   return { ok: true, data: summarisePartnerImport([...reportRows, ...imported.data]) };
+}
+
+/**
+ * Round 7, part 2 — the downloadable sample workbook.
+ *
+ * The bytes are generated on the server and returned as base64 (a server action
+ * returns JSON, not a file), so the client turns them into a download itself.
+ */
+export async function partnerImportTemplateAction(): Promise<
+  ActionResult<{ fileName: string; base64: string }>
+> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  const bytes = await buildPartnerImportTemplate();
+  const base64 = Buffer.from(bytes).toString("base64");
+
+  return {
+    ok: true,
+    data: { fileName: PARTNER_IMPORT_TEMPLATE_FILENAME, base64 },
+  };
 }

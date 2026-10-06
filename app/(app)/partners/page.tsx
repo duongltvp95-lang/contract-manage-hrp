@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 
+import { PartnerImportSheet } from "@/components/partners/partner-import-sheet";
 import { AddPartnerButton } from "@/components/partners/partner-name-sheet";
 import { PartnersTable } from "@/components/partners/partners-table";
 import { PartnersTableSkeleton } from "@/components/partners/partners-table-skeleton";
@@ -46,7 +47,10 @@ function PageHeader() {
           Danh bạ đối tác của tổ chức, dùng để gắn vào hợp đồng.
         </p>
       </div>
-      <AddPartnerButton />
+      <div className="flex flex-wrap items-center gap-2">
+        <AddPartnerButton />
+        <PartnerImportSheet />
+      </div>
     </header>
   );
 }
