@@ -88,6 +88,50 @@ test.describe("upload", () => {
     expect(files?.[0]?.file_size).toBeGreaterThan(0);
   });
 
+  test("groups a document and an appendix, and hides the notes row", async ({ page }) => {
+    // Two uploads in one test; give the same generous ceiling the progress test
+    // uses so a slow R2 round-trip cannot fail it.
+    test.setTimeout(240_000);
+
+    const contractNumber = `${TEST_PREFIX}APPENDIX-${stamp}`;
+    const docPath = writeArtifact(`e2e-doc-${stamp}.pdf`, buildPdf(1, `doc ${stamp}`));
+    const appPath = writeArtifact(`e2e-app-${stamp}.pdf`, buildPdf(1, `appendix ${stamp}`));
+
+    await login(page);
+    await gotoAndSettle(page, "/contracts/new");
+    await page.fill('input[name="contractNumber"]', contractNumber);
+    await selectPartner(page, partner.name);
+
+    // No notes field on the create form (round 16).
+    await expect(page.locator('textarea[name="notes"]')).toHaveCount(0);
+
+    // One PDF in each dropzone.
+    await page.setInputFiles('[data-testid="document-dropzone-input"]', docPath);
+    await page.setInputFiles('[data-testid="appendix-dropzone-input"]', appPath);
+    await expect(page.locator("body")).toContainText(`e2e-doc-${stamp}.pdf`);
+    await expect(page.locator("body")).toContainText(`e2e-app-${stamp}.pdf`);
+
+    await clickSafe(page, '[data-testid="contract-form-submit"]');
+    await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 120_000 });
+
+    // Two labelled groups, each with its file.
+    await expect(page.getByTestId("file-group-document")).toBeVisible();
+    await expect(page.getByTestId("file-group-appendix")).toBeVisible();
+    await expect(
+      page.getByTestId("file-group-document").getByText(`e2e-doc-${stamp}.pdf`),
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("file-group-appendix").getByText(`e2e-app-${stamp}.pdf`),
+    ).toBeVisible();
+
+    // A new contract has no notes row.
+    await expect(page.getByText("Ghi chú", { exact: true })).toHaveCount(0);
+
+    // The edit sheet (same form) also has no notes field.
+    await clickSafe(page, '[data-testid="contract-edit-button"]');
+    await expect(page.locator('textarea[name="notes"]')).toHaveCount(0);
+  });
+
   test("uploads several images in one go (PNG + JPG)", async ({ page }) => {
     const contractNumber = `${TEST_PREFIX}UPLOAD-MULTI-${stamp}`;
 

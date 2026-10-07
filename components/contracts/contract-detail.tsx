@@ -73,8 +73,13 @@ export function ContractDetail({
     // The linked partner's name wins; the free-text column is what an older
     // contract still shows (feature round 2).
     ["Đối tác", partnerDisplayName(contract)],
-    ["Ghi chú", contract.notes ?? "—"],
   ];
+
+  // Round 16: the notes row only exists for old contracts that actually have one
+  // — a new contract shows no empty row and no em-dash.
+  if (contract.notes?.trim()) {
+    fields.push(["Ghi chú", contract.notes]);
+  }
 
   return (
     <div className="flex min-h-[calc(100svh-4rem)] flex-col">

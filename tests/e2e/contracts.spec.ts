@@ -118,6 +118,10 @@ test.describe("contract lifecycle", () => {
 
     await clickSafe(page, "#expiryDate");
     await pickDate(page, newExpiry);
+    // The calendar stays open after picking (the DateField popover is controlled),
+    // and would otherwise swallow the first click on the partner combobox.
+    await page.keyboard.press("Escape");
+    await expect(page.locator('[data-slot="calendar"]')).toBeHidden();
     // Change the partner too: the edit path must allow re-pointing a contract.
     await selectPartner(page, partnerB.name);
 
