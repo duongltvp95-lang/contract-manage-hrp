@@ -26,6 +26,7 @@ export type CurrentUser = {
   fullName: string | null;
   organizationId: string;
   role: "admin" | "user";
+  accentColor: string | null;
 };
 
 export type AccessResult =
@@ -39,6 +40,7 @@ type ProfileRow = {
   full_name: string | null;
   role: string;
   is_active: boolean;
+  accent_color: string | null;
 };
 
 /**
@@ -64,7 +66,7 @@ export async function resolveAccess(): Promise<AccessResult> {
   // RLS already limits this to the signed-in user's own row.
   const { data } = await supabase
     .from("profiles")
-    .select("id, organization_id, full_name, role, is_active")
+    .select("id, organization_id, full_name, role, is_active, accent_color")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -85,6 +87,7 @@ export async function resolveAccess(): Promise<AccessResult> {
       fullName: profile.full_name,
       organizationId: profile.organization_id,
       role: profile.role === "admin" ? "admin" : "user",
+      accentColor: profile.accent_color ?? null,
     },
   };
 }

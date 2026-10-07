@@ -72,6 +72,23 @@
     --sidebar-border: 240 3.7% 15.9%;
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
+
+  /* ---------------------------------------------------------------------------
+     Round 12 — accent presets. `blue` is the default (no rule: the :root/.dark
+     values above ARE the blue preset). Only `--primary` / `--primary-foreground`
+     change; `--ring`, `--accent` and the `--sidebar-*` set are neutral /
+     independent in this config and deliberately do not follow the accent.
+     --------------------------------------------------------------------------- */
+  [data-accent="green"] { --primary: 142 71% 35%; --primary-foreground: 0 0% 100%; }
+  .dark[data-accent="green"] { --primary: 142 71% 45%; --primary-foreground: 0 0% 9%; }
+  [data-accent="rose"] { --primary: 347 77% 50%; --primary-foreground: 0 0% 100%; }
+  .dark[data-accent="rose"] { --primary: 347 77% 62%; --primary-foreground: 0 0% 9%; }
+  [data-accent="violet"] { --primary: 262 83% 58%; --primary-foreground: 0 0% 100%; }
+  .dark[data-accent="violet"] { --primary: 262 83% 68%; --primary-foreground: 0 0% 9%; }
+  [data-accent="orange"] { --primary: 24 95% 45%; --primary-foreground: 0 0% 100%; }
+  .dark[data-accent="orange"] { --primary: 24 95% 55%; --primary-foreground: 0 0% 9%; }
+  [data-accent="teal"] { --primary: 173 80% 30%; --primary-foreground: 0 0% 100%; }
+  .dark[data-accent="teal"] { --primary: 173 80% 42%; --primary-foreground: 0 0% 9%; }
 }
 
 @layer base {
