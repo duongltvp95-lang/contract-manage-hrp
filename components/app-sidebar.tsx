@@ -51,6 +51,7 @@ export function AppSidebar() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [accentColor, setAccentColor] = useState<string | null>(null);
   const [backgroundColor, setBackgroundColor] = useState<string | null>(null);
+  const [sidebarColor, setSidebarColor] = useState<string | null>(null);
 
   useEffect(() => {
     const supabase = createClient();
@@ -68,11 +69,11 @@ export function AppSidebar() {
         // Prefer the profile's display name so a change in Settings shows up
         // here too; the email stays the fallback when no name is set. The role
         // controls the "Nhật ký" item — the page redirects non-admins, so the
-        // link must be hidden too. The accent/background colors feed the theme
-        // palette popover (round 13).
+        // link must be hidden too. The accent/background/sidebar colors feed the
+        // theme palette popover (round 13–14).
         const { data: profile } = await supabase
           .from("profiles")
-          .select("full_name, role, accent_color, background_color")
+          .select("full_name, role, accent_color, background_color, sidebar_color")
           .eq("id", user.id)
           .maybeSingle();
 
@@ -81,11 +82,13 @@ export function AppSidebar() {
           role: string;
           accent_color: string | null;
           background_color: string | null;
+          sidebar_color: string | null;
         } | null;
         setAccountLabel(typed?.full_name?.trim() || user.email || null);
         setIsAdmin(typed?.role === "admin");
         setAccentColor(typed?.accent_color ?? null);
         setBackgroundColor(typed?.background_color ?? null);
+        setSidebarColor(typed?.sidebar_color ?? null);
       })
       .catch(() => {
         setAccountLabel(null);
@@ -145,9 +148,11 @@ export function AppSidebar() {
           <ThemePalettePopover
             accent={accentColor}
             background={backgroundColor}
-            onChanged={({ accent, background }) => {
+            sidebar={sidebarColor}
+            onChanged={({ accent, background, sidebar }) => {
               setAccentColor(accent);
               setBackgroundColor(background);
+              setSidebarColor(sidebar);
             }}
           />
         </div>

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/popover";
 import { ACCENT_PRESETS } from "@/lib/theme-accents";
 import { BACKGROUND_PRESETS } from "@/lib/theme-backgrounds";
+import { SIDEBAR_PRESETS } from "@/lib/theme-sidebars";
 import { cn } from "@/lib/utils";
 
 /**
@@ -23,12 +24,19 @@ import { cn } from "@/lib/utils";
  * switcher), so the color is reachable from any page. It replaces the round-12
  * Settings card.
  *
- * Two groups: "Màu chủ đạo" (accent) and "Màu nền" (background). Clicking a
- * swatch updates the profile; clicking the ACTIVE swatch again sends `null` to
- * return to the default. After a save the page refreshes so <html data-accent /
- * data-background> re-render server-side, and the sidebar state is updated via
- * `onChanged` (the sidebar does not re-fetch on `router.refresh()`).
+ * Three groups: "Màu chủ đạo" (accent), "Màu nền" (background) and "Màu
+ * sidebar" (sidebar, round 14). Clicking a swatch updates the profile; clicking
+ * the ACTIVE swatch again sends `null` to return to the default. After a save
+ * the page refreshes so <html data-accent / data-background / data-sidebar>
+ * re-render server-side, and the sidebar state is updated via `onChanged` (the
+ * sidebar does not re-fetch on `router.refresh()`).
  */
+
+/** A color is "dark" when its HSL lightness is below 50% (for the check color). */
+function isDarkHsl(hsl: string): boolean {
+  const lightness = parseFloat(hsl.trim().split(/\s+/)[2]);
+  return lightness < 50;
+}
 
 type SwatchProps = {
   testid: string;
@@ -82,17 +90,24 @@ function Swatch({
 export function ThemePalettePopover({
   accent,
   background,
+  sidebar,
   onChanged,
 }: {
   accent: string | null;
   background: string | null;
-  onChanged: (next: { accent: string | null; background: string | null }) => void;
+  sidebar: string | null;
+  onChanged: (next: {
+    accent: string | null;
+    background: string | null;
+    sidebar: string | null;
+  }) => void;
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
 
   const activeAccent = accent ?? "blue";
   const activeBackground = background ?? "default";
+  const activeSidebar = sidebar ?? "default";
 
   async function save(patch: Record<string, string | null>) {
     setSaving(true);
@@ -108,6 +123,7 @@ export function ThemePalettePopover({
     onChanged({
       accent: result.data.accentColor,
       background: result.data.backgroundColor,
+      sidebar: result.data.sidebarColor,
     });
     router.refresh();
   }
@@ -168,6 +184,29 @@ export function ThemePalettePopover({
                   onClick={() =>
                     save({
                       backgroundColor: preset.key === activeBackground ? null : preset.key,
+                    })
+                  }
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Màu sidebar</p>
+            <div className="grid grid-cols-6 gap-1">
+              {Object.values(SIDEBAR_PRESETS).map((preset) => (
+                <Swatch
+                  key={`sb-${preset.key}`}
+                  testid={`sidebar-swatch-${preset.key}`}
+                  activeTestid="sidebar-swatch-active"
+                  isActive={preset.key === activeSidebar}
+                  color={`hsl(${preset.light.sidebar})`}
+                  label={preset.label}
+                  checkClass={isDarkHsl(preset.light.sidebar) ? "text-white" : "text-foreground"}
+                  disabled={saving}
+                  onClick={() =>
+                    save({
+                      sidebarColor: preset.key === activeSidebar ? null : preset.key,
                     })
                   }
                 />
