@@ -43,12 +43,16 @@ export async function updateProfile(
     );
   }
 
-  // Partial-write rule: `full_name` is always sent by the form; `accent_color`
-  // is only written when the caller actually sent the key (so an omitted key
-  // never clears a value the caller did not mean to touch).
-  const patch: Record<string, string | null> = { full_name: parsed.data.fullName };
-  if ("accentColor" in raw) {
-    patch.accent_color = parsed.data.accentColor ?? null;
+  // Partial-write rule: each column is only written when the caller actually
+  // sent its key, so an omitted key never clears a value it did not mean to
+  // touch. The profile form sends both; the accent picker sends only
+  // `accentColor`.
+  const patch: Record<string, string | null> = {};
+  if ("fullName" in raw) patch.full_name = parsed.data.fullName ?? "";
+  if ("accentColor" in raw) patch.accent_color = parsed.data.accentColor ?? null;
+
+  if (Object.keys(patch).length === 0) {
+    return err("validation", "Không có thay đổi nào để lưu");
   }
 
   const supabase = await createClient();
@@ -79,7 +83,8 @@ export async function updateProfile(
     accent_color: string | null;
   };
 
-  const changed = ["fullName"];
+  const changed: string[] = [];
+  if ("fullName" in raw) changed.push("fullName");
   if ("accentColor" in raw) changed.push("accentColor");
 
   await recordCurrentUserAudit({

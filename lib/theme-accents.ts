@@ -44,7 +44,7 @@ export const ACCENT_PRESETS: Record<AccentKey, AccentPreset> = {
   },
   rose: {
     key: "rose",
-    label: "Hồng",
+    label: "Đỏ thẫm",
     light: { primary: "347 77% 50%", primaryForeground: "0 0% 100%" },
     dark: { primary: "347 77% 62%", primaryForeground: "0 0% 9%" },
   },
@@ -62,7 +62,7 @@ export const ACCENT_PRESETS: Record<AccentKey, AccentPreset> = {
   },
   teal: {
     key: "teal",
-    label: "Ngọc lam",
+    label: "Xanh ngọc",
     light: { primary: "173 80% 30%", primaryForeground: "0 0% 100%" },
     dark: { primary: "173 80% 42%", primaryForeground: "0 0% 9%" },
   },

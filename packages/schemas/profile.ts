@@ -13,12 +13,18 @@ import { AccentKeySchema } from "./theme";
  * clear back to the default.
  */
 
+/**
+ * Round 12: `fullName` is optional (the accent picker updates only
+ * `accentColor`), and `accentColor` is the UI accent preset key, or null to
+ * clear back to the default.
+ */
 export const UpdateProfileSchema = z.object({
   fullName: z
     .string()
     .trim()
     .min(1, "Vui lòng nhập họ tên")
-    .max(100, "Họ tên tối đa 100 ký tự"),
+    .max(100, "Họ tên tối đa 100 ký tự")
+    .optional(),
   accentColor: AccentKeySchema.nullable().optional(),
 });
 

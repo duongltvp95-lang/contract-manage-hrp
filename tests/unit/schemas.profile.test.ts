@@ -20,7 +20,12 @@ describe("UpdateProfileSchema", () => {
   it("rejects an empty or whitespace-only name", () => {
     expect(UpdateProfileSchema.safeParse({ fullName: "" }).success).toBe(false);
     expect(UpdateProfileSchema.safeParse({ fullName: "   " }).success).toBe(false);
-    expect(UpdateProfileSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("allows an empty payload — the service rejects truly empty changes", () => {
+    // Round 12: fullName became optional so the accent picker can update only
+    // `accentColor`. The service (updateProfile) rejects a patch with no keys.
+    expect(UpdateProfileSchema.safeParse({}).success).toBe(true);
   });
 
   it("rejects a name longer than 100 characters", () => {
