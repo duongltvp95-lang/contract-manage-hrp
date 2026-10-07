@@ -107,6 +107,37 @@
   .dark[data-background="cream"] { --background: 30 20% 12%; --card: 30 20% 12%; --popover: 30 20% 12%; }
   [data-background="pink"] { --background: 350 40% 98%; --card: 350 40% 98%; --popover: 350 40% 98%; }
   .dark[data-background="pink"] { --background: 350 30% 12%; --card: 350 30% 12%; --popover: 350 30% 12%; }
+
+  /* ---------------------------------------------------------------------------
+     Round 14 — sidebar presets. `default` is the default (no rule). Only the
+     sidebar surface changes: `--sidebar-background` + `--sidebar-foreground`
+     (which `sidebar.DEFAULT` / `sidebar.foreground` resolve to). The derived
+     hover surface `--sidebar-accent` and the `--sidebar-border` are computed
+     from those two via `color-mix` (toward the foreground), so they adapt to
+     light and dark automatically. `--sidebar-ring` is a fixed blue focus ring
+     and `--sidebar-primary` is unused by the shell — both left untouched.
+     --------------------------------------------------------------------------- */
+  [data-sidebar="gray"] { --sidebar-background: 220 14% 90%; --sidebar-foreground: 220 14% 20%; }
+  .dark[data-sidebar="gray"] { --sidebar-background: 220 14% 16%; --sidebar-foreground: 220 14% 88%; }
+  [data-sidebar="blue"] { --sidebar-background: 210 40% 92%; --sidebar-foreground: 210 40% 20%; }
+  .dark[data-sidebar="blue"] { --sidebar-background: 210 40% 16%; --sidebar-foreground: 210 40% 90%; }
+  [data-sidebar="navy"] { --sidebar-background: 222 47% 20%; --sidebar-foreground: 210 40% 98%; }
+  .dark[data-sidebar="navy"] { --sidebar-background: 222 47% 14%; --sidebar-foreground: 210 40% 98%; }
+  [data-sidebar="violet"] { --sidebar-background: 262 40% 90%; --sidebar-foreground: 262 40% 22%; }
+  .dark[data-sidebar="violet"] { --sidebar-background: 262 40% 16%; --sidebar-foreground: 262 40% 90%; }
+  [data-sidebar="cream"] { --sidebar-background: 48 100% 94%; --sidebar-foreground: 30 20% 25%; }
+  .dark[data-sidebar="cream"] { --sidebar-background: 30 20% 16%; --sidebar-foreground: 40 40% 90%; }
+
+  /* Shared derived hover + border surfaces (auto-adapts to the active preset). */
+  [data-sidebar="gray"],
+  [data-sidebar="blue"],
+  [data-sidebar="navy"],
+  [data-sidebar="violet"],
+  [data-sidebar="cream"] {
+    --sidebar-accent: color-mix(in oklab, hsl(var(--sidebar-background)) 90%, hsl(var(--sidebar-foreground)) 10%);
+    --sidebar-accent-foreground: var(--sidebar-foreground);
+    --sidebar-border: color-mix(in oklab, hsl(var(--sidebar-background)) 82%, hsl(var(--sidebar-foreground)) 18%);
+  }
 }
 
 @layer base {

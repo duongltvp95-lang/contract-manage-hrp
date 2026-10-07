@@ -31,13 +31,14 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  // Server-driven theme: the profile's accent_color / background_color become
-  // `data-accent` / `data-background` on <html>, so the theme is correct before
+  // Server-driven theme: the profile's preset keys become `data-accent` /
+  // `data-background` / `data-sidebar` on <html>, so the theme is correct before
   // the first paint (no client flash). NULL (unauthenticated or default) simply
   // omits the attribute.
   const user = await getCurrentUser();
   const accent = user?.accentColor ?? null;
   const background = user?.backgroundColor ?? null;
+  const sidebar = user?.sidebarColor ?? null;
 
   return (
     <html
@@ -45,6 +46,7 @@ export default async function RootLayout({
       suppressHydrationWarning
       data-accent={accent ?? undefined}
       data-background={background ?? undefined}
+      data-sidebar={sidebar ?? undefined}
     >
       <body className={`${geistSans.className} antialiased`}>
         <ThemeProvider

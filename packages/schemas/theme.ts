@@ -38,3 +38,22 @@ export const BACKGROUND_KEYS = [
 export type BackgroundKey = (typeof BACKGROUND_KEYS)[number];
 
 export const BackgroundKeySchema = z.enum(BACKGROUND_KEYS);
+
+/**
+ * Sidebar preset keys — round 14, part 1.
+ *
+ * `default` matches the project's current `--sidebar-background` /
+ * `--sidebar-foreground` values exactly.
+ */
+export const SIDEBAR_KEYS = [
+  "default",
+  "gray",
+  "blue",
+  "navy",
+  "violet",
+  "cream",
+] as const;
+
+export type SidebarKey = (typeof SIDEBAR_KEYS)[number];
+
+export const SidebarKeySchema = z.enum(SIDEBAR_KEYS);
