@@ -20,3 +20,21 @@ export const ACCENT_KEYS = [
 export type AccentKey = (typeof ACCENT_KEYS)[number];
 
 export const AccentKeySchema = z.enum(ACCENT_KEYS);
+
+/**
+ * Background preset keys — round 13, part 1.
+ *
+ * `default` matches the project's current `--background` values exactly.
+ */
+export const BACKGROUND_KEYS = [
+  "default",
+  "gray",
+  "blue",
+  "green",
+  "cream",
+  "pink",
+] as const;
+
+export type BackgroundKey = (typeof BACKGROUND_KEYS)[number];
+
+export const BackgroundKeySchema = z.enum(BACKGROUND_KEYS);

@@ -89,6 +89,24 @@
   .dark[data-accent="orange"] { --primary: 24 95% 55%; --primary-foreground: 0 0% 9%; }
   [data-accent="teal"] { --primary: 173 80% 30%; --primary-foreground: 0 0% 100%; }
   .dark[data-accent="teal"] { --primary: 173 80% 42%; --primary-foreground: 0 0% 9%; }
+
+  /* ---------------------------------------------------------------------------
+     Round 13 — background presets. `default` is the default (no rule). Only
+     `--background` and its direct derivatives `--card` / `--popover` change
+     (they equal `--background` in the base theme). `--secondary`, `--muted`,
+     `--accent`, `--border`, `--input` and the `--sidebar-*` set are independent
+     in this config and deliberately do not follow the background.
+     --------------------------------------------------------------------------- */
+  [data-background="gray"] { --background: 220 14% 96%; --card: 220 14% 96%; --popover: 220 14% 96%; }
+  .dark[data-background="gray"] { --background: 220 14% 12%; --card: 220 14% 12%; --popover: 220 14% 12%; }
+  [data-background="blue"] { --background: 210 40% 98%; --card: 210 40% 98%; --popover: 210 40% 98%; }
+  .dark[data-background="blue"] { --background: 210 40% 12%; --card: 210 40% 12%; --popover: 210 40% 12%; }
+  [data-background="green"] { --background: 150 30% 97%; --card: 150 30% 97%; --popover: 150 30% 97%; }
+  .dark[data-background="green"] { --background: 150 30% 12%; --card: 150 30% 12%; --popover: 150 30% 12%; }
+  [data-background="cream"] { --background: 48 100% 97%; --card: 48 100% 97%; --popover: 48 100% 97%; }
+  .dark[data-background="cream"] { --background: 30 20% 12%; --card: 30 20% 12%; --popover: 30 20% 12%; }
+  [data-background="pink"] { --background: 350 40% 98%; --card: 350 40% 98%; --popover: 350 40% 98%; }
+  .dark[data-background="pink"] { --background: 350 30% 12%; --card: 350 30% 12%; --popover: 350 30% 12%; }
 }
 
 @layer base {
