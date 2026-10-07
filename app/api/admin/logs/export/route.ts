@@ -15,7 +15,7 @@ import {
   type AuditTargetKind,
 } from "@schemas/audit-log";
 
-import { formatAuditMetadata } from "@/lib/audit-display";
+import { formatAuditSentence } from "@/lib/audit-display";
 import { getCurrentUser } from "@/lib/auth";
 import {
   listAuditLogs,
@@ -138,7 +138,7 @@ function formatTxt(rows: AuditLogRow[]): string {
       row.actorRole,
       actionLabel(row.action),
       targetLabel(row.targetKind, row.targetId),
-      formatAuditMetadata(row.metadata),
+      formatAuditSentence(row),
     ].join(" | "),
   );
   return [header, ...lines].join("\n") + "\n";
@@ -170,7 +170,7 @@ async function formatXlsx(rows: AuditLogRow[]): Promise<Buffer> {
       actorRole: row.actorRole,
       action: actionLabel(row.action),
       target: targetLabel(row.targetKind, row.targetId),
-      metadata: formatAuditMetadata(row.metadata),
+      metadata: formatAuditSentence(row),
     });
   }
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;

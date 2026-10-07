@@ -14,7 +14,7 @@ import {
 import { getCurrentUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateTemporaryPassword } from "@/lib/temp-password";
-import { recordAudit } from "@/lib/services/audit-logs";
+import { recordAudit, recordCurrentUserAudit } from "@/lib/services/audit-logs";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
@@ -432,6 +432,17 @@ export async function createUser(
     is_active: boolean;
     created_at: string;
   };
+
+  // --- audit (round 9) ------------------------------------------------------
+  // The actor is the signed-in admin; `requireAdmin()` already ran at the top.
+  // A log write that fails is swallowed — creating the user must not be undone
+  // because the audit table is momentarily unhappy.
+  await recordCurrentUserAudit({
+    action: "create_user",
+    targetKind: "user",
+    targetId: row.id,
+    metadata: { email, fullName: row.full_name ?? fullName, role: row.role },
+  });
 
   return ok({
     user: {

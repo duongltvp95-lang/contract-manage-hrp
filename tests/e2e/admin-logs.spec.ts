@@ -151,8 +151,9 @@ test.describe("/admin/logs (round 3, part 1)", () => {
 });
 
 /**
- * Round 8, part 2 — business actions are localised in the table, the filter and
- * the export.
+ * Round 8, part 2 + round 9, part 2 — business actions are localised in the
+ * table, the filter and the export, and the detail column is a natural
+ * Vietnamese sentence with the actor's name (not a UUID).
  */
 test.describe("business action labels (round 8, part 2)", () => {
   const stamp = runId();
@@ -190,12 +191,19 @@ test.describe("business action labels (round 8, part 2)", () => {
     await clickSafe(page, '[data-testid="contract-form-submit"]');
     await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 60_000 });
 
-    // 3. The audit table shows both actions, localised.
+    // 3. The audit table shows both actions, localised, with the actor's NAME
+    //    and natural sentences in the detail column.
     await gotoAndSettle(page, "/admin/logs");
-    await expect(page.getByTestId("logs-table")).toContainText("Thêm đối tác");
-    await expect(page.getByTestId("logs-table")).toContainText("Thêm hợp đồng");
-    await expect(page.getByTestId("logs-table")).toContainText(partnerName);
-    await expect(page.getByTestId("logs-table")).toContainText(contractNumber);
+    const logsTable = page.getByTestId("logs-table");
+    await expect(logsTable).toContainText("Thêm đối tác");
+    await expect(logsTable).toContainText("Thêm hợp đồng");
+    // Actor name, not a truncated UUID.
+    await expect(logsTable).toContainText("E2E Wave 2 Admin");
+    // Natural sentences.
+    await expect(logsTable).toContainText(`đã thêm đối tác “${partnerName}”`);
+    await expect(logsTable).toContainText(
+      `đã thêm hợp đồng “${contractNumber}” với đối tác “${partnerName}”`,
+    );
 
     // 4. Filter by "Thêm đối tác": only the partner row remains.
     await clickSafe(page, '[data-testid="logs-filter-action"]');
@@ -207,7 +215,7 @@ test.describe("business action labels (round 8, part 2)", () => {
     await expect(table).toContainText(partnerName);
     await expect(table).not.toContainText("Thêm hợp đồng");
 
-    // 5. The export carries the same Vietnamese label for the new action.
+    // 5. The export carries the same Vietnamese label AND the sentence.
     const response = await page.request.get(
       "/api/admin/logs/export?format=txt&action=create_partner",
     );
@@ -215,5 +223,6 @@ test.describe("business action labels (round 8, part 2)", () => {
     const body = await response.text();
     expect(body).toContain("Thêm đối tác");
     expect(body).not.toContain("Tạo đối tác");
+    expect(body).toContain(`đã thêm đối tác “${partnerName}”`);
   });
 });

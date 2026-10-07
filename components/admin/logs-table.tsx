@@ -7,19 +7,16 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatAuditMetadata } from "@/lib/audit-display";
+import { formatAuditSentence } from "@/lib/audit-display";
 import type { AuditLogRow } from "@/lib/services/audit-logs";
 
 /**
- * Audit log table — round 3, part 1; round 8, part 2.
+ * Audit log table — round 3, part 1; round 8, part 2; round 9, part 2.
  *
- * The actor's email is not stored on the row (only the profile id), so the
- * table falls back to a truncated id. The admin-only join lives in
- * `getActorEmail()` in a future round; for now, the row carries what it has.
- *
- * Action and target kind are localised through the shared label maps, and
- * `metadata` is rendered as a compact summary (`formatAuditMetadata`) rather
- * than a raw JSON blob.
+ * The actor is shown by name (`actorName`, resolved by `listAuditLogs`) rather
+ * than a truncated UUID; a missing name becomes "[Người dùng đã xoá]". The
+ * detail column is a natural Vietnamese sentence (`formatAuditSentence`) instead
+ * of a metadata key/value summary.
  */
 export function LogsTable({ rows }: { rows: AuditLogRow[] }) {
   if (rows.length === 0) {
@@ -53,8 +50,8 @@ export function LogsTable({ rows }: { rows: AuditLogRow[] }) {
                 {formatDateTime(row.createdAt)}
               </td>
               <td className="px-3 py-2">
-                <span className="font-mono text-xs" title={row.actorId}>
-                  {row.actorId.slice(0, 8)}…
+                <span className="text-sm" title={row.actorId}>
+                  {row.actorName ?? "[Người dùng đã xoá]"}
                 </span>
                 <Badge variant="outline" className="ml-2">
                   {row.actorRole}
@@ -70,8 +67,8 @@ export function LogsTable({ rows }: { rows: AuditLogRow[] }) {
                 </span>
               </td>
               <td className="px-3 py-2">
-                <span className="break-all text-xs">
-                  {formatAuditMetadata(row.metadata)}
+                <span className="break-words text-xs">
+                  {formatAuditSentence(row)}
                 </span>
               </td>
             </tr>
