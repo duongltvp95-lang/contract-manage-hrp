@@ -1,4 +1,4 @@
-import { CalendarClock, FileText, FileX } from "lucide-react";
+import { AlertCircle, Clock, FileText } from "lucide-react";
 import { Suspense } from "react";
 
 import { ExpiringContracts } from "@/components/dashboard/expiring-contracts";
@@ -67,7 +67,7 @@ async function DashboardContent() {
           title="Tổng hợp đồng"
           value={metrics.ok ? metrics.data.total : "—"}
           hint="Không tính hợp đồng đã lưu trữ"
-          icon={<FileText className="h-4 w-4" />}
+          icon={<FileText className="h-6 w-6" />}
         />
         <MetricCard
           testId="metric-expiring-soon"
@@ -75,7 +75,7 @@ async function DashboardContent() {
           value={metrics.ok ? metrics.data.expiringSoon : "—"}
           hint={`Từ ${window.from} đến ${window.to}`}
           tone="warning"
-          icon={<CalendarClock className="h-4 w-4" />}
+          icon={<Clock className="h-6 w-6" />}
         />
         <MetricCard
           testId="metric-expired"
@@ -83,7 +83,7 @@ async function DashboardContent() {
           value={metrics.ok ? metrics.data.expired : "—"}
           hint={`Ngày hết hạn trước ${window.from}`}
           tone="danger"
-          icon={<FileX className="h-4 w-4" />}
+          icon={<AlertCircle className="h-6 w-6" />}
         />
       </div>
 

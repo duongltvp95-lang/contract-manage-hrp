@@ -31,12 +31,12 @@ export function LogsTable({ rows }: { rows: AuditLogRow[] }) {
     <div className="rounded-xl shadow-sm">
       <table className="w-full text-sm" data-testid="logs-table">
         <thead>
-          <tr className="border-b bg-muted/50 text-left">
-            <th className="px-3 py-2 font-medium">Thời gian</th>
-            <th className="px-3 py-2 font-medium">Người thực hiện</th>
-            <th className="px-3 py-2 font-medium">Hành động</th>
-            <th className="px-3 py-2 font-medium">Đối tượng</th>
-            <th className="px-3 py-2 font-medium">Chi tiết</th>
+          <tr className="border-b bg-gray-50 text-left dark:bg-gray-900">
+            <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Thời gian</th>
+            <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Người thực hiện</th>
+            <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Hành động</th>
+            <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Đối tượng</th>
+            <th className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Chi tiết</th>
           </tr>
         </thead>
         <tbody>
@@ -44,7 +44,7 @@ export function LogsTable({ rows }: { rows: AuditLogRow[] }) {
             <tr
               key={row.id}
               data-testid="logs-row"
-              className="border-b last:border-0"
+              className="border-b transition-colors last:border-0 hover:bg-gray-50 dark:hover:bg-gray-900"
             >
               <td className="px-3 py-2 font-mono text-xs">
                 {formatDateTime(row.createdAt)}

@@ -33,7 +33,12 @@ export function CompanyBadges({ companies }: { companies: string[] }) {
   return (
     <div className="flex flex-wrap gap-1">
       {companies.map((name) => (
-        <Badge key={name} variant="secondary" data-testid="partner-company-badge">
+        <Badge
+          key={name}
+          variant="secondary"
+          data-testid="partner-company-badge"
+          className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+        >
           {name}
         </Badge>
       ))}

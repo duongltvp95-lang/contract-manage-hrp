@@ -2,7 +2,6 @@ import Link from "next/link";
 
 import { CompanyBadges } from "@/components/partners/partner-badges";
 import { EmptyState } from "@/components/shared/empty-state";
-import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -13,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import { formatDateOnly, formatExpiryHint, daysUntil } from "@/lib/format";
 import type { DashboardContractRow } from "@/lib/services/dashboard";
+import { cn } from "@/lib/utils";
 
 /**
  * "Expiring Contracts" — plan sections 67, 69.
@@ -75,9 +75,16 @@ export function ExpiringContracts({ contracts }: { contracts: DashboardContractR
                   {formatDateOnly(contract.expiry_date)}
                 </TableCell>
                 <TableCell className="whitespace-nowrap">
-                  <Badge variant={urgent ? "destructive" : "secondary"}>
+                  <span
+                    className={cn(
+                      "inline-flex items-center rounded-full px-3 py-1 text-xs font-medium shadow-sm",
+                      urgent
+                        ? "bg-red-500 text-white"
+                        : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300",
+                    )}
+                  >
                     {formatExpiryHint(contract.expiry_date)}
-                  </Badge>
+                  </span>
                 </TableCell>
               </TableRow>
             );

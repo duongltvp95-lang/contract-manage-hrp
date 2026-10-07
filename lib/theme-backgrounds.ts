@@ -32,7 +32,7 @@ export const BACKGROUND_PRESETS: Record<BackgroundKey, BackgroundPreset> = {
   default: {
     key: "default",
     label: "Mặc định",
-    light: { background: "0 0% 100%" },
+    light: { background: "210 40% 98%" },
     dark: { background: "0 0% 3.9%" },
   },
   gray: {

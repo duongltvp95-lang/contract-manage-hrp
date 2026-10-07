@@ -31,7 +31,7 @@ describe("BACKGROUND_PRESETS", () => {
   it("copies the project's CURRENT --background values exactly for the default preset", () => {
     // Hardcoded constants (not read from the CSS file): the current
     // `app/globals.css` :root / .dark `--background`.
-    expect(BACKGROUND_PRESETS.default.light.background).toBe("0 0% 100%");
+    expect(BACKGROUND_PRESETS.default.light.background).toBe("210 40% 98%");
     expect(BACKGROUND_PRESETS.default.dark.background).toBe("0 0% 3.9%");
   });
 

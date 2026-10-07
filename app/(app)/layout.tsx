@@ -17,7 +17,7 @@ export default function AppLayout({
   return (
     <SidebarProvider>
       <AppSidebar />
-      <main className="flex-1 bg-slate-50 dark:bg-slate-950">
+      <main className="flex-1 bg-background">
         <SidebarTrigger />
         {children}
       </main>
