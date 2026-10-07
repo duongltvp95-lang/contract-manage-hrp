@@ -1,8 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import type { CreateContractInput, UpdateContractInput } from "@schemas/contract";
+import type { AuditAction } from "@schemas/audit-log";
 
 import { resolveAccess } from "@/lib/auth";
+import { listAuditLogs } from "@/lib/services/audit-logs";
 import { archiveContract, createContract, updateContract } from "@/lib/services/contracts";
 import { completeUpload } from "@/lib/services/files";
 import {
@@ -97,6 +99,16 @@ export async function POST(request: NextRequest) {
       );
     case "update_profile":
       return result(await updateProfile(payload, access.user.id));
+    case "list_logs":
+      return result(
+        await listAuditLogs(organizationId, {
+          page: 1,
+          pageSize: 200,
+          ...(typeof payload.action === "string"
+            ? { action: payload.action as AuditAction }
+            : {}),
+        }),
+      );
     default:
       return NextResponse.json(
         { error: "unknown action", code: "unknown_action" },

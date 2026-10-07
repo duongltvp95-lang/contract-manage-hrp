@@ -38,6 +38,7 @@ export type AuditLogRow = {
   organizationId: string;
   actorId: string;
   actorRole: "admin" | "user";
+  actorName: string | null;
   action: AuditAction;
   targetKind: AuditTargetKind;
   targetId: string | null;
@@ -63,6 +64,8 @@ function rowFromDb(row: AuditRowDb): AuditLogRow {
     organizationId: row.organization_id,
     actorId: row.actor_id,
     actorRole: row.actor_role === "admin" ? "admin" : "user",
+    // Filled in by `listAuditLogs` after a single profiles lookup.
+    actorName: null,
     action: row.action as AuditAction,
     targetKind: row.target_kind as AuditTargetKind,
     targetId: row.target_id,
@@ -220,7 +223,38 @@ export async function listAuditLogs(
   }
 
   const rows = (data ?? []) as AuditRowDb[];
-  return ok({ rows: rows.map(rowFromDb) });
+
+  // Resolve every distinct actor to its display name in ONE query. A profile
+  // that no longer exists, or the system tombstone that a hard-deleted actor is
+  // re-pointed to (round 4), resolves to `null` — the UI then shows its own
+  // "[Người dùng đã xoá]" placeholder.
+  const actorNames = new Map<string, string | null>();
+  const actorIds = [...new Set(rows.map((row) => row.actor_id))];
+
+  if (actorIds.length > 0) {
+    const { data: profiles } = await service
+      .from("profiles")
+      .select("id, full_name, is_tombstone")
+      .in("id", actorIds);
+
+    for (const profile of (profiles ?? []) as {
+      id: string;
+      full_name: string | null;
+      is_tombstone: boolean | null;
+    }[]) {
+      actorNames.set(
+        profile.id,
+        profile.is_tombstone ? null : (profile.full_name ?? null),
+      );
+    }
+  }
+
+  return ok({
+    rows: rows.map((row) => ({
+      ...rowFromDb(row),
+      actorName: actorNames.get(row.actor_id) ?? null,
+    })),
+  });
 }
 
 /**

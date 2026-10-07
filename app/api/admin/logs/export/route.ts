@@ -134,7 +134,7 @@ function formatTxt(rows: AuditLogRow[]): string {
   const lines = rows.map((row) =>
     [
       row.createdAt,
-      row.actorId,
+      row.actorName ?? "[Người dùng đã xoá]",
       row.actorRole,
       actionLabel(row.action),
       targetLabel(row.targetKind, row.targetId),
@@ -166,7 +166,7 @@ async function formatXlsx(rows: AuditLogRow[]): Promise<Buffer> {
   for (const row of rows) {
     sheet.addRow({
       createdAt: row.createdAt,
-      actorId: row.actorId,
+      actorId: row.actorName ?? "[Người dùng đã xoá]",
       actorRole: row.actorRole,
       action: actionLabel(row.action),
       target: targetLabel(row.targetKind, row.targetId),

@@ -1,10 +1,15 @@
 /**
- * Audit-log display rules — feature round 8, part 2.
+ * Audit-log display rules — feature round 8, part 2; round 9, part 1.
  *
  * Pure and framework-free: the table (client) and the export route (server)
  * both use the same rules, so "how is this metadata shown?" has exactly one
  * answer. The goal is a compact, human-readable line — never a raw JSON blob.
  */
+
+import {
+  AUDIT_ACTION_LABELS,
+  type AuditAction,
+} from "@schemas/audit-log";
 
 import { formatBytes } from "@/lib/format";
 
@@ -94,4 +99,131 @@ function compactValue(value: unknown): string {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+// ---------------------------------------------------------------------------
+// Round 9, part 1 — natural Vietnamese sentences
+// ---------------------------------------------------------------------------
+
+/** The subset of an audit row the sentence formatter needs. */
+export type AuditSentenceRow = {
+  actorName: string | null;
+  action: AuditAction;
+  metadata: Record<string, unknown>;
+};
+
+/**
+ * Turns one audit row into a natural Vietnamese sentence of the form
+ * "<actor> đã <động từ> <tân ngữ>".
+ *
+ * A missing metadata field simply drops that clause — the sentence never breaks
+ * and never falls back to a raw JSON dump. A missing actor name becomes
+ * "Một người dùng" (chosen over "Người dùng đã xoá đã …" to avoid the doubled
+ * "đã … đã").
+ */
+export function formatAuditSentence(row: AuditSentenceRow): string {
+  const actor = row.actorName?.trim() || "Một người dùng";
+  const meta = row.metadata ?? {};
+  return `${actor} đã ${sentenceFor(row.action, meta)}`;
+}
+
+function sentenceFor(action: AuditAction, meta: Record<string, unknown>): string {
+  switch (action) {
+    case "create_partner":
+      return quoted("thêm đối tác", text(meta.name));
+    case "update_partner":
+      return quoted("sửa đối tác", text(meta.name));
+    case "import_partners":
+      return importPartners(meta);
+    case "create_contract":
+      return createContract(meta);
+    case "update_contract":
+      return quoted("sửa hợp đồng", text(meta.contractNumber));
+    case "archive_contract":
+      return quoted("lưu trữ hợp đồng", text(meta.contractNumber));
+    case "upload_file":
+      return uploadFile(meta);
+    case "update_profile":
+      return "cập nhật hồ sơ";
+    case "create_user":
+      return quoted("thêm người dùng", text(meta.fullName) || text(meta.name));
+    case "update_user_role":
+      return updateUserRole(meta);
+    case "set_active_user":
+      return setActiveUser(meta);
+    case "delete_user":
+      return quoted("xoá người dùng", text(meta.fullName) || text(meta.name));
+    case "export_logs":
+      return "xuất nhật ký";
+    default:
+      return `thực hiện “${AUDIT_ACTION_LABELS[action] ?? action}”`;
+  }
+}
+
+/** `thêm đối tác` / `thêm đối tác “X”` — the quote is dropped when there is no value. */
+function quoted(verb: string, value: string): string {
+  return value ? `${verb} “${value}”` : verb;
+}
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function importPartners(meta: Record<string, unknown>): string {
+  const created = typeof meta.created === "number" ? meta.created : null;
+  const failed = typeof meta.failed === "number" ? meta.failed : null;
+
+  if (created === null || failed === null) {
+    return "nhập đối tác từ Excel";
+  }
+
+  return `nhập đối tác từ Excel: ${created} thành công, ${failed} lỗi`;
+}
+
+function createContract(meta: Record<string, unknown>): string {
+  const number = text(meta.contractNumber);
+  const partner = text(meta.partnerName);
+
+  const base = number ? `thêm hợp đồng “${number}”` : "thêm hợp đồng";
+  return partner ? `${base} với đối tác “${partner}”` : base;
+}
+
+function uploadFile(meta: Record<string, unknown>): string {
+  const filename = text(meta.filename);
+  const base = filename ? `tải tệp lên “${filename}”` : "tải tệp lên";
+
+  if (typeof meta.size !== "number") return base;
+  return `${base} (${formatSize(meta.size)})`;
+}
+
+function updateUserRole(meta: Record<string, unknown>): string {
+  const to = text(meta.to);
+  return to ? `đổi vai trò thành “${to}”` : "đổi vai trò";
+}
+
+function setActiveUser(meta: Record<string, unknown>): string {
+  if (meta.to === true) return "bật người dùng";
+  if (meta.to === false) return "vô hiệu hoá người dùng";
+  return "đổi trạng thái người dùng";
+}
+
+/**
+ * Vietnamese byte size with a comma decimal separator (matching the round 9
+ * spec: "878 B" / "1,2 KB"). Kept separate from `formatBytes`, which the upload
+ * UI uses with a dot and whole-unit rounding.
+ */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+
+  const units = ["KB", "MB", "GB"];
+  let value = bytes;
+  for (const unit of units) {
+    value /= 1024;
+    if (value < 1024 || unit === "GB") {
+      const fixed = value.toFixed(1).replace(".", ",").replace(/,0$/, "");
+      return `${fixed} ${unit}`;
+    }
+  }
+
+  return `${bytes} B`;
 }
