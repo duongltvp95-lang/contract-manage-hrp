@@ -36,7 +36,7 @@ export function ExpiringContracts({ contracts }: { contracts: DashboardContractR
   }
 
   return (
-    <div className="rounded-md border">
+    <div className="rounded-xl shadow-sm">
       <Table data-testid="expiring-contracts-table">
         <TableHeader>
           <TableRow>

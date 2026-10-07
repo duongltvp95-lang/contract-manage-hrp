@@ -130,6 +130,7 @@ export function AppSidebar() {
                     <SidebarMenuButton
                       asChild
                       isActive={pathname.startsWith(item.url)}
+                      className="rounded-lg transition-colors hover:bg-gray-100 data-[active=true]:bg-primary/10 data-[active=true]:text-primary data-[active=true]:font-semibold data-[active=true]:hover:bg-primary/10"
                     >
                       <Link href={item.url}>
                         <item.icon />

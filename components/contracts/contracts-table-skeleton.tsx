@@ -11,7 +11,7 @@ import {
 /** Table placeholder while the server list streams in (plan section 81). */
 export function ContractsTableSkeleton({ rows = 8 }: { rows?: number }) {
   return (
-    <div className="rounded-md border">
+    <div className="rounded-xl shadow-sm">
       <Table>
         <TableHeader>
           <TableRow>

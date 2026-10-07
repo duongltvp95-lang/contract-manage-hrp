@@ -48,7 +48,7 @@ export function PartnersTable({ rows }: { rows: PartnerWithCount[] }) {
   }
 
   return (
-    <div className="rounded-md border">
+    <div className="rounded-xl shadow-sm">
       <Table>
         <TableHeader>
           <TableRow>

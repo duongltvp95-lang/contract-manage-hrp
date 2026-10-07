@@ -28,7 +28,7 @@ export function LogsTable({ rows }: { rows: AuditLogRow[] }) {
   }
 
   return (
-    <div className="rounded-md border">
+    <div className="rounded-xl shadow-sm">
       <table className="w-full text-sm" data-testid="logs-table">
         <thead>
           <tr className="border-b bg-muted/50 text-left">

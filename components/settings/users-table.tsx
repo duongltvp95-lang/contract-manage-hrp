@@ -45,7 +45,7 @@ export function UsersTable({
   }
 
   return (
-    <div className="rounded-md border">
+    <div className="rounded-xl shadow-sm">
       <Table>
         <TableHeader>
           <TableRow>
