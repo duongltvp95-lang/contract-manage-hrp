@@ -7,6 +7,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { ThemeSwitcher } from "@/components/theme-switcher";
+import { ThemePalettePopover } from "@/components/theme-palette-popover";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -48,6 +49,8 @@ export function AppSidebar() {
   const pathname = usePathname();
   const [accountLabel, setAccountLabel] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [accentColor, setAccentColor] = useState<string | null>(null);
+  const [backgroundColor, setBackgroundColor] = useState<string | null>(null);
 
   useEffect(() => {
     const supabase = createClient();
@@ -65,16 +68,24 @@ export function AppSidebar() {
         // Prefer the profile's display name so a change in Settings shows up
         // here too; the email stays the fallback when no name is set. The role
         // controls the "Nhật ký" item — the page redirects non-admins, so the
-        // link must be hidden too.
+        // link must be hidden too. The accent/background colors feed the theme
+        // palette popover (round 13).
         const { data: profile } = await supabase
           .from("profiles")
-          .select("full_name, role")
+          .select("full_name, role, accent_color, background_color")
           .eq("id", user.id)
           .maybeSingle();
 
-        const typed = profile as { full_name: string | null; role: string } | null;
+        const typed = profile as {
+          full_name: string | null;
+          role: string;
+          accent_color: string | null;
+          background_color: string | null;
+        } | null;
         setAccountLabel(typed?.full_name?.trim() || user.email || null);
         setIsAdmin(typed?.role === "admin");
+        setAccentColor(typed?.accent_color ?? null);
+        setBackgroundColor(typed?.background_color ?? null);
       })
       .catch(() => {
         setAccountLabel(null);
@@ -129,8 +140,16 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <div className="flex items-center px-1 pb-1">
+        <div className="flex items-center gap-1 px-1 pb-1">
           <ThemeSwitcher />
+          <ThemePalettePopover
+            accent={accentColor}
+            background={backgroundColor}
+            onChanged={({ accent, background }) => {
+              setAccentColor(accent);
+              setBackgroundColor(background);
+            }}
+          />
         </div>
         <SidebarMenu>
           <SidebarMenuItem>

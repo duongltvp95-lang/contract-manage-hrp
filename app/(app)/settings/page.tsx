@@ -4,7 +4,6 @@ import { Suspense } from "react";
 
 import { LogoutButton } from "@/components/logout-button";
 import { AddUserDialog } from "@/components/settings/add-user-dialog";
-import { AccentPicker } from "@/components/settings/accent-picker";
 import { ProfileForm } from "@/components/settings/profile-form";
 import { UsersTable } from "@/components/settings/users-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -74,18 +73,6 @@ async function SettingsContent() {
             email={user.email}
             role={user.role}
           />
-        </CardContent>
-      </Card>
-
-      <Card data-testid="accent-section">
-        <CardHeader>
-          <CardTitle>Màu giao diện</CardTitle>
-          <CardDescription>
-            Đổi màu chủ đạo của giao diện. Áp dụng cho toàn bộ ứng dụng.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <AccentPicker currentAccent={user.accentColor ?? null} />
         </CardContent>
       </Card>
 
