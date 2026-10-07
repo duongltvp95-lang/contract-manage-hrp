@@ -53,6 +53,8 @@ test.describe("/admin/logs (round 3, part 1)", () => {
   test("the sidebar shows 'Nhật ký' for an admin", async ({ page }) => {
     await login(page);
     await expect(page.getByRole("link", { name: "Nhật ký" })).toBeVisible();
+    // Round 11 — the HRP logo sits at the top of the sidebar.
+    await expect(page.getByTestId("app-logo")).toBeVisible();
   });
 
   test("a non-admin cannot reach /admin/logs", async () => {

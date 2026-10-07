@@ -1,6 +1,7 @@
 "use client";
 
 import { Building2, ChevronUp, FileText, LayoutDashboard, ScrollText, Settings, User2 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -18,7 +19,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -90,9 +91,22 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon">
+      <SidebarHeader className="flex-row items-center gap-2 px-3 py-2">
+        <Image
+          src="/hrp-logo.webp"
+          alt="HRP"
+          width={36}
+          height={36}
+          priority
+          data-testid="app-logo"
+          className="h-9 w-9 shrink-0 rounded-md bg-white object-contain group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8"
+        />
+        <span className="truncate text-sm font-semibold text-sidebar-foreground group-data-[collapsible=icon]:hidden">
+          Quản lý hợp đồng
+        </span>
+      </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Quản lý hợp đồng</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {items
