@@ -1,6 +1,6 @@
 import "server-only";
 
-import { MAX_UPLOAD_SIZE_BYTES, MAX_UPLOAD_SIZE_MB, PresignUploadSchema } from "@schemas/file";
+import { MAX_UPLOAD_SIZE_BYTES, MAX_UPLOAD_SIZE_MB, PresignUploadSchema, type FileKind } from "@schemas/file";
 
 import { buildObjectKey, isObjectKeyFor } from "@/lib/r2/keys";
 import { deleteObject, headObject } from "@/lib/r2/objects";
@@ -36,10 +36,11 @@ export type ContractFileRow = {
   checksum: string | null;
   created_by: string | null;
   created_at: string;
+  kind: FileKind;
 };
 
 export const CONTRACT_FILE_COLUMNS =
-  "id, organization_id, contract_id, storage_provider, bucket, object_key, original_filename, mime_type, file_size, checksum, created_by, created_at";
+  "id, organization_id, contract_id, storage_provider, bucket, object_key, original_filename, mime_type, file_size, checksum, created_by, created_at, kind";
 
 export type FileAccess = {
   contractId: string;
@@ -107,6 +108,7 @@ export type CreateUploadRequestInput = {
   filename: string;
   mimeType: string;
   fileSize: number;
+  kind?: FileKind;
 };
 
 /**
@@ -167,6 +169,7 @@ export type CompleteUploadInput = {
   filename: string;
   mimeType: string;
   fileSize: number;
+  kind?: FileKind;
 };
 
 /**
@@ -241,6 +244,7 @@ export async function completeUpload(
       file_size: actualSize > 0 ? actualSize : input.fileSize,
       checksum: head.etag,
       created_by: userId,
+      kind: input.kind ?? "document",
     })
     .select(CONTRACT_FILE_COLUMNS)
     .single();

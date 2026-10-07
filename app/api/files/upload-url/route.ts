@@ -42,6 +42,7 @@ export async function POST(request: NextRequest) {
     filename: parsed.data.filename,
     mimeType: parsed.data.mimeType,
     fileSize: parsed.data.fileSize,
+    kind: parsed.data.kind,
   });
 
   if (!result.ok) {

@@ -4,6 +4,7 @@ import {
   ALLOWED_MIME_TYPES,
   CompleteUploadSchema,
   ContractFileSchema,
+  FILE_KINDS,
   MAX_UPLOAD_SIZE_BYTES,
   PresignUploadSchema,
   UploadUrlRequestSchema,
@@ -73,6 +74,66 @@ describe("ContractFileSchema", () => {
     expect(
       ContractFileSchema.safeParse({ ...base, fileSize: MAX_UPLOAD_SIZE_BYTES + 1 })
         .success,
+    ).toBe(false);
+  });
+});
+
+describe("ContractFileSchema.kind (round 16)", () => {
+  it("exposes exactly document + appendix", () => {
+    expect([...FILE_KINDS]).toEqual(["document", "appendix"]);
+  });
+
+  it("accepts a PDF appendix", () => {
+    expect(
+      ContractFileSchema.safeParse({
+        filename: "phu-luc.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+        kind: "appendix",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects an image appendix (appendix must be PDF)", () => {
+    for (const mimeType of ["image/jpeg", "image/png"] as const) {
+      const result = ContractFileSchema.safeParse({
+        filename: "phu-luc.jpg",
+        mimeType,
+        fileSize: 1024,
+        kind: "appendix",
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(
+          result.error.issues.some((issue) =>
+            issue.message.includes("Phụ lục chỉ chấp nhận file PDF"),
+          ),
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("accepts a document of any allowed type, and defaults to document when kind is omitted", () => {
+    for (const mimeType of ALLOWED_MIME_TYPES) {
+      expect(
+        ContractFileSchema.safeParse({ filename: "a", mimeType, fileSize: 10, kind: "document" })
+          .success,
+      ).toBe(true);
+      // Omitted kind → document (no appendix constraint).
+      expect(
+        ContractFileSchema.safeParse({ filename: "a", mimeType, fileSize: 10 }).success,
+      ).toBe(true);
+    }
+  });
+
+  it("rejects an unknown kind", () => {
+    expect(
+      ContractFileSchema.safeParse({
+        filename: "a.pdf",
+        mimeType: "application/pdf",
+        fileSize: 10,
+        kind: "attachment",
+      }).success,
     ).toBe(false);
   });
 });

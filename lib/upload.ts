@@ -6,6 +6,8 @@
  * this from a Client Component.
  */
 
+import type { FileKind } from "@schemas/file";
+
 export type PendingFileStatus = "pending" | "uploading" | "done" | "error";
 
 export type PendingFile = {
@@ -16,6 +18,8 @@ export type PendingFile = {
   /** 0-100 */
   progress: number;
   error?: string;
+  /** Round 16 — main document vs PDF appendix. */
+  kind: FileKind;
   /** Set once the server has reserved the object key. */
   fileId?: string;
   objectKey?: string;
@@ -71,11 +75,12 @@ export function putFileWithProgress(
   });
 }
 
-export function newPendingFile(file: File): PendingFile {
+export function newPendingFile(file: File, kind: FileKind = "document"): PendingFile {
   return {
     id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
     file,
     status: "pending",
     progress: 0,
+    kind,
   };
 }

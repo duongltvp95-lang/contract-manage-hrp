@@ -73,7 +73,6 @@ test.describe("contract lifecycle", () => {
     // is gone from the create form.
     await selectPartner(page, partnerA.name);
     await page.fill('input[name="durationText"]', "12 tháng");
-    await page.fill('textarea[name="notes"]', "Tạo bởi bộ kiểm thử tự động");
 
     await clickSafe(page, "#expiryDate");
     await pickDate(page, expiry);

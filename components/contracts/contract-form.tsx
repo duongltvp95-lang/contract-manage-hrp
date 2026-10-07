@@ -12,6 +12,7 @@ import {
   getContractWarnings,
   type CreateContractInput,
 } from "@schemas/contract";
+import type { FileKind } from "@schemas/file";
 
 import {
   completeUploadAction,
@@ -43,7 +44,6 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { isLegacyPartnerText } from "@/lib/partner-display";
 import type { ContractRow } from "@/lib/services/contracts";
 import type { PartnerRow } from "@/lib/services/partners";
@@ -205,6 +205,14 @@ export function ContractForm({
     );
   }
 
+  /** Replaces the files of one kind with the list a dropzone just produced. */
+  function mergeFiles(kind: FileKind, next: PendingFile[]) {
+    setFiles((current) => [
+      ...current.filter((item) => item.kind !== kind),
+      ...next,
+    ]);
+  }
+
   async function uploadOne(contractId: string, pending: PendingFile) {
     patchFile(pending.id, { status: "uploading", progress: 0, error: undefined });
 
@@ -217,6 +225,7 @@ export function ContractForm({
         filename: pending.file.name,
         mimeType: pending.file.type,
         fileSize: pending.file.size,
+        kind: pending.kind,
       }),
     });
 
@@ -249,6 +258,7 @@ export function ContractForm({
       filename: pending.file.name,
       mimeType: pending.file.type,
       fileSize: pending.file.size,
+      kind: pending.kind,
     });
 
     if (!persisted.ok) {
@@ -457,20 +467,6 @@ export function ContractForm({
           </FormItem>
         )}
       />
-
-      <FormField
-        control={form.control}
-        name="notes"
-        render={({ field }) => (
-          <FormItem className={isEdit ? undefined : "md:col-span-2"}>
-            <FormLabel>Ghi chú</FormLabel>
-            <FormControl>
-              <Textarea rows={4} disabled={busy} {...field} />
-            </FormControl>
-            <FormMessage />
-          </FormItem>
-        )}
-      />
     </div>
   );
 
@@ -506,22 +502,47 @@ export function ContractForm({
 
         {/* Edit never touches documents — that arrives with the M8 work. */}
         {!isEdit && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Tài liệu</CardTitle>
-              <CardDescription>
-                PDF, JPG hoặc PNG. Có thể tải lên nhiều tệp cho một hợp đồng.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <UploadDropzone
-                files={files}
-                onFilesChange={setFiles}
-                maxUploadSizeMb={maxUploadSizeMb}
-                disabled={busy}
-              />
-            </CardContent>
-          </Card>
+          <>
+            <Card>
+              <CardHeader>
+                <CardTitle>Tài liệu hợp đồng</CardTitle>
+                <CardDescription>
+                  PDF, JPG hoặc PNG. Có thể tải lên nhiều tệp cho một hợp đồng.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <UploadDropzone
+                  files={files.filter((f) => f.kind === "document")}
+                  onFilesChange={(next) => mergeFiles("document", next)}
+                  maxUploadSizeMb={maxUploadSizeMb}
+                  kind="document"
+                  disabled={busy}
+                  inputTestId="document-dropzone-input"
+                />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Phụ lục hợp đồng</CardTitle>
+                <CardDescription>
+                  Chỉ chấp nhận file PDF. Có thể tải lên nhiều phụ lục.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <UploadDropzone
+                  files={files.filter((f) => f.kind === "appendix")}
+                  onFilesChange={(next) => mergeFiles("appendix", next)}
+                  maxUploadSizeMb={maxUploadSizeMb}
+                  accept={{ "application/pdf": [".pdf"] }}
+                  kind="appendix"
+                  hint={`Chỉ chấp nhận file PDF — tối đa ${maxUploadSizeMb} MB mỗi tệp. Có thể chọn nhiều tệp.`}
+                  disabled={busy}
+                  inputTestId="appendix-dropzone-input"
+                />
+              </CardContent>
+            </Card>
+          </>
         )}
 
         {formError && (

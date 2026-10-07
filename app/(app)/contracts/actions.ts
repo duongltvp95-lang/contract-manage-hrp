@@ -113,6 +113,7 @@ export async function completeUploadAction(
     filename: payload.filename,
     mimeType: payload.mimeType,
     fileSize: payload.fileSize,
+    kind: payload.kind,
   });
 
   return fromService(result);

@@ -65,7 +65,7 @@ test.describe("upload", () => {
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
     await selectPartner(page, partner.name);
-    await page.setInputFiles('input[type="file"]', pdfPath);
+    await page.setInputFiles('[data-testid="document-dropzone-input"]', pdfPath);
 
     await expect(page.locator("body")).toContainText(`e2e-${stamp}.pdf`);
 
@@ -95,7 +95,7 @@ test.describe("upload", () => {
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
     await selectPartner(page, partner.name);
-    await page.setInputFiles('input[type="file"]', [pngPath, jpgPath]);
+    await page.setInputFiles('[data-testid="document-dropzone-input"]', [pngPath, jpgPath]);
 
     const queue = page.locator("body");
     await expect(queue).toContainText(`e2e-${stamp}.png`);
@@ -143,7 +143,7 @@ test.describe("upload", () => {
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', `${TEST_PREFIX}UPLOAD-PROGRESS-${stamp}`);
     await selectPartner(page, partner.name);
-    await page.setInputFiles('input[type="file"]', pdfPath);
+    await page.setInputFiles('[data-testid="document-dropzone-input"]', pdfPath);
 
     await clickSafe(page, '[data-testid="contract-form-submit"]');
 
@@ -171,7 +171,7 @@ test.describe("upload", () => {
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
     await selectPartner(page, partner.name);
-    await page.setInputFiles('input[type="file"]', pdfPath);
+    await page.setInputFiles('[data-testid="document-dropzone-input"]', pdfPath);
 
     await clickSafe(page, '[data-testid="contract-form-submit"]');
 
@@ -207,7 +207,7 @@ test.describe("upload", () => {
 
     await login(page);
     await gotoAndSettle(page, "/contracts/new");
-    await page.setInputFiles('input[type="file"]', evilPath);
+    await page.setInputFiles('[data-testid="document-dropzone-input"]', evilPath);
 
     // react-dropzone refuses it at the source: the user is told why, and the
     // file never reaches the upload queue.

@@ -6,17 +6,21 @@ import { useDropzone } from "react-dropzone";
 
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { ALLOWED_MIME_TYPES } from "@schemas/file";
+import { ALLOWED_MIME_TYPES, type FileKind } from "@schemas/file";
 import { formatBytes } from "@/lib/format";
 import { newPendingFile, type PendingFile } from "@/lib/upload";
 import { cn } from "@/lib/utils";
 
 /**
- * Drag & drop uploader — plan sections 15, 41, 43, 45.
+ * Drag & drop uploader — plan sections 15, 41, 43, 45; round 16.
  *
  * react-dropzone owns the interaction (plan section 15: no custom drag/drop
  * engine). This component only renders the queue and its progress; the actual
  * create → presign → PUT → persist orchestration lives in ContractForm.
+ *
+ * Round 16: the dropzone is parameterised by `accept` / `kind` / `hint` so the
+ * same component renders both the main-document area (PDF/JPG/PNG) and the
+ * appendix area (PDF only).
  */
 
 const ACCEPT: Record<string, string[]> = {
@@ -30,11 +34,21 @@ export function UploadDropzone({
   onFilesChange,
   maxUploadSizeMb,
   disabled = false,
+  accept = ACCEPT,
+  kind = "document",
+  hint,
+  inputTestId,
 }: {
   files: PendingFile[];
   onFilesChange: (files: PendingFile[]) => void;
   maxUploadSizeMb: number;
   disabled?: boolean;
+  accept?: Record<string, string[]>;
+  kind?: FileKind;
+  /** Overrides the default hint line under the drop target. */
+  hint?: string;
+  /** Stable test id for the hidden file input (two dropzones on the form). */
+  inputTestId?: string;
 }) {
   const maxBytes = maxUploadSizeMb * 1024 * 1024;
 
@@ -44,14 +58,14 @@ export function UploadDropzone({
     (accepted: File[], rejected: unknown[]) => {
       setRejections(describeRejections(rejected, maxUploadSizeMb));
       if (accepted.length === 0) return;
-      onFilesChange([...files, ...accepted.map(newPendingFile)]);
+      onFilesChange([...files, ...accepted.map((file) => newPendingFile(file, kind))]);
     },
-    [files, onFilesChange, maxUploadSizeMb, setRejections],
+    [files, onFilesChange, maxUploadSizeMb, setRejections, kind],
   );
 
   const { getRootProps, getInputProps, isDragActive, isDragReject } = useDropzone({
     onDrop,
-    accept: ACCEPT,
+    accept,
     maxSize: maxBytes,
     multiple: true,
     disabled,
@@ -71,13 +85,14 @@ export function UploadDropzone({
           disabled && "pointer-events-none opacity-60",
         )}
       >
-        <input {...getInputProps()} />
+        <input {...getInputProps()} data-testid={inputTestId} />
         <UploadCloud className="mb-2 h-6 w-6 text-muted-foreground" />
         <p className="text-sm font-medium">
           {isDragActive ? "Thả tệp vào đây" : "Kéo thả tệp vào đây, hoặc bấm để chọn"}
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
-          PDF, JPG, PNG — tối đa {maxUploadSizeMb} MB mỗi tệp. Có thể chọn nhiều tệp.
+          {hint ??
+            `PDF, JPG, PNG — tối đa ${maxUploadSizeMb} MB mỗi tệp. Có thể chọn nhiều tệp.`}
         </p>
       </div>
 

@@ -11,7 +11,7 @@ import {
   getExpiringContracts,
   getRecentContracts,
 } from "@/lib/services/dashboard";
-import { completeUpload } from "@/lib/services/files";
+import { completeUpload, listContractFiles } from "@/lib/services/files";
 import {
   createPartner,
   getPartner,
@@ -105,7 +105,14 @@ export async function POST(request: NextRequest) {
           filename: String(payload.filename ?? ""),
           mimeType: String(payload.mimeType ?? ""),
           fileSize: Number(payload.fileSize ?? 0),
+          ...(payload.kind === "appendix" || payload.kind === "document"
+            ? { kind: payload.kind }
+            : {}),
         }),
+      );
+    case "list_contract_files":
+      return result(
+        await listContractFiles(organizationId, String(payload.contractId ?? "")),
       );
     case "update_profile":
       return result(await updateProfile(payload, access.user.id));

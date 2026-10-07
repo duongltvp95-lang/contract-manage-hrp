@@ -20,6 +20,13 @@ export const ALLOWED_MIME_TYPES = [
 
 export type AllowedMimeType = (typeof ALLOWED_MIME_TYPES)[number];
 
+/** Round 16 — a file is either the main document or a PDF appendix. */
+export const FILE_KINDS = ["document", "appendix"] as const;
+
+export type FileKind = (typeof FILE_KINDS)[number];
+
+export const FileKindSchema = z.enum(FILE_KINDS);
+
 /** Plan section 39 — MAX_UPLOAD_SIZE_MB, never hard-coded in a component. */
 export const DEFAULT_MAX_UPLOAD_SIZE_MB = 50;
 
@@ -43,21 +50,34 @@ export const FILE_SIZE_ERROR = `Tệp vượt quá giới hạn ${MAX_UPLOAD_SIZ
  */
 
 /** Metadata of a single file the browser holds in memory. */
-export const ContractFileSchema = z.object({
-  filename: z
-    .string()
-    .trim()
-    .min(1, "Tên tệp không được để trống")
-    .max(255, "Tên tệp quá dài"),
+export const ContractFileSchema = z
+  .object({
+    filename: z
+      .string()
+      .trim()
+      .min(1, "Tên tệp không được để trống")
+      .max(255, "Tên tệp quá dài"),
 
-  mimeType: z.enum(ALLOWED_MIME_TYPES, { error: MIME_TYPE_ERROR }),
+    mimeType: z.enum(ALLOWED_MIME_TYPES, { error: MIME_TYPE_ERROR }),
 
-  fileSize: z
-    .number()
-    .int()
-    .positive("Kích thước tệp không hợp lệ")
-    .max(MAX_UPLOAD_SIZE_BYTES, FILE_SIZE_ERROR),
-});
+    fileSize: z
+      .number()
+      .int()
+      .positive("Kích thước tệp không hợp lệ")
+      .max(MAX_UPLOAD_SIZE_BYTES, FILE_SIZE_ERROR),
+
+    // Round 16 — optional; defaults to 'document'. An appendix may only be a PDF.
+    kind: FileKindSchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.kind === "appendix" && value.mimeType !== "application/pdf") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["mimeType"],
+        message: "Phụ lục chỉ chấp nhận file PDF",
+      });
+    }
+  });
 
 export type ContractFileInput = z.infer<typeof ContractFileSchema>;
 
