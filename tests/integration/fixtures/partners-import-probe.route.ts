@@ -91,6 +91,7 @@ export async function POST(request: NextRequest) {
       name: row.name,
       address: row.address,
       taxCode: row.taxCode,
+      companies: row.companies,
     });
   }
 

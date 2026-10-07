@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import type { CreateContractInput, UpdateContractInput } from "@schemas/contract";
 import type { AuditAction } from "@schemas/audit-log";
+import type { PartnerStatus } from "@schemas/partner";
 
 import { resolveAccess } from "@/lib/auth";
 import { listAuditLogs } from "@/lib/services/audit-logs";
@@ -9,7 +10,12 @@ import { archiveContract, createContract, updateContract } from "@/lib/services/
 import { completeUpload } from "@/lib/services/files";
 import {
   createPartner,
+  getPartner,
   importPartners,
+  listCompanies,
+  listPartners,
+  searchPartners,
+  setPartnerStatus,
   updatePartner,
   type PartnerImportServiceRow,
 } from "@/lib/services/partners";
@@ -109,6 +115,22 @@ export async function POST(request: NextRequest) {
             : {}),
         }),
       );
+    case "set_partner_status":
+      return result(
+        await setPartnerStatus(
+          String(payload.id ?? ""),
+          (payload.status === "stopped" ? "stopped" : "active") as PartnerStatus,
+          { organizationId },
+        ),
+      );
+    case "list_partners":
+      return result(await listPartners({ organizationId }));
+    case "get_partner":
+      return result(await getPartner(String(payload.id ?? ""), { organizationId }));
+    case "list_companies":
+      return result(await listCompanies({ organizationId }));
+    case "search_partners":
+      return result(await searchPartners(String(payload.term ?? "")));
     default:
       return NextResponse.json(
         { error: "unknown action", code: "unknown_action" },

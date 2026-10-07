@@ -62,7 +62,7 @@ import type { PartnerRow } from "@/lib/services/partners";
 export type PartnerNameSheetProps = {
   mode: "create" | "edit";
   /** Edit only — the partner being renamed. */
-  partner?: Pick<PartnerRow, "id" | "name" | "address" | "tax_code"> | null;
+  partner?: Pick<PartnerRow, "id" | "name" | "address" | "tax_code" | "status"> | null;
   /** Called with the saved row, before the refresh. */
   onSaved?: (row: PartnerRow) => void;
   /** Optional trigger; omit when the sheet is opened programmatically. */
@@ -100,6 +100,10 @@ export function PartnerNameSheet({
       // `?? ""` keeps the form happy when the field is null on the row.
       address: partner?.address ?? "",
       taxCode: partner?.tax_code ?? "",
+      // Round 10: the company selector is wired in part 2; these placeholders
+      // keep the schema (companyIds: min 1) compiling until then.
+      status: partner?.status ?? "active",
+      companyIds: [],
     },
   });
 
@@ -127,6 +131,8 @@ export function PartnerNameSheet({
       name: result.data.name,
       address: result.data.address ?? "",
       taxCode: result.data.tax_code ?? "",
+      status: result.data.status ?? "active",
+      companyIds: [],
     });
     router.refresh();
   }
@@ -283,7 +289,7 @@ export function AddPartnerButton() {
 export function RenamePartnerButton({
   partner,
 }: {
-  partner: Pick<PartnerRow, "id" | "name" | "address" | "tax_code">;
+  partner: Pick<PartnerRow, "id" | "name" | "address" | "tax_code" | "status">;
 }) {
   return (
     <PartnerNameSheet

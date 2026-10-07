@@ -127,6 +127,20 @@ export async function createSecondTenant(
     throw new Error(`could not create the test organization: ${orgError.message}`);
   }
 
+  // Round 10: a partner must link to at least one company, and companies are
+  // organization-scoped — so the second tenant gets its own HRP / HR VN seed.
+  const { error: companiesError } = await admin.from("companies").upsert(
+    [
+      { id: "22222222-0000-4000-8000-000000000001", organization_id: ORG_B, name: "HRP" },
+      { id: "22222222-0000-4000-8000-000000000002", organization_id: ORG_B, name: "HR VN" },
+    ],
+    { onConflict: "organization_id,name", ignoreDuplicates: true },
+  );
+
+  if (companiesError) {
+    throw new Error(`could not seed the second tenant companies: ${companiesError.message}`);
+  }
+
   const { data, error } = await admin.auth.admin.createUser({
     email,
     password,
@@ -452,6 +466,8 @@ export async function destroySecondTenant(
 
   await admin.from("profiles").update({ organization_id: ORG_A }).eq("id", session.userId);
   await admin.auth.admin.deleteUser(session.userId);
+  // Companies reference the organization (RESTRICT), so they go before it.
+  await admin.from("companies").delete().eq("organization_id", ORG_B);
   await admin.from("organizations").delete().eq("id", ORG_B);
 }
 

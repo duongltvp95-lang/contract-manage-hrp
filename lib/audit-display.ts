@@ -145,6 +145,8 @@ function sentenceFor(action: AuditAction, meta: Record<string, unknown>): string
       return uploadFile(meta);
     case "update_profile":
       return "cập nhật hồ sơ";
+    case "set_partner_status":
+      return setPartnerStatus(meta);
     case "create_user":
       return quoted("thêm người dùng", text(meta.fullName) || text(meta.name));
     case "update_user_role":
@@ -205,6 +207,16 @@ function setActiveUser(meta: Record<string, unknown>): string {
   if (meta.to === true) return "bật người dùng";
   if (meta.to === false) return "vô hiệu hoá người dùng";
   return "đổi trạng thái người dùng";
+}
+
+/** Round 10 — "dừng hợp tác với đối tác X" / "khôi phục hợp tác với đối tác X". */
+function setPartnerStatus(meta: Record<string, unknown>): string {
+  const name = text(meta.name);
+  const partner = name ? ` với đối tác “${name}”` : "";
+
+  if (meta.to === "stopped") return `dừng hợp tác${partner}`;
+  if (meta.to === "active") return `khôi phục hợp tác${partner}`;
+  return `đổi trạng thái hợp tác${partner}`;
 }
 
 /**

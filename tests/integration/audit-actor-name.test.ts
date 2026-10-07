@@ -88,6 +88,7 @@ suite("audit — actor name resolution (round 9)", () => {
   it("resolves the actor name to the signed-in admin", async () => {
     const created = await probe(orgA, "create_partner", {
       name: `${TEST_PREFIX}Đối tác tên actor ${stamp}`,
+      companyIds: ["00000000-0000-4000-8000-000000000001"],
     });
     expect(created.body.ok).toBe(true);
     const partnerId = (created.body.data as { id: string }).id;
@@ -105,6 +106,7 @@ suite("audit — actor name resolution (round 9)", () => {
 
     const created = await probe(orgA, "create_partner", {
       name: `${TEST_PREFIX}Đối tác actor xoá ${stamp}`,
+      companyIds: ["00000000-0000-4000-8000-000000000001"],
     });
     const partnerId = (created.body.data as { id: string }).id;
 
@@ -126,6 +128,7 @@ suite("audit — actor name resolution (round 9)", () => {
   it("the export route carries the actor name (it uses listAuditLogs)", async () => {
     await probe(orgA, "create_partner", {
       name: `${TEST_PREFIX}Đối tác xuất actor ${stamp}`,
+      companyIds: ["00000000-0000-4000-8000-000000000001"],
     });
 
     const response = await fetch(

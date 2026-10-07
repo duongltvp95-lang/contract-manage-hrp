@@ -78,6 +78,9 @@ suite("audit — business actions (round 8)", () => {
   const stamp = Date.now().toString(36);
   const numericStamp = String(Date.now()).slice(-8);
   const taxInDb = `05${numericStamp}`;
+  // Seeded company ids: HRP for org A, HRP for org B (round 10).
+  const HRP_A = "00000000-0000-4000-8000-000000000001";
+  const HRP_B = "22222222-0000-4000-8000-000000000001";
 
   beforeAll(async () => {
     admin = adminClient();
@@ -111,6 +114,7 @@ suite("audit — business actions (round 8)", () => {
       name: `${TEST_PREFIX}Đối tác log ${stamp}`,
       address: "Hà Nội",
       taxCode: "0511111111",
+      companyIds: [HRP_A],
     });
 
     expect(result.body.ok).toBe(true);
@@ -136,6 +140,7 @@ suite("audit — business actions (round 8)", () => {
   it("a regular user (role=user) still logs, scoped to their own organization", async () => {
     const result = await probe(orgB, "create_partner", {
       name: `${TEST_PREFIX}Đối tác org B ${stamp}`,
+      companyIds: [HRP_B],
     });
 
     expect(result.body.ok).toBe(true);
@@ -202,6 +207,7 @@ suite("audit — business actions (round 8)", () => {
   it("update_partner logs the changed fields", async () => {
     const created = await probe(orgA, "create_partner", {
       name: `${TEST_PREFIX}Sửa đối tác ${stamp}`,
+      companyIds: [HRP_A],
     });
     const partnerId = (created.body.data as { id: string }).id;
 
@@ -221,10 +227,10 @@ suite("audit — business actions (round 8)", () => {
   it("import_partners writes exactly one row with created/failed counts", async () => {
     const result = await probe(orgA, "import_partners", {
       rows: [
-        { rowNumber: 2, name: `${TEST_PREFIX}Nhập 1 ${stamp}`, address: "", taxCode: "0511111121" },
-        { rowNumber: 3, name: `${TEST_PREFIX}Nhập 2 ${stamp}`, address: "", taxCode: "0511111122" },
+        { rowNumber: 2, name: `${TEST_PREFIX}Nhập 1 ${stamp}`, address: "", taxCode: "0511111121", companies: ["HRP"] },
+        { rowNumber: 3, name: `${TEST_PREFIX}Nhập 2 ${stamp}`, address: "", taxCode: "0511111122", companies: ["HRP"] },
         // Collides with `taxInDb` seeded above.
-        { rowNumber: 4, name: `${TEST_PREFIX}Nhập trùng ${stamp}`, address: "", taxCode: taxInDb },
+        { rowNumber: 4, name: `${TEST_PREFIX}Nhập trùng ${stamp}`, address: "", taxCode: taxInDb, companies: ["HRP"] },
       ],
     });
 
@@ -307,7 +313,7 @@ suite("audit — business actions (round 8)", () => {
   it("a failed business action writes no audit row", async () => {
     const before = (await auditRows(admin, "create_partner")).length;
 
-    const failed = await probe(orgA, "create_partner", { name: "" });
+    const failed = await probe(orgA, "create_partner", { name: "", companyIds: [HRP_A] });
     expect(failed.body.ok).toBe(false);
 
     const after = (await auditRows(admin, "create_partner")).length;

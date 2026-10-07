@@ -17,8 +17,8 @@ import {
   previewPartnerImport,
   searchPartners,
   updatePartner,
+  type PartnerDetail,
   type PartnerImportServiceRow,
-  type PartnerRow,
   type PartnerSearchRow,
 } from "@/lib/services/partners";
 import {
@@ -43,7 +43,7 @@ import {
 
 export async function createPartnerAction(
   input: unknown,
-): Promise<ActionResult<PartnerRow>> {
+): Promise<ActionResult<PartnerDetail>> {
   const access = await authorized();
   if (!access.ok) return access.result;
 
@@ -73,7 +73,7 @@ export async function searchPartnersAction(
 export async function updatePartnerAction(
   id: unknown,
   input: unknown,
-): Promise<ActionResult<PartnerRow>> {
+): Promise<ActionResult<PartnerDetail>> {
   const access = await authorized();
   if (!access.ok) return access.result;
 
@@ -162,6 +162,7 @@ export async function previewPartnersImportAction(
       name: row.name,
       address: row.address,
       taxCode: row.taxCode,
+      companies: row.companies,
     });
   }
 
@@ -205,6 +206,7 @@ export async function importPartnersAction(
       name: row.name,
       address: row.address,
       taxCode: row.taxCode,
+      companies: row.companies,
     });
   }
 

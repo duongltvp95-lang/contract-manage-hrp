@@ -63,11 +63,43 @@ export const partnerTaxCodeField = z
   .optional()
   .or(z.literal(""));
 
-/** Plan: one required field, two optional fields. */
+/**
+ * Collaboration status — round 10. `active` = đang hợp tác (default),
+ * `stopped` = đã dừng hợp tác. A stopped partner stays in the directory and on
+ * its contracts but is hidden from the new-contract combobox.
+ */
+export const PARTNER_STATUSES = ["active", "stopped"] as const;
+export type PartnerStatus = (typeof PARTNER_STATUSES)[number];
+
+export const PARTNER_STATUS_LABELS: Record<PartnerStatus, string> = {
+  active: "Đang hợp tác",
+  stopped: "Đã dừng hợp tác",
+};
+
+export const partnerStatusField = z.enum(PARTNER_STATUSES).optional();
+
+/**
+ * At least one company (HRP / HR VN) must be chosen; both are allowed.
+ * `companyIds` are uuids — the service verifies they belong to the caller's
+ * organization.
+ */
+export const partnerCompanyIdsField = z
+  .array(z.string().uuid())
+  .min(1, "Chọn ít nhất một công ty");
+
+/**
+ * Plan: one required field, two optional fields, plus status + companies.
+ *
+ * `status` is optional here and defaults to `active` at the service layer
+ * (a `.default()` would change the schema's input/output types and break
+ * react-hook-form's resolver inference).
+ */
 export const PartnerSchema = z.object({
   name: partnerNameField,
   address: partnerAddressField,
   taxCode: partnerTaxCodeField,
+  status: partnerStatusField,
+  companyIds: partnerCompanyIdsField,
 });
 
 /**
@@ -78,6 +110,11 @@ export const UpdatePartnerSchema = z.object({
   name: partnerNameField.optional(),
   address: partnerAddressField,
   taxCode: partnerTaxCodeField,
+  status: z.enum(PARTNER_STATUSES).optional(),
+  companyIds: z
+    .array(z.string().uuid())
+    .min(1, "Chọn ít nhất một công ty")
+    .optional(),
 });
 
 export type CreatePartnerInput = z.infer<typeof PartnerSchema>;

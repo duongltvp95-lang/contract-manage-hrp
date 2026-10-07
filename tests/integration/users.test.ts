@@ -807,6 +807,7 @@ suite("user delete — administrators only (feature round 4, part 1)", () => {
           name: partnerName,
           taxCode: "",
           address: "",
+          companyIds: ["00000000-0000-4000-8000-000000000001"],
         }),
       },
     );

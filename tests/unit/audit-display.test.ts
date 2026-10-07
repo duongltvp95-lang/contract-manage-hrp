@@ -105,6 +105,12 @@ describe("formatAuditSentence", () => {
     expect(say("export_logs", { format: "xlsx", count: 5 })).toBe(
       "Khương Văn Đường đã xuất nhật ký",
     );
+    expect(say("set_partner_status", { to: "stopped", name: "Công ty A" })).toBe(
+      'Khương Văn Đường đã dừng hợp tác với đối tác “Công ty A”',
+    );
+    expect(say("set_partner_status", { to: "active", name: "Công ty A" })).toBe(
+      'Khương Văn Đường đã khôi phục hợp tác với đối tác “Công ty A”',
+    );
   });
 
   it("uses a neutral subject when the actor name is missing", () => {

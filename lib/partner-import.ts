@@ -14,7 +14,13 @@
 
 import type ExcelJS from "exceljs";
 
-import { PartnerSchema } from "@schemas/partner";
+import { z } from "zod";
+
+import {
+  partnerAddressField,
+  partnerNameField,
+  partnerTaxCodeField,
+} from "@schemas/partner";
 
 import { foldText } from "@/lib/partner-display";
 
@@ -77,7 +83,7 @@ export function validatePartnerImportFile(
   return { ok: true };
 }
 
-type PartnerImportColumn = "name" | "address" | "taxCode";
+type PartnerImportColumn = "name" | "address" | "taxCode" | "company";
 
 /**
  * Header aliases, already folded with `foldText`: an accented, unaccented or
@@ -88,14 +94,45 @@ const HEADER_ALIASES: Record<PartnerImportColumn, string[]> = {
   name: ["ten doi tac", "ten", "ten cong ty", "name"],
   address: ["dia chi", "address"],
   taxCode: ["ma so thue", "mst", "tax code", "tax_code"],
+  company: ["cong ty", "company"],
 };
 
-export type PartnerImportRow = {
+/** The seeded company names the import recognises (round 10). */
+export const KNOWN_COMPANY_NAMES = ["HRP", "HR VN"] as const;
+
+/** A missing or empty "Công ty" cell defaults to HRP. */
+export const DEFAULT_COMPANY = "HRP";
+
+/**
+ * The three scalar fields the import validates with the SAME field rules as the
+ * form. `status` (defaults to active at the service) and `companyIds` (resolved
+ * from the "Công ty" column) are handled separately, so the full `PartnerSchema`
+ * is deliberately not used here.
+ */
+const importFieldsSchema = z.object({
+  name: partnerNameField,
+  address: partnerAddressField,
+  taxCode: partnerTaxCodeField,
+});
+
+/** Raw row as read from the workbook; validation resolves `companyText`. */
+export type ParsedPartnerImportRow = {
   /** The Excel row number. The header is row 1; data starts at row 2. */
   rowNumber: number;
   name: string;
   address: string;
   taxCode: string;
+  /** Raw "Công ty" cell text; empty when the column is absent. */
+  companyText: string;
+};
+
+export type PartnerImportRow = {
+  rowNumber: number;
+  name: string;
+  address: string;
+  taxCode: string;
+  /** Resolved company names (e.g. ["HRP", "HR VN"]), at least one. */
+  companies: string[];
   ok: boolean;
   error?: string;
 };
@@ -110,7 +147,7 @@ export type PartnerImportParseFailure = {
 };
 
 type ParseResult =
-  | { ok: true; rows: PartnerImportRow[] }
+  | { ok: true; rows: ParsedPartnerImportRow[] }
   | ({ ok: false } & PartnerImportParseFailure);
 
 /**
@@ -221,7 +258,7 @@ export async function parsePartnerWorkbook(
     };
   }
 
-  const rows: PartnerImportRow[] = [];
+  const rows: ParsedPartnerImportRow[] = [];
 
   for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
     const row = sheet.getRow(rowNumber);
@@ -230,9 +267,18 @@ export async function parsePartnerWorkbook(
       columns.address !== undefined ? cellText(row.getCell(columns.address)) : "";
     const taxCode =
       columns.taxCode !== undefined ? cellText(row.getCell(columns.taxCode)) : "";
+    const companyText =
+      columns.company !== undefined ? cellText(row.getCell(columns.company)) : "";
 
     // A row with nothing in any mapped column is a spacer, not an error.
-    if (!name.trim() && !address.trim() && !taxCode.trim()) continue;
+    if (
+      !name.trim() &&
+      !address.trim() &&
+      !taxCode.trim() &&
+      !companyText.trim()
+    ) {
+      continue;
+    }
 
     if (rows.length >= PARTNER_IMPORT_MAX_ROWS) {
       return {
@@ -242,23 +288,55 @@ export async function parsePartnerWorkbook(
       };
     }
 
-    rows.push({ rowNumber, name, address, taxCode, ok: true });
+    rows.push({ rowNumber, name, address, taxCode, companyText });
   }
 
   return { ok: true, rows };
 }
 
 /**
+ * Turns the raw "Công ty" cell into resolved company names.
+ *
+ * Missing / empty defaults to `["HRP"]`. Values are split on comma/semicolon,
+ * trimmed and diacritics-folded, then matched against `KNOWN_COMPANY_NAMES`. An
+ * unrecognised token is an error for that row.
+ */
+function resolveCompanies(
+  rawText: string,
+): { ok: true; companies: string[] } | { ok: false; error: string } {
+  const trimmed = rawText.trim();
+  if (!trimmed) return { ok: true, companies: [DEFAULT_COMPANY] };
+
+  const tokens = trimmed
+    .split(/[,;，；]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  const foldedKnown = new Map(KNOWN_COMPANY_NAMES.map((name) => [foldText(name), name]));
+  const companies: string[] = [];
+
+  for (const token of tokens) {
+    const matched = foldedKnown.get(foldText(token));
+    if (!matched) {
+      return { ok: false, error: `Không nhận diện được công ty “${token}”` };
+    }
+    if (!companies.includes(matched)) companies.push(matched);
+  }
+
+  return { ok: true, companies: companies.length > 0 ? companies : [DEFAULT_COMPANY] };
+}
+
+/**
  * Validates parsed rows with the SAME `PartnerSchema` the form uses — no second
- * set of rules — and flags a tax code that appears more than once inside the
- * file. Every duplicated row is marked, not just the second one, so the fix is
- * obvious from the report alone.
+ * set of rules — resolves the company column, and flags a tax code that appears
+ * more than once inside the file. Every duplicated row is marked, not just the
+ * second one, so the fix is obvious from the report alone.
  */
 export function validatePartnerImportRows(
-  rows: Pick<PartnerImportRow, "rowNumber" | "name" | "address" | "taxCode">[],
+  rows: ParsedPartnerImportRow[],
 ): PartnerImportRow[] {
   const validated = rows.map((row): PartnerImportRow => {
-    const parsed = PartnerSchema.safeParse({
+    const parsed = importFieldsSchema.safeParse({
       name: row.name,
       address: row.address,
       taxCode: row.taxCode,
@@ -270,8 +348,22 @@ export function validatePartnerImportRows(
         name: row.name,
         address: row.address,
         taxCode: row.taxCode,
+        companies: [DEFAULT_COMPANY],
         ok: false,
         error: parsed.error.issues[0]?.message ?? "Dữ liệu không hợp lệ",
+      };
+    }
+
+    const companies = resolveCompanies(row.companyText);
+    if (!companies.ok) {
+      return {
+        rowNumber: row.rowNumber,
+        name: parsed.data.name,
+        address: parsed.data.address ?? "",
+        taxCode: parsed.data.taxCode ?? "",
+        companies: [DEFAULT_COMPANY],
+        ok: false,
+        error: companies.error,
       };
     }
 
@@ -280,6 +372,7 @@ export function validatePartnerImportRows(
       name: parsed.data.name,
       address: parsed.data.address ?? "",
       taxCode: parsed.data.taxCode ?? "",
+      companies: companies.companies,
       ok: true,
     };
   });
@@ -355,6 +448,7 @@ export async function buildPartnerImportTemplate(): Promise<Uint8Array> {
     { header: "Tên đối tác", key: "name", width: 36 },
     { header: "Địa chỉ", key: "address", width: 44 },
     { header: "Mã số thuế", key: "taxCode", width: 16 },
+    { header: "Công ty", key: "company", width: 16 },
   ];
   sheet.getRow(1).font = { bold: true };
 
@@ -362,6 +456,7 @@ export async function buildPartnerImportTemplate(): Promise<Uint8Array> {
     name: "Công ty TNHH Ví dụ",
     address: "123 Đường ABC, Quận 1, TP. Hồ Chí Minh",
     taxCode: "0312345678",
+    company: "HRP",
   });
 
   return (await workbook.xlsx.writeBuffer()) as unknown as Uint8Array;

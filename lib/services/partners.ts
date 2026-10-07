@@ -1,8 +1,13 @@
 import "server-only";
 
-import { PartnerSchema, UpdatePartnerSchema } from "@schemas/partner";
+import {
+  PartnerSchema,
+  UpdatePartnerSchema,
+  type PartnerStatus,
+} from "@schemas/partner";
 
 import type { PartnerImportRow, PartnerImportRowReport } from "@/lib/partner-import";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { PARTNER_SEARCH_LIMIT } from "@/lib/partner-display";
 import { recordCurrentUserAudit } from "./audit-logs";
@@ -36,12 +41,22 @@ export type PartnerRow = {
   name: string;
   address: string | null;
   tax_code: string | null;
+  status: PartnerStatus;
   created_at: string;
   updated_at: string;
 };
 
 export const PARTNER_COLUMNS =
-  "id, organization_id, name, address, tax_code, created_at, updated_at";
+  "id, organization_id, name, address, tax_code, status, created_at, updated_at";
+
+/**
+ * A company an organization works with (round 10). Read-only for the app: the
+ * rows are seeded (HRP / HR VN) and partners link to them through the junction.
+ */
+export type Company = {
+  id: string;
+  name: string;
+};
 
 /**
  * A partner plus how many contracts point at it.
@@ -50,7 +65,13 @@ export const PARTNER_COLUMNS =
  * them, and a count that includes rows the user cannot see would never match
  * the number of contracts on the partner's own page.
  */
-export type PartnerWithCount = PartnerRow & { contract_count: number };
+export type PartnerWithCount = PartnerRow & {
+  contract_count: number;
+  companies: string[];
+};
+
+/** A partner plus its linked company names (round 10). */
+export type PartnerDetail = PartnerRow & { companies: string[] };
 
 export type PartnerContext = {
   organizationId: string;
@@ -87,8 +108,89 @@ async function countContractsByPartner(
 }
 
 /**
+ * The companies of the caller's organization (round 10). Small by design — the
+ * seed is two rows — so this returns the whole list for the form and the import.
+ */
+export async function listCompanies({
+  organizationId,
+}: PartnerContext): Promise<ServiceResult<Company[]>> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select("id, name")
+    .eq("organization_id", organizationId)
+    .order("name", { ascending: true });
+
+  if (error) {
+    return dbError("listCompanies", error);
+  }
+
+  return ok((data ?? []) as Company[]);
+}
+
+/** The company names linked to one partner, alphabetically. */
+async function companiesForPartner(partnerId: string): Promise<string[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("partner_companies")
+    .select("companies(name)")
+    .eq("partner_id", partnerId);
+
+  const names: string[] = [];
+  for (const row of (data ?? []) as {
+    companies: { name: string } | { name: string }[] | null;
+  }[]) {
+    const embedded = Array.isArray(row.companies) ? row.companies[0] : row.companies;
+    if (embedded?.name) names.push(embedded.name);
+  }
+
+  return names.sort();
+}
+
+/** Bulk company names per partner, one query for a whole page of partners. */
+async function companiesForPartners(
+  partnerIds: string[],
+): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>();
+  if (partnerIds.length === 0) return result;
+
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("partner_companies")
+    .select("partner_id, companies(name)")
+    .in("partner_id", partnerIds);
+
+  for (const row of (data ?? []) as {
+    partner_id: string;
+    companies: { name: string } | { name: string }[] | null;
+  }[]) {
+    const embedded = Array.isArray(row.companies) ? row.companies[0] : row.companies;
+    if (!embedded?.name) continue;
+    result.set(row.partner_id, [...(result.get(row.partner_id) ?? []), embedded.name]);
+  }
+
+  return result;
+}
+
+/**
+ * Rolls back a partner row the caller just created but whose junction insert
+ * failed. The session client has no DELETE grant on `partners`, so this uses the
+ * service-role client; if that is unavailable the orphan row is logged and left
+ * (the caller still gets the error, so it is never silently half-saved).
+ */
+async function deletePartnerRollback(partnerId: string): Promise<void> {
+  try {
+    const admin = await createAdminClient();
+    await admin.from("partners").delete().eq("id", partnerId);
+  } catch (error) {
+    console.error("[service:createPartner] rollback failed", error);
+  }
+}
+
+/**
  * Every partner of the caller's organization, alphabetically, with its contract
- * count.
+ * count and linked company names.
  *
  * The directory is expected to be small (tens to low hundreds per
  * organization), so this returns the whole list rather than paginating: it feeds
@@ -110,13 +212,17 @@ export async function listPartners({
   }
 
   const rows = (data ?? []) as PartnerRow[];
-  const counts = await countContractsByPartner(
-    rows.map((row) => row.id),
-    organizationId,
-  );
+  const [counts, companyMap] = await Promise.all([
+    countContractsByPartner(rows.map((row) => row.id), organizationId),
+    companiesForPartners(rows.map((row) => row.id)),
+  ]);
 
   return ok(
-    rows.map((row) => ({ ...row, contract_count: counts.get(row.id) ?? 0 })),
+    rows.map((row) => ({
+      ...row,
+      contract_count: counts.get(row.id) ?? 0,
+      companies: (companyMap.get(row.id) ?? []).sort(),
+    })),
   );
 }
 
@@ -157,7 +263,7 @@ export async function searchPartners(
 export async function getPartner(
   id: string,
   { organizationId }: PartnerContext,
-): Promise<ServiceResult<PartnerRow>> {
+): Promise<ServiceResult<PartnerDetail>> {
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -177,7 +283,8 @@ export async function getPartner(
     return err("not_found", "Không tìm thấy đối tác");
   }
 
-  return ok(data as PartnerRow);
+  const companies = await companiesForPartner(id);
+  return ok({ ...(data as PartnerRow), companies });
 }
 
 /**
@@ -260,7 +367,8 @@ function normaliseOptionalText(value: unknown): string | null | undefined {
 }
 
 /**
- * Creates one partner for the caller's organization.
+ * Creates one partner for the caller's organization, linking it to the chosen
+ * companies (round 10).
  *
  * `input` is `unknown` on purpose: a server action hands over whatever the client
  * sent, and `PartnerSchema.safeParse` below is the boundary that decides whether
@@ -269,7 +377,7 @@ function normaliseOptionalText(value: unknown): string | null | undefined {
 export async function createPartner(
   input: unknown,
   { organizationId }: PartnerContext,
-): Promise<ServiceResult<PartnerRow>> {
+): Promise<ServiceResult<PartnerDetail>> {
   const parsed = PartnerSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -285,6 +393,8 @@ export async function createPartner(
 
   const address = normaliseOptionalText(parsed.data.address);
   const taxCode = normaliseOptionalText(parsed.data.taxCode);
+  const status = parsed.data.status ?? "active";
+  const companyIds = parsed.data.companyIds;
 
   if (taxCode) {
     const conflict = await findPartnerByTaxCode(taxCode, organizationId);
@@ -297,6 +407,18 @@ export async function createPartner(
     }
   }
 
+  // Every chosen company must belong to the caller's organization, or the
+  // junction would link another tenant's company onto this partner.
+  const companies = await listCompanies({ organizationId });
+  if (!companies.ok) return companies;
+
+  const orgCompanies = companies.data;
+  const orgCompanyIds = new Set(orgCompanies.map((company) => company.id));
+  const invalidCompany = companyIds.find((id) => !orgCompanyIds.has(id));
+  if (invalidCompany) {
+    return err("validation", "Công ty được chọn không thuộc tổ chức của bạn");
+  }
+
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -307,6 +429,7 @@ export async function createPartner(
       name: parsed.data.name,
       address,
       tax_code: taxCode,
+      status,
     })
     .select(PARTNER_COLUMNS)
     .single();
@@ -317,28 +440,51 @@ export async function createPartner(
 
   const created = data as PartnerRow;
 
+  // Junction — after the partner row exists. On failure, roll the partner back
+  // so a half-saved partner (present but linked to no company) cannot survive.
+  const { error: junctionError } = await supabase
+    .from("partner_companies")
+    .insert(companyIds.map((companyId) => ({ partner_id: created.id, company_id: companyId })));
+
+  if (junctionError) {
+    await deletePartnerRollback(created.id);
+    return dbError("createPartner", junctionError);
+  }
+
+  const companyNames = orgCompanies
+    .filter((company) => companyIds.includes(company.id))
+    .map((company) => company.name)
+    .sort();
+
   // Fire-and-forget: a failed write must never block the create.
   await recordCurrentUserAudit({
     action: "create_partner",
     targetKind: "partner",
     targetId: created.id,
-    metadata: { name: created.name, taxCode: created.tax_code ?? null },
+    metadata: {
+      name: created.name,
+      taxCode: created.tax_code ?? null,
+      status,
+      companies: companyNames,
+    },
   });
 
-  return ok(created);
+  return ok({ ...created, companies: companyNames });
 }
 
 /**
- * Renames an existing partner.
+ * Renames / re-links an existing partner.
  *
  * Only the keys the caller actually sent are written — same reasoning as
  * `updateContract`: a blind full-row update would clear fields nobody mentioned.
+ * When `companyIds` is present the whole junction is replaced (delete + insert);
+ * when `status` is present it is written like any other scalar field.
  */
 export async function updatePartner(
   id: string,
   input: unknown,
   { organizationId }: PartnerContext,
-): Promise<ServiceResult<PartnerRow>> {
+): Promise<ServiceResult<PartnerDetail>> {
   const raw = (input ?? {}) as Record<string, unknown>;
   const parsed = UpdatePartnerSchema.safeParse(raw);
 
@@ -363,8 +509,13 @@ export async function updatePartner(
   if ("taxCode" in raw) {
     patch.tax_code = normaliseOptionalText(parsed.data.taxCode) ?? null;
   }
+  if ("status" in raw && parsed.data.status !== undefined) {
+    patch.status = parsed.data.status;
+  }
 
-  if (Object.keys(patch).length === 0) {
+  const hasCompanies = "companyIds" in raw;
+
+  if (Object.keys(patch).length === 0 && !hasCompanies) {
     return err("validation", "Không có thay đổi nào để lưu");
   }
 
@@ -383,38 +534,151 @@ export async function updatePartner(
     }
   }
 
+  // Resolve the company names once, used both for the junction write and the
+  // audit metadata.
+  let companyNames: string[] = [];
+  let orgCompanyIds = new Set<string>();
+  let orgCompanies: Company[] = [];
+
+  if (hasCompanies) {
+    const companies = await listCompanies({ organizationId });
+    if (!companies.ok) return companies;
+
+    orgCompanies = companies.data;
+    orgCompanyIds = new Set(orgCompanies.map((company) => company.id));
+
+    const companyIds = parsed.data.companyIds ?? [];
+    const invalidCompany = companyIds.find((id) => !orgCompanyIds.has(id));
+    if (invalidCompany) {
+      return err("validation", "Công ty được chọn không thuộc tổ chức của bạn");
+    }
+    companyNames = orgCompanies
+      .filter((company) => companyIds.includes(company.id))
+      .map((company) => company.name);
+  }
+
+  const supabase = await createClient();
+
+  let updated: PartnerRow | null = null;
+
+  if (Object.keys(patch).length > 0) {
+    const { data, error } = await supabase
+      .from("partners")
+      .update(patch)
+      .eq("id", id)
+      .eq("organization_id", organizationId)
+      .select(PARTNER_COLUMNS)
+      .maybeSingle();
+
+    if (error) {
+      return dbError("updatePartner", error);
+    }
+
+    if (!data) {
+      // RLS filtered it, or it is gone. Same answer either way.
+      return err("not_found", "Không tìm thấy đối tác");
+    }
+
+    updated = data as PartnerRow;
+  }
+
+  if (hasCompanies) {
+    const { error: deleteError } = await supabase
+      .from("partner_companies")
+      .delete()
+      .eq("partner_id", id);
+
+    if (deleteError) {
+      return dbError("updatePartner", deleteError);
+    }
+
+    const companyIds = parsed.data.companyIds ?? [];
+    if (companyIds.length > 0) {
+      const { error: insertError } = await supabase
+        .from("partner_companies")
+        .insert(companyIds.map((companyId) => ({ partner_id: id, company_id: companyId })));
+
+      if (insertError) {
+        return dbError("updatePartner", insertError);
+      }
+    }
+  } else {
+    companyNames = await companiesForPartner(id);
+  }
+
+  if (!updated) {
+    // Only the companies changed; read the partner row for the return value.
+    const { data } = await supabase
+      .from("partners")
+      .select(PARTNER_COLUMNS)
+      .eq("id", id)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+
+    if (!data) {
+      return err("not_found", "Không tìm thấy đối tác");
+    }
+    updated = data as PartnerRow;
+  }
+
+  const changed = Object.keys(patch).map((key) =>
+    key === "tax_code" ? "taxCode" : key,
+  );
+  if (hasCompanies) changed.push("companies");
+
+  await recordCurrentUserAudit({
+    action: "update_partner",
+    targetKind: "partner",
+    targetId: updated.id,
+    metadata: {
+      name: updated.name,
+      changed,
+      ...(hasCompanies ? { companies: companyNames.sort() } : {}),
+    },
+  });
+
+  return ok({ ...updated, companies: companyNames.sort() });
+}
+
+/**
+ * Round 10 — flips a partner between `active` (đang hợp tác) and `stopped`
+ * (đã dừng hợp tác), with a dedicated audit action whose sentence reads
+ * "… đã dừng hợp tác với đối tác X" / "… đã khôi phục hợp tác với đối tác X".
+ */
+export async function setPartnerStatus(
+  id: string,
+  status: PartnerStatus,
+  { organizationId }: PartnerContext,
+): Promise<ServiceResult<PartnerDetail>> {
   const supabase = await createClient();
 
   const { data, error } = await supabase
     .from("partners")
-    .update(patch)
+    .update({ status })
     .eq("id", id)
     .eq("organization_id", organizationId)
     .select(PARTNER_COLUMNS)
     .maybeSingle();
 
   if (error) {
-    return dbError("updatePartner", error);
+    return dbError("setPartnerStatus", error);
   }
 
   if (!data) {
-    // RLS filtered it, or it is gone. Same answer either way.
     return err("not_found", "Không tìm thấy đối tác");
   }
 
   const updated = data as PartnerRow;
-  const changed = Object.keys(patch).map((key) =>
-    key === "tax_code" ? "taxCode" : key,
-  );
+  const companies = await companiesForPartner(id);
 
   await recordCurrentUserAudit({
-    action: "update_partner",
+    action: "set_partner_status",
     targetKind: "partner",
     targetId: updated.id,
-    metadata: { name: updated.name, changed },
+    metadata: { to: status, name: updated.name },
   });
 
-  return ok(updated);
+  return ok({ ...updated, companies });
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +688,7 @@ export async function updatePartner(
 /** The shape both import functions consume: validated rows, nothing more. */
 export type PartnerImportServiceRow = Pick<
   PartnerImportRow,
-  "rowNumber" | "name" | "address" | "taxCode"
+  "rowNumber" | "name" | "address" | "taxCode" | "companies"
 >;
 
 const IMPORT_DUPLICATE_MESSAGE = (ownerName: string) =>
@@ -458,6 +722,7 @@ export async function previewPartnerImport(
           name: row.name,
           address: row.address,
           taxCode: row.taxCode,
+          companies: row.companies,
           ok: false,
           error: IMPORT_DUPLICATE_MESSAGE(conflicts[0].name),
         };
@@ -468,6 +733,7 @@ export async function previewPartnerImport(
         name: row.name,
         address: row.address,
         taxCode: row.taxCode,
+        companies: row.companies,
         ok: true,
       };
     }),
@@ -481,7 +747,7 @@ export async function previewPartnerImport(
  * `ok`/`error`, and the caller reports the summary. Rows whose tax code already
  * exists in the organization are refused BEFORE any insert (same message the
  * preview shows), so a previewed batch does not change meaning between the two
- * steps.
+ * steps. Each imported partner is linked to its resolved companies.
  */
 export async function importPartners(
   rows: PartnerImportServiceRow[],
@@ -490,6 +756,15 @@ export async function importPartners(
   const existing = await findPartnersByTaxCodes(
     rows.map((row) => row.taxCode),
     organizationId,
+  );
+
+  // The parse already validated names against the known companies; resolve them
+  // to database ids here (folded, case-insensitive).
+  const companies = await listCompanies({ organizationId });
+  if (!companies.ok) return companies;
+
+  const companyIdByName = new Map(
+    companies.data.map((company) => [company.name.trim().toLowerCase(), company.id]),
   );
 
   const supabase = await createClient();
@@ -505,8 +780,26 @@ export async function importPartners(
         name: row.name,
         address: row.address,
         taxCode: row.taxCode,
+        companies: row.companies,
         ok: false,
         error: IMPORT_DUPLICATE_MESSAGE(conflicts[0].name),
+      });
+      continue;
+    }
+
+    const companyIds = row.companies
+      .map((name) => companyIdByName.get(name.trim().toLowerCase()))
+      .filter((id): id is string => Boolean(id));
+
+    if (companyIds.length === 0) {
+      results.push({
+        rowNumber: row.rowNumber,
+        name: row.name,
+        address: row.address,
+        taxCode: row.taxCode,
+        companies: row.companies,
+        ok: false,
+        error: "Không nhận diện được công ty",
       });
       continue;
     }
@@ -520,18 +813,40 @@ export async function importPartners(
           name: row.name,
           address: row.address.trim() === "" ? null : row.address.trim(),
           tax_code: code === "" ? null : code,
+          status: "active",
         })
         .select("id")
         .single();
 
-      if (error) {
+      if (error || !data) {
         // The raw driver error goes to the server log; the user gets a safe line.
-        console.error("[service:importPartners]", error);
+        if (error) console.error("[service:importPartners]", error);
         results.push({
           rowNumber: row.rowNumber,
           name: row.name,
           address: row.address,
           taxCode: row.taxCode,
+          companies: row.companies,
+          ok: false,
+          error: "Không thể tạo đối tác này. Vui lòng thử lại.",
+        });
+        continue;
+      }
+
+      const partnerId = (data as { id: string }).id;
+
+      const { error: junctionError } = await supabase
+        .from("partner_companies")
+        .insert(companyIds.map((companyId) => ({ partner_id: partnerId, company_id: companyId })));
+
+      if (junctionError) {
+        await deletePartnerRollback(partnerId);
+        results.push({
+          rowNumber: row.rowNumber,
+          name: row.name,
+          address: row.address,
+          taxCode: row.taxCode,
+          companies: row.companies,
           ok: false,
           error: "Không thể tạo đối tác này. Vui lòng thử lại.",
         });
@@ -543,8 +858,9 @@ export async function importPartners(
         name: row.name,
         address: row.address,
         taxCode: row.taxCode,
+        companies: row.companies,
         ok: true,
-        partnerId: (data as { id: string } | null)?.id,
+        partnerId,
       });
     } catch {
       results.push({
@@ -552,6 +868,7 @@ export async function importPartners(
         name: row.name,
         address: row.address,
         taxCode: row.taxCode,
+        companies: row.companies,
         ok: false,
         error: "Không thể tạo đối tác này. Vui lòng thử lại.",
       });

@@ -55,7 +55,7 @@ describe("parsePartnerWorkbook", () => {
       name: "Công ty A",
       address: "Hà Nội",
       taxCode: "0312345678",
-      ok: true,
+      companyText: "",
     });
     expect(result.rows[1]).toMatchObject({
       rowNumber: 3,
@@ -160,23 +160,24 @@ describe("parsePartnerWorkbook", () => {
 describe("validatePartnerImportRows", () => {
   it("passes a valid row through, trimmed", () => {
     const [row] = validatePartnerImportRows([
-      { rowNumber: 2, name: "  Công ty A  ", address: "  Hà Nội  ", taxCode: " 0312345678 " },
+      { rowNumber: 2, name: "  Công ty A  ", address: "  Hà Nội  ", taxCode: " 0312345678 ", companyText: "" },
     ]);
 
     expect(row).toMatchObject({
       name: "Công ty A",
       address: "Hà Nội",
       taxCode: "0312345678",
+      companies: ["HRP"],
       ok: true,
     });
   });
 
   it("applies the PartnerSchema rules — no second rulebook", () => {
     const rows = validatePartnerImportRows([
-      { rowNumber: 2, name: "", address: "", taxCode: "" },
-      { rowNumber: 3, name: "a".repeat(201), address: "", taxCode: "" },
-      { rowNumber: 4, name: "Công ty", address: "b".repeat(501), taxCode: "" },
-      { rowNumber: 5, name: "Công ty", address: "", taxCode: "12345" },
+      { rowNumber: 2, name: "", address: "", taxCode: "", companyText: "" },
+      { rowNumber: 3, name: "a".repeat(201), address: "", taxCode: "", companyText: "" },
+      { rowNumber: 4, name: "Công ty", address: "b".repeat(501), taxCode: "", companyText: "" },
+      { rowNumber: 5, name: "Công ty", address: "", taxCode: "12345", companyText: "" },
     ]);
 
     expect(rows[0]).toMatchObject({ ok: false, error: "Tên đối tác không được để trống" });
@@ -187,9 +188,9 @@ describe("validatePartnerImportRows", () => {
 
   it("flags every row that shares a tax code inside the file", () => {
     const rows = validatePartnerImportRows([
-      { rowNumber: 2, name: "Công ty A", address: "", taxCode: "0312345678" },
-      { rowNumber: 3, name: "Công ty B", address: "", taxCode: "0312345679" },
-      { rowNumber: 4, name: "Công ty A (nhánh)", address: "", taxCode: "0312345678" },
+      { rowNumber: 2, name: "Công ty A", address: "", taxCode: "0312345678", companyText: "" },
+      { rowNumber: 3, name: "Công ty B", address: "", taxCode: "0312345679", companyText: "" },
+      { rowNumber: 4, name: "Công ty A (nhánh)", address: "", taxCode: "0312345678", companyText: "" },
     ]);
 
     expect(rows[0].ok).toBe(false);
@@ -201,11 +202,46 @@ describe("validatePartnerImportRows", () => {
 
   it("does not treat empty tax codes as duplicates", () => {
     const rows = validatePartnerImportRows([
-      { rowNumber: 2, name: "Công ty A", address: "", taxCode: "" },
-      { rowNumber: 3, name: "Công ty B", address: "", taxCode: "" },
+      { rowNumber: 2, name: "Công ty A", address: "", taxCode: "", companyText: "" },
+      { rowNumber: 3, name: "Công ty B", address: "", taxCode: "", companyText: "" },
     ]);
 
     expect(rows.every((row) => row.ok)).toBe(true);
+  });
+
+  it("resolves the company column: missing/empty defaults to HRP", () => {
+    const rows = validatePartnerImportRows([
+      { rowNumber: 2, name: "Công ty A", address: "", taxCode: "", companyText: "" },
+      { rowNumber: 3, name: "Công ty B", address: "", taxCode: "", companyText: "HRP" },
+    ]);
+
+    expect(rows[0]).toMatchObject({ companies: ["HRP"], ok: true });
+    expect(rows[1]).toMatchObject({ companies: ["HRP"], ok: true });
+  });
+
+  it("resolves 'HRP, HR VN' into both companies", () => {
+    const [row] = validatePartnerImportRows([
+      { rowNumber: 2, name: "Công ty A", address: "", taxCode: "", companyText: "HRP, HR VN" },
+    ]);
+
+    expect(row).toMatchObject({ companies: ["HRP", "HR VN"], ok: true });
+  });
+
+  it("splits on semicolons and folds case/whitespace", () => {
+    const [row] = validatePartnerImportRows([
+      { rowNumber: 2, name: "Công ty A", address: "", taxCode: "", companyText: "hrp ; hr vn" },
+    ]);
+
+    expect(row).toMatchObject({ companies: ["HRP", "HR VN"], ok: true });
+  });
+
+  it("rejects an unrecognised company value for that row", () => {
+    const [row] = validatePartnerImportRows([
+      { rowNumber: 2, name: "Công ty A", address: "", taxCode: "", companyText: "Công ty XYZ" },
+    ]);
+
+    expect(row.ok).toBe(false);
+    expect(row.error).toContain("Không nhận diện được công ty");
   });
 });
 
@@ -261,9 +297,9 @@ describe("validatePartnerImportFile", () => {
 describe("summarisePartnerImport", () => {
   it("counts the two halves of the report", () => {
     const report = summarisePartnerImport([
-      { rowNumber: 2, name: "A", address: "", taxCode: "", ok: true, partnerId: "x" },
-      { rowNumber: 3, name: "B", address: "", taxCode: "", ok: false, error: "lỗi" },
-      { rowNumber: 4, name: "C", address: "", taxCode: "", ok: true, partnerId: "y" },
+      { rowNumber: 2, name: "A", address: "", taxCode: "", companies: ["HRP"], ok: true, partnerId: "x" },
+      { rowNumber: 3, name: "B", address: "", taxCode: "", companies: ["HRP"], ok: false, error: "lỗi" },
+      { rowNumber: 4, name: "C", address: "", taxCode: "", companies: ["HRP"], ok: true, partnerId: "y" },
     ]);
 
     expect(report.summary).toEqual({ total: 3, ok: 2, failed: 1 });
@@ -283,6 +319,7 @@ describe("buildPartnerImportTemplate", () => {
       rowNumber: 2,
       name: "Công ty TNHH Ví dụ",
       taxCode: "0312345678",
+      companyText: "HRP",
     });
     expect(parsed.rows[0]?.address).toContain("TP. Hồ Chí Minh");
   });

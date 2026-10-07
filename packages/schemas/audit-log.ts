@@ -28,6 +28,7 @@ export const AUDIT_ACTIONS = [
   "archive_contract",
   "upload_file",
   "update_profile",
+  "set_partner_status",
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -46,6 +47,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   archive_contract: "Lưu trữ hợp đồng",
   upload_file: "Tải tệp lên",
   update_profile: "Cập nhật hồ sơ",
+  set_partner_status: "Đổi trạng thái hợp tác",
 };
 
 export const AUDIT_TARGET_KINDS = [
