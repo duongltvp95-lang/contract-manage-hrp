@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { AddPartnerButton, RenamePartnerButton } from "@/components/partners/partner-name-sheet";
+import { CompanyBadges, PartnerStatusBadge } from "@/components/partners/partner-badges";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,6 +54,8 @@ export function PartnersTable({ rows }: { rows: PartnerWithCount[] }) {
           <TableRow>
             <TableHead>Tên đối tác</TableHead>
             <TableHead>Mã số thuế</TableHead>
+            <TableHead>Trạng thái</TableHead>
+            <TableHead>Công ty</TableHead>
             <TableHead className="text-center">Số hợp đồng</TableHead>
             <TableHead>Cập nhật lúc</TableHead>
             <TableHead className="text-right">Thao tác</TableHead>
@@ -87,6 +90,12 @@ export function PartnersTable({ rows }: { rows: PartnerWithCount[] }) {
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}
+                </TableCell>
+                <TableCell>
+                  <PartnerStatusBadge status={row.status} />
+                </TableCell>
+                <TableCell>
+                  <CompanyBadges companies={row.companies} />
                 </TableCell>
                 <TableCell className="text-center">
                   {row.contract_count > 0 ? (

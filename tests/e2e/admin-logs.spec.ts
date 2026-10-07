@@ -179,6 +179,7 @@ test.describe("business action labels (round 8, part 2)", () => {
     await clickSafe(page, '[data-testid="partner-add-button"]');
     await expect(page.getByTestId("partner-name-sheet")).toBeVisible();
     await page.fill("#partnerName", partnerName);
+    await clickSafe(page, '[data-testid="company-checkbox-HRP"]');
     await clickSafe(page, '[data-testid="partner-name-submit"]');
     await expect(page.getByTestId("partner-name-sheet")).toBeHidden({
       timeout: 15_000,

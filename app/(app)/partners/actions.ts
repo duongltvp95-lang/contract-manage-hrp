@@ -14,13 +14,17 @@ import {
 import {
   createPartner,
   importPartners,
+  listCompanies,
   previewPartnerImport,
   searchPartners,
+  setPartnerStatus,
   updatePartner,
+  type Company,
   type PartnerDetail,
   type PartnerImportServiceRow,
   type PartnerSearchRow,
 } from "@/lib/services/partners";
+import type { PartnerStatus } from "@schemas/partner";
 import {
   authorized,
   fromService,
@@ -88,6 +92,46 @@ export async function updatePartnerAction(
   });
 
   return fromService(result);
+}
+
+/**
+ * Round 10 — the org's companies (HRP / HR VN), for the partner form's checkbox
+ * list. The organization always comes from the session.
+ */
+export async function listCompaniesAction(): Promise<ActionResult<Company[]>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  return fromService(await listCompanies({ organizationId: access.user.organizationId }));
+}
+
+/**
+ * Round 10 — flips a partner between đang hợp tác / đã dừng hợp tác.
+ */
+export async function setPartnerStatusAction(
+  id: unknown,
+  status: unknown,
+): Promise<ActionResult<PartnerDetail>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  if (typeof id !== "string" || id.length === 0) {
+    return validationFailure("Thiếu thông tin đối tác", [
+      { path: "id", message: "Không xác định được đối tác cần đổi trạng thái" },
+    ]);
+  }
+
+  if (status !== "active" && status !== "stopped") {
+    return validationFailure("Trạng thái không hợp lệ", [
+      { path: "status", message: "Trạng thái phải là active hoặc stopped" },
+    ]);
+  }
+
+  return fromService(
+    await setPartnerStatus(id, status as PartnerStatus, {
+      organizationId: access.user.organizationId,
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------

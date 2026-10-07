@@ -248,8 +248,9 @@ export function PartnerImportSheet() {
                     : "Kéo thả file .xlsx vào đây, hoặc bấm để chọn"}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  File .xlsx, tối đa {PARTNER_IMPORT_MAX_ROWS} dòng · Cột MST nên
-                  để dạng văn bản để không mất số 0 ở đầu.
+                  File .xlsx, tối đa {PARTNER_IMPORT_MAX_ROWS} dòng · Cột: Tên đối
+                  tác · Địa chỉ · Mã số thuế · Công ty (HRP / HR VN, cách nhau dấu
+                  phẩy — bỏ trống mặc định HRP).
                 </p>
               </div>
 

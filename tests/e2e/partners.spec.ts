@@ -99,6 +99,7 @@ test.describe("partner flow", () => {
     await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
 
     await page.fill("#partnerName", partnerName);
+    await clickSafe(page, '[data-testid="company-checkbox-HRP"]');
     await clickSafe(page, '[data-testid="partner-name-submit"]');
 
     await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeHidden({
@@ -237,6 +238,7 @@ test.describe("partner flow", () => {
 
     await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
     await page.fill("#partnerName", inlineName);
+    await clickSafe(page, '[data-testid="company-checkbox-HRP"]');
     await clickSafe(page, '[data-testid="partner-name-submit"]');
 
     await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeHidden({
@@ -310,6 +312,7 @@ test.describe("partner address + tax code", () => {
     await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
 
     await page.fill("#partnerName", partnerWithDetails);
+    await clickSafe(page, '[data-testid="company-checkbox-HRP"]');
     await page.fill(
       "#partnerAddress",
       "Số 9, đường Bắc Hà, phường Thanh Xuân Bắc, Hà Nội",
@@ -350,6 +353,7 @@ test.describe("partner address + tax code", () => {
     await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
 
     await page.fill("#partnerName", partnerWithBranch);
+    await clickSafe(page, '[data-testid="company-checkbox-HRP"]');
     await page.fill("#partnerTaxCode", branchTaxCode);
     await clickSafe(page, '[data-testid="partner-name-submit"]');
 
@@ -380,6 +384,7 @@ test.describe("partner address + tax code", () => {
     await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
 
     await page.fill("#partnerName", `${TEST_PREFIX}Bỏ qua ${stamp}`);
+    await clickSafe(page, '[data-testid="company-checkbox-HRP"]');
     await page.fill("#partnerTaxCode", "not-a-tax-code");
     await clickSafe(page, '[data-testid="partner-name-submit"]');
 
@@ -415,6 +420,7 @@ test.describe("partner address + tax code", () => {
     await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
 
     await page.fill("#partnerName", `${TEST_PREFIX}Trùng MST ${stamp}`);
+    await clickSafe(page, '[data-testid="company-checkbox-HRP"]');
     await page.fill("#partnerTaxCode", taxCode); // Same as partnerWithDetails.
     await clickSafe(page, '[data-testid="partner-name-submit"]');
 
@@ -449,6 +455,7 @@ test.describe("partner address + tax code", () => {
 
     await page.fill("#partnerName", partnerNoDetails);
     // Address + tax code are left empty on purpose.
+    await clickSafe(page, '[data-testid="company-checkbox-HRP"]');
     await clickSafe(page, '[data-testid="partner-name-submit"]');
 
     await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeHidden({

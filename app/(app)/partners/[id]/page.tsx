@@ -7,13 +7,15 @@ import { ContractsPagination } from "@/components/contracts/contracts-pagination
 import { ContractsTable } from "@/components/contracts/contracts-table";
 import { ContractsTableSkeleton } from "@/components/contracts/contracts-table-skeleton";
 import { RenamePartnerButton } from "@/components/partners/partner-name-sheet";
+import { CompanyBadges, PartnerStatusBadge } from "@/components/partners/partner-badges";
+import { PartnerStatusToggle } from "@/components/partners/partner-status-toggle";
 import { NoPartnerContractsEmptyState } from "@/components/partners/partners-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth";
 import { parseContractsQuery } from "@/lib/contracts-query";
 import { listContracts } from "@/lib/services/contracts";
-import { getPartner, type PartnerRow } from "@/lib/services/partners";
+import { getPartner, type PartnerDetail } from "@/lib/services/partners";
 
 /**
  * Partner detail — feature round 2, part 2.
@@ -38,7 +40,7 @@ type RawSearchParams = Record<string, string | string[] | undefined>;
 async function loadPartner(params: PartnerParams): Promise<{
   id: string;
   organizationId: string;
-  partner: PartnerRow;
+  partner: PartnerDetail;
 }> {
   const { id } = await params;
   const me = await requireUser();
@@ -116,12 +118,18 @@ export default async function PartnerDetailPage({
         </Button>
 
         <div className="min-w-0 flex-1 space-y-1">
-          <h1
-            className="truncate text-2xl font-bold"
-            data-testid="partner-detail-name"
-          >
-            {loaded.partner.name}
-          </h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1
+              className="truncate text-2xl font-bold"
+              data-testid="partner-detail-name"
+            >
+              {loaded.partner.name}
+            </h1>
+            <PartnerStatusBadge status={loaded.partner.status} />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <CompanyBadges companies={loaded.partner.companies} />
+          </div>
           <p className="text-muted-foreground">
             Hợp đồng đã ký với đối tác này.
           </p>
@@ -163,7 +171,13 @@ export default async function PartnerDetailPage({
           )}
         </div>
 
-        <RenamePartnerButton partner={loaded.partner} />
+        <div className="flex items-center gap-2">
+          <PartnerStatusToggle
+            partnerId={loaded.partner.id}
+            status={loaded.partner.status}
+          />
+          <RenamePartnerButton partner={loaded.partner} />
+        </div>
       </header>
 
       <Suspense fallback={<ContractsTableSkeleton />}>
