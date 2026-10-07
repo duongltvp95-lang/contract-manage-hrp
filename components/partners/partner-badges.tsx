@@ -16,8 +16,8 @@ export function PartnerStatusBadge({ status }: { status: PartnerStatus }) {
       data-testid={`partner-status-${status}`}
       className={
         active
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-          : "border-transparent bg-muted text-muted-foreground"
+          ? "rounded-full border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "rounded-full border-transparent bg-muted text-muted-foreground"
       }
     >
       {PARTNER_STATUS_LABELS[status]}

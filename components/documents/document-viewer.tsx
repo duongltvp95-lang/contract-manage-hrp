@@ -137,7 +137,7 @@ export function DocumentViewer({
   }
 
   return (
-    <div className="flex h-full min-h-[28rem] flex-col overflow-hidden rounded-md border lg:flex-row">
+    <div className="flex h-full min-h-[28rem] flex-col overflow-hidden rounded-xl shadow-sm lg:flex-row">
       <DocumentSelector
         files={files}
         selectedId={selectedId}

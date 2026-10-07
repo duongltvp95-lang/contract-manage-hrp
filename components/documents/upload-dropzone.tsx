@@ -79,7 +79,7 @@ export function UploadDropzone({
       <div
         {...getRootProps()}
         className={cn(
-          "flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed p-6 text-center transition-colors",
+          "flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed p-6 text-center transition-colors",
           isDragActive && !isDragReject && "border-primary bg-accent",
           isDragReject && "border-destructive bg-destructive/10",
           disabled && "pointer-events-none opacity-60",

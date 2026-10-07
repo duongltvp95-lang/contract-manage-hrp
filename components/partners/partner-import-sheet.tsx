@@ -379,7 +379,7 @@ export function PartnerImportSheet() {
 
 function ImportRowsTable({ rows }: { rows: PartnerImportRowReport[] }) {
   return (
-    <div className="rounded-md border">
+    <div className="rounded-xl shadow-sm">
       <Table>
         <TableHeader>
           <TableRow>

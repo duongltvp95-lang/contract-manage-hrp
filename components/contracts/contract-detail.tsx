@@ -96,7 +96,11 @@ export function ContractDetail({
         </h1>
 
         {archived && (
-          <Badge variant="secondary" data-testid="contract-archived-badge">
+          <Badge
+            variant="secondary"
+            data-testid="contract-archived-badge"
+            className="rounded-full"
+          >
             Đã lưu trữ
           </Badge>
         )}
