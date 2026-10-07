@@ -7,6 +7,10 @@ import type { PartnerStatus } from "@schemas/partner";
 import { resolveAccess } from "@/lib/auth";
 import { listAuditLogs } from "@/lib/services/audit-logs";
 import { archiveContract, createContract, updateContract } from "@/lib/services/contracts";
+import {
+  getExpiringContracts,
+  getRecentContracts,
+} from "@/lib/services/dashboard";
 import { completeUpload } from "@/lib/services/files";
 import {
   createPartner,
@@ -131,6 +135,21 @@ export async function POST(request: NextRequest) {
       return result(await listCompanies({ organizationId }));
     case "search_partners":
       return result(await searchPartners(String(payload.term ?? "")));
+    case "recent_contracts":
+      return result(
+        await getRecentContracts(
+          organizationId,
+          typeof payload.limit === "number" ? payload.limit : 20,
+        ),
+      );
+    case "expiring_contracts":
+      return result(
+        await getExpiringContracts(
+          organizationId,
+          new Date(),
+          typeof payload.limit === "number" ? payload.limit : 20,
+        ),
+      );
     default:
       return NextResponse.json(
         { error: "unknown action", code: "unknown_action" },

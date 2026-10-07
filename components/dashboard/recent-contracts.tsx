@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { CompanyBadges } from "@/components/partners/partner-badges";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,15 +12,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDateOnly } from "@/lib/format";
-import type { ContractRow } from "@/lib/services/contracts";
+import type { DashboardContractRow } from "@/lib/services/dashboard";
 
 /**
  * "Recent Contracts" — plan section 67.
  *
  * Server-rendered from data the page already fetched; the component takes rows
  * rather than querying, so the dashboard is one round trip instead of three.
+ *
+ * Round 15: the partner cell shows the resolved name (never "—") and a new
+ * "Công ty" column shows the partner's company badges.
  */
-export function RecentContracts({ contracts }: { contracts: ContractRow[] }) {
+export function RecentContracts({ contracts }: { contracts: DashboardContractRow[] }) {
   if (contracts.length === 0) {
     return (
       <EmptyState
@@ -41,6 +45,7 @@ export function RecentContracts({ contracts }: { contracts: ContractRow[] }) {
           <TableRow>
             <TableHead>Số hợp đồng</TableHead>
             <TableHead>Đối tác</TableHead>
+            <TableHead>Công ty</TableHead>
             <TableHead>Ngày ký</TableHead>
             <TableHead>Ngày hết hạn</TableHead>
           </TableRow>
@@ -57,8 +62,13 @@ export function RecentContracts({ contracts }: { contracts: ContractRow[] }) {
                   {contract.contract_number ?? "Chưa đặt số"}
                 </Link>
               </TableCell>
-              <TableCell className="max-w-[18rem] truncate">
-                {contract.partner_text ?? "—"}
+              <TableCell className="max-w-[16rem] truncate">
+                {contract.partnerName ?? contract.partner_text ?? ""}
+              </TableCell>
+              <TableCell>
+                {contract.companies.length > 0 ? (
+                  <CompanyBadges companies={contract.companies} />
+                ) : null}
               </TableCell>
               <TableCell className="whitespace-nowrap">
                 {formatDateOnly(contract.signed_date)}

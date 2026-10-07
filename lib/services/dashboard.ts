@@ -6,6 +6,7 @@ import { resolveExpiryPreset } from "@/lib/contracts-query";
 import { createClient } from "@/lib/supabase/server";
 
 import { CONTRACT_COLUMNS, type ContractRow } from "./contracts";
+import { companiesForPartners } from "./partners";
 import { dbError, ok, type ServiceResult } from "./types";
 
 /**
@@ -24,6 +25,18 @@ export type ContractMetrics = {
   total: number;
   expiringSoon: number;
   expired: number;
+};
+
+/**
+ * A dashboard contract with its partner link resolved (round 15).
+ *
+ * `partnerName` is the linked partner's name (null when there is no link);
+ * `companies` are the linked partner's company names (empty when none). RLS is
+ * applied once per sub-query row, not per contract.
+ */
+export type DashboardContractRow = ContractRow & {
+  partnerName: string | null;
+  companies: string[];
 };
 
 /** How many rows the dashboard lists show. */
@@ -82,7 +95,7 @@ export async function getContractMetrics(
 export async function getRecentContracts(
   organizationId: string,
   limit: number = DASHBOARD_LIST_LIMIT,
-): Promise<ServiceResult<ContractRow[]>> {
+): Promise<ServiceResult<DashboardContractRow[]>> {
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -97,7 +110,7 @@ export async function getRecentContracts(
     return dbError("getRecentContracts", error);
   }
 
-  return ok((data ?? []) as ContractRow[]);
+  return ok(await attachPartnerInfo((data ?? []) as ContractRow[]));
 }
 
 /**
@@ -110,7 +123,7 @@ export async function getExpiringContracts(
   organizationId: string,
   today: Date = new Date(),
   limit: number = DASHBOARD_LIST_LIMIT,
-): Promise<ServiceResult<ContractRow[]>> {
+): Promise<ServiceResult<DashboardContractRow[]>> {
   const supabase = await createClient();
   const window = expiryWindow("expiring90", today);
 
@@ -128,7 +141,42 @@ export async function getExpiringContracts(
     return dbError("getExpiringContracts", error);
   }
 
-  return ok((data ?? []) as ContractRow[]);
+  return ok(await attachPartnerInfo((data ?? []) as ContractRow[]));
+}
+
+/**
+ * Resolves each contract's partner name + company names with two sub-queries
+ * (partners for names, the partner_companies junction for companies), keyed by
+ * the distinct partner ids — RLS applies once per row, not once per contract.
+ */
+async function attachPartnerInfo(rows: ContractRow[]): Promise<DashboardContractRow[]> {
+  if (rows.length === 0) return [];
+
+  const partnerIds = [
+    ...new Set(
+      rows.map((row) => row.partner_id).filter((id): id is string => Boolean(id)),
+    ),
+  ];
+
+  const nameByPartner = new Map<string, string>();
+  if (partnerIds.length > 0) {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("partners")
+      .select("id, name")
+      .in("id", partnerIds);
+    for (const row of (data ?? []) as { id: string; name: string }[]) {
+      nameByPartner.set(row.id, row.name);
+    }
+  }
+
+  const companiesByPartner = await companiesForPartners(partnerIds);
+
+  return rows.map((row) => ({
+    ...row,
+    partnerName: row.partner_id ? (nameByPartner.get(row.partner_id) ?? null) : null,
+    companies: row.partner_id ? (companiesByPartner.get(row.partner_id) ?? []) : [],
+  }));
 }
 
 /** Exposed so the report and tests can state the window without guessing. */

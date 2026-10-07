@@ -149,7 +149,7 @@ async function companiesForPartner(partnerId: string): Promise<string[]> {
 }
 
 /** Bulk company names per partner, one query for a whole page of partners. */
-async function companiesForPartners(
+export async function companiesForPartners(
   partnerIds: string[],
 ): Promise<Map<string, string[]>> {
   const result = new Map<string, string[]>();

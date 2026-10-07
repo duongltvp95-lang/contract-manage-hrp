@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { CompanyBadges } from "@/components/partners/partner-badges";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -11,7 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDateOnly, formatExpiryHint, daysUntil } from "@/lib/format";
-import type { ContractRow } from "@/lib/services/contracts";
+import type { DashboardContractRow } from "@/lib/services/dashboard";
 
 /**
  * "Expiring Contracts" — plan sections 67, 69.
@@ -20,8 +21,11 @@ import type { ContractRow } from "@/lib/services/contracts";
  * sorted by `expiry_date` ascending, so this component only presents them. The
  * "days left" column is derived for display; it is never stored (plan section
  * 70: no lifecycle status column).
+ *
+ * Round 15: the partner cell shows the resolved name (never "—") and a new
+ * "Công ty" column shows the partner's company badges.
  */
-export function ExpiringContracts({ contracts }: { contracts: ContractRow[] }) {
+export function ExpiringContracts({ contracts }: { contracts: DashboardContractRow[] }) {
   if (contracts.length === 0) {
     return (
       <EmptyState
@@ -38,6 +42,7 @@ export function ExpiringContracts({ contracts }: { contracts: ContractRow[] }) {
           <TableRow>
             <TableHead>Số hợp đồng</TableHead>
             <TableHead>Đối tác</TableHead>
+            <TableHead>Công ty</TableHead>
             <TableHead>Ngày hết hạn</TableHead>
             <TableHead>Còn lại</TableHead>
           </TableRow>
@@ -58,8 +63,13 @@ export function ExpiringContracts({ contracts }: { contracts: ContractRow[] }) {
                     {contract.contract_number ?? "Chưa đặt số"}
                   </Link>
                 </TableCell>
-                <TableCell className="max-w-[18rem] truncate">
-                  {contract.partner_text ?? "—"}
+                <TableCell className="max-w-[16rem] truncate">
+                  {contract.partnerName ?? contract.partner_text ?? ""}
+                </TableCell>
+                <TableCell>
+                  {contract.companies.length > 0 ? (
+                    <CompanyBadges companies={contract.companies} />
+                  ) : null}
                 </TableCell>
                 <TableCell className="whitespace-nowrap">
                   {formatDateOnly(contract.expiry_date)}
