@@ -8,12 +8,14 @@
 import { type NextRequest, NextResponse } from "next/server";
 
 import {
-  AUDIT_ACTIONS,
   AUDIT_ACTION_LABELS,
+  AUDIT_TARGET_KIND_LABELS,
   LogsFilterSchema,
   type AuditAction,
+  type AuditTargetKind,
 } from "@schemas/audit-log";
 
+import { formatAuditMetadata } from "@/lib/audit-display";
 import { getCurrentUser } from "@/lib/auth";
 import {
   listAuditLogs,
@@ -136,7 +138,7 @@ function formatTxt(rows: AuditLogRow[]): string {
       row.actorRole,
       actionLabel(row.action),
       targetLabel(row.targetKind, row.targetId),
-      JSON.stringify(row.metadata),
+      formatAuditMetadata(row.metadata),
     ].join(" | "),
   );
   return [header, ...lines].join("\n") + "\n";
@@ -168,21 +170,20 @@ async function formatXlsx(rows: AuditLogRow[]): Promise<Buffer> {
       actorRole: row.actorRole,
       action: actionLabel(row.action),
       target: targetLabel(row.targetKind, row.targetId),
-      metadata: JSON.stringify(row.metadata),
+      metadata: formatAuditMetadata(row.metadata),
     });
   }
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }
 
-function actionLabel(action: string): string {
-  return (AUDIT_ACTIONS as readonly string[]).includes(action)
-    ? (AUDIT_ACTION_LABELS as Record<string, string>)[action as AuditAction]
-    : action;
+function actionLabel(action: AuditAction): string {
+  return AUDIT_ACTION_LABELS[action] ?? action;
 }
 
-function targetLabel(kind: string, id: string | null): string {
-  if (!id) return kind;
-  return `${kind} · ${id}`;
+function targetLabel(kind: AuditTargetKind, id: string | null): string {
+  const label = AUDIT_TARGET_KIND_LABELS[kind] ?? kind;
+  if (!id) return label;
+  return `${label} · ${id}`;
 }
 
 function statusForCode(code: string): number {

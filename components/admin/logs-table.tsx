@@ -1,20 +1,25 @@
 "use client";
 
-import { AUDIT_ACTION_LABELS } from "@schemas/audit-log";
+import {
+  AUDIT_ACTION_LABELS,
+  AUDIT_TARGET_KIND_LABELS,
+} from "@schemas/audit-log";
 
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatAuditMetadata } from "@/lib/audit-display";
 import type { AuditLogRow } from "@/lib/services/audit-logs";
 
 /**
- * Audit log table — round 3, part 1.
+ * Audit log table — round 3, part 1; round 8, part 2.
  *
  * The actor's email is not stored on the row (only the profile id), so the
  * table falls back to a truncated id. The admin-only join lives in
  * `getActorEmail()` in a future round; for now, the row carries what it has.
  *
- * `metadata` is rendered as a compact JSON snippet: an admin who can read a
- * row can read the snippet that explains it.
+ * Action and target kind are localised through the shared label maps, and
+ * `metadata` is rendered as a compact summary (`formatAuditMetadata`) rather
+ * than a raw JSON blob.
  */
 export function LogsTable({ rows }: { rows: AuditLogRow[] }) {
   if (rows.length === 0) {
@@ -60,14 +65,14 @@ export function LogsTable({ rows }: { rows: AuditLogRow[] }) {
               </td>
               <td className="px-3 py-2">
                 <span className="font-mono text-xs">
-                  {row.targetKind}
+                  {AUDIT_TARGET_KIND_LABELS[row.targetKind] ?? row.targetKind}
                   {row.targetId ? ` · ${row.targetId.slice(0, 8)}…` : ""}
                 </span>
               </td>
               <td className="px-3 py-2">
-                <code className="break-all text-xs">
-                  {JSON.stringify(row.metadata)}
-                </code>
+                <span className="break-all text-xs">
+                  {formatAuditMetadata(row.metadata)}
+                </span>
               </td>
             </tr>
           ))}

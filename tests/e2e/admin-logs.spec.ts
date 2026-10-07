@@ -8,6 +8,7 @@ import {
   hasLiveBackend,
   login,
   runId,
+  selectPartner,
   sweep,
 } from "./helpers";
 
@@ -146,5 +147,73 @@ test.describe("/admin/logs (round 3, part 1)", () => {
     await expect(
       page.locator("body").filter({ hasText: "Tạo người dùng" }).first(),
     ).toBeVisible();
+  });
+});
+
+/**
+ * Round 8, part 2 — business actions are localised in the table, the filter and
+ * the export.
+ */
+test.describe("business action labels (round 8, part 2)", () => {
+  const stamp = runId();
+  const partnerName = `${TEST_PREFIX}Đối tác nhật ký ${stamp}`;
+  const contractNumber = `${TEST_PREFIX}HD-NK-${stamp}`;
+
+  test.beforeAll(async () => {
+    await sweep(adminClient());
+  });
+
+  test.afterAll(async () => {
+    await sweep(adminClient());
+  });
+
+  test("shows Vietnamese labels for partner and contract actions, filters, and exports", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    // 1. Create a partner through the UI.
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+    await clickSafe(page, '[data-testid="partner-add-button"]');
+    await expect(page.getByTestId("partner-name-sheet")).toBeVisible();
+    await page.fill("#partnerName", partnerName);
+    await clickSafe(page, '[data-testid="partner-name-submit"]');
+    await expect(page.getByTestId("partner-name-sheet")).toBeHidden({
+      timeout: 15_000,
+    });
+
+    // 2. Create a contract that names that partner.
+    await gotoAndSettle(page, "/contracts/new");
+    await page.fill('input[name="contractNumber"]', contractNumber);
+    await selectPartner(page, partnerName);
+    await clickSafe(page, '[data-testid="contract-form-submit"]');
+    await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 60_000 });
+
+    // 3. The audit table shows both actions, localised.
+    await gotoAndSettle(page, "/admin/logs");
+    await expect(page.getByTestId("logs-table")).toContainText("Thêm đối tác");
+    await expect(page.getByTestId("logs-table")).toContainText("Thêm hợp đồng");
+    await expect(page.getByTestId("logs-table")).toContainText(partnerName);
+    await expect(page.getByTestId("logs-table")).toContainText(contractNumber);
+
+    // 4. Filter by "Thêm đối tác": only the partner row remains.
+    await clickSafe(page, '[data-testid="logs-filter-action"]');
+    await page.getByRole("option", { name: "Thêm đối tác" }).click();
+    await clickSafe(page, '[data-testid="logs-filter-apply"]');
+
+    const table = page.getByTestId("logs-table");
+    await expect(table).toContainText("Thêm đối tác");
+    await expect(table).toContainText(partnerName);
+    await expect(table).not.toContainText("Thêm hợp đồng");
+
+    // 5. The export carries the same Vietnamese label for the new action.
+    const response = await page.request.get(
+      "/api/admin/logs/export?format=txt&action=create_partner",
+    );
+    expect(response.status()).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("Thêm đối tác");
+    expect(body).not.toContain("Tạo đối tác");
   });
 });

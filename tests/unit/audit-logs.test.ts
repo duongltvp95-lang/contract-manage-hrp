@@ -41,9 +41,9 @@ describe("audit-log enums", () => {
   });
 
   it("labels the round 8 business actions in Vietnamese", () => {
-    expect(AUDIT_ACTION_LABELS.create_partner).toBe("Tạo đối tác");
+    expect(AUDIT_ACTION_LABELS.create_partner).toBe("Thêm đối tác");
     expect(AUDIT_ACTION_LABELS.import_partners).toBe("Nhập đối tác từ Excel");
-    expect(AUDIT_ACTION_LABELS.create_contract).toBe("Tạo hợp đồng");
+    expect(AUDIT_ACTION_LABELS.create_contract).toBe("Thêm hợp đồng");
     expect(AUDIT_ACTION_LABELS.archive_contract).toBe("Lưu trữ hợp đồng");
     expect(AUDIT_ACTION_LABELS.upload_file).toBe("Tải tệp lên");
     expect(AUDIT_ACTION_LABELS.update_profile).toBe("Cập nhật hồ sơ");
