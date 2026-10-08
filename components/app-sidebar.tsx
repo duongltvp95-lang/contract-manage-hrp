@@ -113,7 +113,7 @@ export function AppSidebar() {
           height={36}
           priority
           data-testid="app-logo"
-          className="h-9 w-9 shrink-0 rounded-md bg-white object-contain group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8"
+          className="h-9 w-9 shrink-0 object-contain group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8"
         />
         <span className="truncate text-sm font-semibold text-sidebar-foreground group-data-[collapsible=icon]:hidden">
           Quản lý hợp đồng
