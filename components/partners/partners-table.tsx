@@ -61,6 +61,7 @@ export function PartnersTable({
           <TableRow>
             <TableHead>Tên đối tác</TableHead>
             <TableHead>Mã số thuế</TableHead>
+            <TableHead>Khu vực</TableHead>
             <TableHead>Trạng thái</TableHead>
             <TableHead>Công ty</TableHead>
             <TableHead className="text-center">Số hợp đồng</TableHead>
@@ -90,6 +91,15 @@ export function PartnersTable({
                   >
                     {row.name}
                   </Link>
+                  {row.abbreviation ? (
+                    <Badge
+                      variant="outline"
+                      className="ml-2 font-mono text-xs"
+                      data-testid={`partner-abbr-badge-${row.id}`}
+                    >
+                      {row.abbreviation}
+                    </Badge>
+                  ) : null}
                 </TableCell>
                 <TableCell className="font-mono text-sm">
                   {row.tax_code ? (
@@ -97,6 +107,9 @@ export function PartnersTable({
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {row.region ?? ""}
                 </TableCell>
                 <TableCell>
                   <PartnerStatusBadge status={row.status} />

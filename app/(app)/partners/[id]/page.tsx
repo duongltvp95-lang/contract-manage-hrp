@@ -144,7 +144,10 @@ export default async function PartnerDetailPage({
           {/* Round 2 part 3: address + tax code are OPTIONAL fields, so each line
               shows only when populated. `whitespace-pre-line` keeps newlines a
               user typed in the textarea (multi-line Vietnamese addresses). */}
-          {(loaded.partner.address || loaded.partner.tax_code) && (
+          {(loaded.partner.address ||
+            loaded.partner.tax_code ||
+            loaded.partner.region ||
+            loaded.partner.abbreviation) && (
             <dl
               className="grid gap-x-6 gap-y-1 pt-2 text-sm sm:grid-cols-[auto_1fr]"
               data-testid="partner-detail-meta"
@@ -172,6 +175,24 @@ export default async function PartnerDetailPage({
                     data-testid="partner-detail-address"
                   >
                     {loaded.partner.address}
+                  </dd>
+                </>
+              )}
+              {loaded.partner.region && (
+                <>
+                  <dt className="font-medium text-muted-foreground">Khu vực</dt>
+                  <dd data-testid="partner-detail-region">
+                    {loaded.partner.region}
+                  </dd>
+                </>
+              )}
+              {loaded.partner.abbreviation && (
+                <>
+                  <dt className="font-medium text-muted-foreground">
+                    Tên viết tắt
+                  </dt>
+                  <dd className="font-mono" data-testid="partner-detail-abbreviation">
+                    {loaded.partner.abbreviation}
                   </dd>
                 </>
               )}

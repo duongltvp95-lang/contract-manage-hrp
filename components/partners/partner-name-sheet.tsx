@@ -72,7 +72,10 @@ import type { Company, PartnerDetail, PartnerRow } from "@/lib/services/partners
 export type PartnerNameSheetProps = {
   mode: "create" | "edit";
   /** Edit only — the partner being edited (status + current company names). */
-  partner?: (Pick<PartnerRow, "id" | "name" | "address" | "tax_code" | "status"> & {
+  partner?: (Pick<
+    PartnerRow,
+    "id" | "name" | "address" | "tax_code" | "region" | "abbreviation" | "status"
+  > & {
     companies: string[];
   }) | null;
   /** Called with the saved row, before the refresh. */
@@ -113,6 +116,8 @@ export function PartnerNameSheet({
       // `?? ""` keeps the form happy when the field is null on the row.
       address: partner?.address ?? "",
       taxCode: partner?.tax_code ?? "",
+      region: partner?.region ?? "",
+      abbreviation: partner?.abbreviation ?? "",
       status: partner?.status ?? "active",
       companyIds: [],
     },
@@ -164,6 +169,8 @@ export function PartnerNameSheet({
       name: result.data.name,
       address: result.data.address ?? "",
       taxCode: result.data.tax_code ?? "",
+      region: result.data.region ?? "",
+      abbreviation: result.data.abbreviation ?? "",
       status: result.data.status ?? "active",
       companyIds: result.data.companies
         .map((name) => companies.find((company) => company.name === name)?.id)
@@ -262,6 +269,59 @@ export function PartnerNameSheet({
                     </FormControl>
                     <FormDescription>
                       Không bắt buộc. 10 chữ số, thêm -NNN nếu là mã chi nhánh.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Round 21 — region + abbreviation */}
+              <FormField
+                control={form.control}
+                name="region"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Khu vực</FormLabel>
+                    <FormControl>
+                      <Input
+                        id="partnerRegion"
+                        placeholder="VD: Miền Bắc"
+                        autoComplete="off"
+                        disabled={saving}
+                        maxLength={100}
+                        data-testid="partner-region-input"
+                        {...field}
+                        value={field.value ?? ""}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Không bắt buộc. Tối đa 100 ký tự.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="abbreviation"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Tên viết tắt</FormLabel>
+                    <FormControl>
+                      <Input
+                        id="partnerAbbreviation"
+                        placeholder="VD: ĐK"
+                        autoComplete="off"
+                        disabled={saving}
+                        maxLength={50}
+                        data-testid="partner-abbreviation-input"
+                        {...field}
+                        value={field.value ?? ""}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Không bắt buộc. Tối đa 50 ký tự.
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -400,7 +460,10 @@ export function AddPartnerButton() {
 export function RenamePartnerButton({
   partner,
 }: {
-  partner: Pick<PartnerRow, "id" | "name" | "address" | "tax_code" | "status"> & {
+  partner: Pick<
+    PartnerRow,
+    "id" | "name" | "address" | "tax_code" | "region" | "abbreviation" | "status"
+  > & {
     companies: string[];
   };
 }) {
