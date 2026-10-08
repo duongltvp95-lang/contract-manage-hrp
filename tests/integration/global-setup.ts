@@ -93,6 +93,11 @@ function childEnvironment(): NodeJS.ProcessEnv {
     MAX_UPLOAD_SIZE_MB: "1",
     // Enables the fixture routes above; nothing else reads this flag.
     TEST_PROBE: "1",
+    // Round 19: the delete suite uses a throwaway privileged account; the real
+    // owner email stays in the list so production behaviour is unchanged.
+    DELETE_ADMIN_EMAILS:
+      process.env.DELETE_ADMIN_EMAILS ??
+      "duongltvp95@gmail.com,w1test.delete-admin@hrpartner.test",
   };
 }
 

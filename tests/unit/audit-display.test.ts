@@ -111,6 +111,12 @@ describe("formatAuditSentence", () => {
     expect(say("set_partner_status", { to: "active", name: "Công ty A" })).toBe(
       'Khương Văn Đường đã khôi phục hợp tác với đối tác “Công ty A”',
     );
+    expect(say("delete_contract", { contractNumber: "HD-001" })).toBe(
+      'Khương Văn Đường đã xoá hợp đồng “HD-001”',
+    );
+    expect(say("delete_partner", { name: "Công ty A" })).toBe(
+      'Khương Văn Đường đã xoá đối tác “Công ty A”',
+    );
   });
 
   it("uses a neutral subject when the actor name is missing", () => {

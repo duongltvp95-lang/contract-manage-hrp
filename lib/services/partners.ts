@@ -7,6 +7,8 @@ import {
 } from "@schemas/partner";
 
 import type { PartnerImportRow, PartnerImportRowReport } from "@/lib/partner-import";
+import { getCurrentUser } from "@/lib/auth";
+import { canDeleteEntities } from "@/lib/delete-permissions";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { PARTNER_SEARCH_LIMIT } from "@/lib/partner-display";
@@ -887,4 +889,58 @@ export async function importPartners(
   }
 
   return ok(results);
+}
+
+/**
+ * Round 19 — hard-delete a partner (owner-only, email-gated).
+ *
+ * A partner that any contract still references is refused with a clear count —
+ * the caller must delete those contracts first (the junction rows cascade on
+ * the partner delete, so no extra cleanup is needed). The delete runs through
+ * the service-role client; the session has no DELETE grant by hardening.
+ */
+export async function deletePartner(
+  id: string,
+  { organizationId }: PartnerContext,
+): Promise<ServiceResult<{ id: string }>> {
+  const user = await getCurrentUser();
+  if (!user) return err("unauthenticated", "Bạn cần đăng nhập");
+  if (!canDeleteEntities(user.email)) {
+    return err("forbidden", "Không có quyền xoá đối tác");
+  }
+
+  // A partner in another organization reads as not found — nothing leaks.
+  const partner = await getPartner(id, { organizationId });
+  if (!partner.ok) return partner;
+
+  const counts = await countContractsByPartner([id], organizationId);
+  const count = counts.get(id) ?? 0;
+  if (count > 0) {
+    return err(
+      "validation",
+      `Đối tác đang có ${count} hợp đồng, không thể xoá — hãy xoá hợp đồng trước`,
+    );
+  }
+
+  let admin: ReturnType<typeof createAdminClient>;
+  try {
+    admin = createAdminClient();
+  } catch (error) {
+    return dbError("deletePartner", error);
+  }
+
+  // partner_companies rows cascade via the FK (ON DELETE CASCADE).
+  const { error } = await admin.from("partners").delete().eq("id", id);
+  if (error) {
+    return dbError("deletePartner", error);
+  }
+
+  await recordCurrentUserAudit({
+    action: "delete_partner",
+    targetKind: "partner",
+    targetId: id,
+    metadata: { name: partner.data.name },
+  });
+
+  return ok({ id });
 }

@@ -141,6 +141,10 @@ function sentenceFor(action: AuditAction, meta: Record<string, unknown>): string
       return quoted("sửa hợp đồng", text(meta.contractNumber));
     case "archive_contract":
       return quoted("lưu trữ hợp đồng", text(meta.contractNumber));
+    case "delete_contract":
+      return quoted("xoá hợp đồng", text(meta.contractNumber));
+    case "delete_partner":
+      return quoted("xoá đối tác", text(meta.name));
     case "upload_file":
       return uploadFile(meta);
     case "update_profile":

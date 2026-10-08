@@ -9,6 +9,10 @@ import {
 } from "@schemas/contract";
 
 import { resolveExpiryPreset, sanitizeSearchTerm, type ContractsQuery } from "@/lib/contracts-query";
+import { getCurrentUser } from "@/lib/auth";
+import { canDeleteEntities } from "@/lib/delete-permissions";
+import { deleteObject } from "@/lib/r2/objects";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { recordCurrentUserAudit } from "./audit-logs";
 import { companiesForPartners, getPartner } from "./partners";
@@ -572,4 +576,85 @@ export async function archiveContract(
   });
 
   return ok(archived);
+}
+
+/**
+ * Round 19 — hard-delete a contract (owner-only, email-gated).
+ *
+ * The delete admin is resolved from the session and must match
+ * `DELETE_ADMIN_EMAILS`. The contract is org-checked, then every R2 object is
+ * removed BEFORE any row: a storage failure leaves the database untouched. The
+ * rows are deleted with the service-role client — the session has no DELETE
+ * grant by hardening.
+ */
+export async function deleteContract(
+  id: string,
+  { organizationId }: { organizationId: string },
+): Promise<ServiceResult<{ id: string }>> {
+  const user = await getCurrentUser();
+  if (!user) return err("unauthenticated", "Bạn cần đăng nhập");
+  if (!canDeleteEntities(user.email)) {
+    return err("forbidden", "Không có quyền xoá hợp đồng");
+  }
+
+  // A contract in another organization reads as not found — nothing leaks.
+  const contract = await getContract(id, organizationId);
+  if (!contract.ok) return contract;
+
+  let admin: ReturnType<typeof createAdminClient>;
+  try {
+    admin = createAdminClient();
+  } catch (error) {
+    return dbError("deleteContract", error);
+  }
+
+  const { data: files, error: filesError } = await admin
+    .from("contract_files")
+    .select("object_key")
+    .eq("contract_id", id);
+
+  if (filesError) {
+    return dbError("deleteContract", filesError);
+  }
+
+  // Remove every object first; any failure stops before a single row changes.
+  try {
+    for (const file of (files ?? []) as { object_key: string }[]) {
+      await deleteObject(file.object_key);
+    }
+  } catch (error) {
+    return dbError("deleteContract", error);
+  }
+
+  const { error: filesDeleteError } = await admin
+    .from("contract_files")
+    .delete()
+    .eq("contract_id", id);
+
+  if (filesDeleteError) {
+    return dbError("deleteContract", filesDeleteError);
+  }
+
+  const { error: contractDeleteError } = await admin
+    .from("contracts")
+    .delete()
+    .eq("id", id);
+
+  if (contractDeleteError) {
+    return dbError("deleteContract", contractDeleteError);
+  }
+
+  await recordCurrentUserAudit({
+    action: "delete_contract",
+    targetKind: "contract",
+    targetId: id,
+    metadata: {
+      contractNumber: contract.data.contract_number ?? null,
+      ...(contract.data.partner_name
+        ? { partnerName: contract.data.partner_name }
+        : {}),
+    },
+  });
+
+  return ok({ id });
 }
