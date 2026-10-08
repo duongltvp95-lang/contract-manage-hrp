@@ -64,6 +64,27 @@ export const partnerTaxCodeField = z
   .or(z.literal(""));
 
 /**
+ * Khu vực — round 21. Free text, optional, up to 100 characters.
+ */
+export const partnerRegionField = z
+  .string()
+  .trim()
+  .max(100, "Khu vực tối đa 100 ký tự")
+  .optional()
+  .or(z.literal(""));
+
+/**
+ * Tên viết tắt — round 21. Free text, optional, up to 50 characters. Shown as a
+ * small badge beside the name and matched by the quick search.
+ */
+export const partnerAbbreviationField = z
+  .string()
+  .trim()
+  .max(50, "Tên viết tắt tối đa 50 ký tự")
+  .optional()
+  .or(z.literal(""));
+
+/**
  * Collaboration status — round 10. `active` = đang hợp tác (default),
  * `stopped` = đã dừng hợp tác. A stopped partner stays in the directory and on
  * its contracts but is hidden from the new-contract combobox.
@@ -98,6 +119,8 @@ export const PartnerSchema = z.object({
   name: partnerNameField,
   address: partnerAddressField,
   taxCode: partnerTaxCodeField,
+  region: partnerRegionField,
+  abbreviation: partnerAbbreviationField,
   status: partnerStatusField,
   companyIds: partnerCompanyIdsField,
 });
@@ -110,6 +133,8 @@ export const UpdatePartnerSchema = z.object({
   name: partnerNameField.optional(),
   address: partnerAddressField,
   taxCode: partnerTaxCodeField,
+  region: partnerRegionField,
+  abbreviation: partnerAbbreviationField,
   status: z.enum(PARTNER_STATUSES).optional(),
   companyIds: z
     .array(z.string().uuid())

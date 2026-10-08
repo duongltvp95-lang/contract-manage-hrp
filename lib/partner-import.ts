@@ -17,8 +17,10 @@ import type ExcelJS from "exceljs";
 import { z } from "zod";
 
 import {
+  partnerAbbreviationField,
   partnerAddressField,
   partnerNameField,
+  partnerRegionField,
   partnerTaxCodeField,
 } from "@schemas/partner";
 
@@ -83,7 +85,13 @@ export function validatePartnerImportFile(
   return { ok: true };
 }
 
-type PartnerImportColumn = "name" | "address" | "taxCode" | "company";
+type PartnerImportColumn =
+  | "name"
+  | "address"
+  | "taxCode"
+  | "region"
+  | "abbreviation"
+  | "company";
 
 /**
  * Header aliases, already folded with `foldText`: an accented, unaccented or
@@ -94,6 +102,8 @@ const HEADER_ALIASES: Record<PartnerImportColumn, string[]> = {
   name: ["ten doi tac", "ten", "ten cong ty", "name"],
   address: ["dia chi", "address"],
   taxCode: ["ma so thue", "mst", "tax code", "tax_code"],
+  region: ["khu vuc", "region"],
+  abbreviation: ["ten viet tat", "viet tat", "abbreviation"],
   company: ["cong ty", "company"],
 };
 
@@ -113,6 +123,8 @@ const importFieldsSchema = z.object({
   name: partnerNameField,
   address: partnerAddressField,
   taxCode: partnerTaxCodeField,
+  region: partnerRegionField,
+  abbreviation: partnerAbbreviationField,
 });
 
 /** Raw row as read from the workbook; validation resolves `companyText`. */
@@ -122,6 +134,8 @@ export type ParsedPartnerImportRow = {
   name: string;
   address: string;
   taxCode: string;
+  region: string;
+  abbreviation: string;
   /** Raw "Công ty" cell text; empty when the column is absent. */
   companyText: string;
 };
@@ -131,6 +145,8 @@ export type PartnerImportRow = {
   name: string;
   address: string;
   taxCode: string;
+  region: string;
+  abbreviation: string;
   /** Resolved company names (e.g. ["HRP", "HR VN"]), at least one. */
   companies: string[];
   ok: boolean;
@@ -267,6 +283,10 @@ export async function parsePartnerWorkbook(
       columns.address !== undefined ? cellText(row.getCell(columns.address)) : "";
     const taxCode =
       columns.taxCode !== undefined ? cellText(row.getCell(columns.taxCode)) : "";
+    const region =
+      columns.region !== undefined ? cellText(row.getCell(columns.region)) : "";
+    const abbreviation =
+      columns.abbreviation !== undefined ? cellText(row.getCell(columns.abbreviation)) : "";
     const companyText =
       columns.company !== undefined ? cellText(row.getCell(columns.company)) : "";
 
@@ -275,6 +295,8 @@ export async function parsePartnerWorkbook(
       !name.trim() &&
       !address.trim() &&
       !taxCode.trim() &&
+      !region.trim() &&
+      !abbreviation.trim() &&
       !companyText.trim()
     ) {
       continue;
@@ -288,7 +310,7 @@ export async function parsePartnerWorkbook(
       };
     }
 
-    rows.push({ rowNumber, name, address, taxCode, companyText });
+    rows.push({ rowNumber, name, address, taxCode, region, abbreviation, companyText });
   }
 
   return { ok: true, rows };
@@ -340,6 +362,8 @@ export function validatePartnerImportRows(
       name: row.name,
       address: row.address,
       taxCode: row.taxCode,
+      region: row.region,
+      abbreviation: row.abbreviation,
     });
 
     if (!parsed.success) {
@@ -348,6 +372,8 @@ export function validatePartnerImportRows(
         name: row.name,
         address: row.address,
         taxCode: row.taxCode,
+        region: row.region,
+        abbreviation: row.abbreviation,
         companies: [DEFAULT_COMPANY],
         ok: false,
         error: parsed.error.issues[0]?.message ?? "Dữ liệu không hợp lệ",
@@ -361,6 +387,8 @@ export function validatePartnerImportRows(
         name: parsed.data.name,
         address: parsed.data.address ?? "",
         taxCode: parsed.data.taxCode ?? "",
+        region: parsed.data.region ?? "",
+        abbreviation: parsed.data.abbreviation ?? "",
         companies: [DEFAULT_COMPANY],
         ok: false,
         error: companies.error,
@@ -372,6 +400,8 @@ export function validatePartnerImportRows(
       name: parsed.data.name,
       address: parsed.data.address ?? "",
       taxCode: parsed.data.taxCode ?? "",
+      region: parsed.data.region ?? "",
+      abbreviation: parsed.data.abbreviation ?? "",
       companies: companies.companies,
       ok: true,
     };
@@ -446,6 +476,8 @@ export async function buildPartnerImportTemplate(): Promise<Uint8Array> {
 
   sheet.columns = [
     { header: "Tên đối tác", key: "name", width: 36 },
+    { header: "Tên viết tắt", key: "abbreviation", width: 16 },
+    { header: "Khu vực", key: "region", width: 20 },
     { header: "Địa chỉ", key: "address", width: 44 },
     { header: "Mã số thuế", key: "taxCode", width: 16 },
     { header: "Công ty", key: "company", width: 16 },
@@ -454,6 +486,8 @@ export async function buildPartnerImportTemplate(): Promise<Uint8Array> {
 
   sheet.addRow({
     name: "Công ty TNHH Ví dụ",
+    abbreviation: "CTYVD",
+    region: "Miền Nam",
     address: "123 Đường ABC, Quận 1, TP. Hồ Chí Minh",
     taxCode: "0312345678",
     company: "HRP",

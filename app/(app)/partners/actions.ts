@@ -207,6 +207,8 @@ export async function previewPartnersImportAction(
       name: row.name,
       address: row.address,
       taxCode: row.taxCode,
+      region: row.region,
+      abbreviation: row.abbreviation,
       companies: row.companies,
     });
   }
@@ -251,6 +253,8 @@ export async function importPartnersAction(
       name: row.name,
       address: row.address,
       taxCode: row.taxCode,
+      region: row.region,
+      abbreviation: row.abbreviation,
       companies: row.companies,
     });
   }

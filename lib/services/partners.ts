@@ -43,13 +43,15 @@ export type PartnerRow = {
   name: string;
   address: string | null;
   tax_code: string | null;
+  region: string | null;
+  abbreviation: string | null;
   status: PartnerStatus;
   created_at: string;
   updated_at: string;
 };
 
 export const PARTNER_COLUMNS =
-  "id, organization_id, name, address, tax_code, status, created_at, updated_at";
+  "id, organization_id, name, address, tax_code, region, abbreviation, status, created_at, updated_at";
 
 /**
  * A company an organization works with (round 10). Read-only for the app: the
@@ -404,6 +406,8 @@ export async function createPartner(
 
   const address = normaliseOptionalText(parsed.data.address);
   const taxCode = normaliseOptionalText(parsed.data.taxCode);
+  const region = normaliseOptionalText(parsed.data.region);
+  const abbreviation = normaliseOptionalText(parsed.data.abbreviation);
   const status = parsed.data.status ?? "active";
   const companyIds = parsed.data.companyIds;
 
@@ -440,6 +444,8 @@ export async function createPartner(
       name: parsed.data.name,
       address,
       tax_code: taxCode,
+      region,
+      abbreviation,
       status,
     })
     .select(PARTNER_COLUMNS)
@@ -519,6 +525,12 @@ export async function updatePartner(
   }
   if ("taxCode" in raw) {
     patch.tax_code = normaliseOptionalText(parsed.data.taxCode) ?? null;
+  }
+  if ("region" in raw) {
+    patch.region = normaliseOptionalText(parsed.data.region) ?? null;
+  }
+  if ("abbreviation" in raw) {
+    patch.abbreviation = normaliseOptionalText(parsed.data.abbreviation) ?? null;
   }
   if ("status" in raw && parsed.data.status !== undefined) {
     patch.status = parsed.data.status;
@@ -699,7 +711,7 @@ export async function setPartnerStatus(
 /** The shape both import functions consume: validated rows, nothing more. */
 export type PartnerImportServiceRow = Pick<
   PartnerImportRow,
-  "rowNumber" | "name" | "address" | "taxCode" | "companies"
+  "rowNumber" | "name" | "address" | "taxCode" | "region" | "abbreviation" | "companies"
 >;
 
 const IMPORT_DUPLICATE_MESSAGE = (ownerName: string) =>
@@ -733,6 +745,8 @@ export async function previewPartnerImport(
           name: row.name,
           address: row.address,
           taxCode: row.taxCode,
+          region: row.region,
+          abbreviation: row.abbreviation,
           companies: row.companies,
           ok: false,
           error: IMPORT_DUPLICATE_MESSAGE(conflicts[0].name),
@@ -744,6 +758,8 @@ export async function previewPartnerImport(
         name: row.name,
         address: row.address,
         taxCode: row.taxCode,
+        region: row.region,
+        abbreviation: row.abbreviation,
         companies: row.companies,
         ok: true,
       };
@@ -791,6 +807,8 @@ export async function importPartners(
         name: row.name,
         address: row.address,
         taxCode: row.taxCode,
+        region: row.region,
+        abbreviation: row.abbreviation,
         companies: row.companies,
         ok: false,
         error: IMPORT_DUPLICATE_MESSAGE(conflicts[0].name),
@@ -808,6 +826,8 @@ export async function importPartners(
         name: row.name,
         address: row.address,
         taxCode: row.taxCode,
+        region: row.region,
+        abbreviation: row.abbreviation,
         companies: row.companies,
         ok: false,
         error: "Không nhận diện được công ty",
@@ -824,6 +844,8 @@ export async function importPartners(
           name: row.name,
           address: row.address.trim() === "" ? null : row.address.trim(),
           tax_code: code === "" ? null : code,
+          region: normaliseOptionalText(row.region) ?? null,
+          abbreviation: normaliseOptionalText(row.abbreviation) ?? null,
           status: "active",
         })
         .select("id")
@@ -837,6 +859,8 @@ export async function importPartners(
           name: row.name,
           address: row.address,
           taxCode: row.taxCode,
+          region: row.region,
+          abbreviation: row.abbreviation,
           companies: row.companies,
           ok: false,
           error: "Không thể tạo đối tác này. Vui lòng thử lại.",
@@ -857,6 +881,8 @@ export async function importPartners(
           name: row.name,
           address: row.address,
           taxCode: row.taxCode,
+          region: row.region,
+          abbreviation: row.abbreviation,
           companies: row.companies,
           ok: false,
           error: "Không thể tạo đối tác này. Vui lòng thử lại.",
@@ -869,6 +895,8 @@ export async function importPartners(
         name: row.name,
         address: row.address,
         taxCode: row.taxCode,
+        region: row.region,
+        abbreviation: row.abbreviation,
         companies: row.companies,
         ok: true,
         partnerId,
@@ -879,6 +907,8 @@ export async function importPartners(
         name: row.name,
         address: row.address,
         taxCode: row.taxCode,
+        region: row.region,
+        abbreviation: row.abbreviation,
         companies: row.companies,
         ok: false,
         error: "Không thể tạo đối tác này. Vui lòng thử lại.",
