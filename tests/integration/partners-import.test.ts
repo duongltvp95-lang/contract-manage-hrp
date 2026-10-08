@@ -26,11 +26,18 @@ import {
 const suite = hasLiveBackend ? describe : describe.skip;
 
 async function buildWorkbook(rows: (string | null)[][]): Promise<Uint8Array> {
+  return buildWorkbookWithHeaders(["Tên đối tác", "Địa chỉ", "Mã số thuế"], rows);
+}
+
+async function buildWorkbookWithHeaders(
+  headers: string[],
+  rows: (string | null)[][],
+): Promise<Uint8Array> {
   const ExcelJS = (await import("exceljs")).default;
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Đối tác");
 
-  sheet.addRow(["Tên đối tác", "Địa chỉ", "Mã số thuế"]);
+  sheet.addRow(headers);
   for (const row of rows) {
     sheet.addRow(row.map((cell) => cell ?? ""));
   }
@@ -268,5 +275,69 @@ suite("partner import — Excel (round 7)", () => {
     } finally {
       await orgAOnly.cleanup();
     }
+  }, 120_000);
+
+  it("imports the status column — stopped and active (round 22)", async () => {
+    const buffer = await buildWorkbookWithHeaders(
+      ["Tên đối tác", "Mã số thuế", "Trạng thái hợp tác"],
+      [
+        [`${TEST_PREFIX}Status dừng ${stamp}`, "0511111141", "Đã dừng hợp tác"],
+        [`${TEST_PREFIX}Status đang ${stamp}`, "0511111142", "Đang hợp tác"],
+      ],
+    );
+
+    const result = await postImport("import", orgA.cookie, buffer);
+
+    expect(result.status).toBe(200);
+
+    const report = result.body as ImportReport;
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0 });
+
+    const { data } = await admin
+      .from("partners")
+      .select("name, status")
+      .like("name", `${TEST_PREFIX}Status%`)
+      .order("name");
+
+    expect(data).toHaveLength(2);
+    const stopped = data?.find((row) => row.name.includes("dừng"));
+    const active = data?.find((row) => row.name.includes("đang"));
+    expect(stopped?.status).toBe("stopped");
+    expect(active?.status).toBe("active");
+  }, 120_000);
+
+  it("a row with an unrecognised status fails alone (round 22)", async () => {
+    const buffer = await buildWorkbookWithHeaders(
+      ["Tên đối tác", "Mã số thuế", "Trạng thái hợp tác"],
+      [
+        [`${TEST_PREFIX}Status lạ ${stamp}`, "0511111151", "Tạm dừng"],
+        [`${TEST_PREFIX}Status ok ${stamp}`, "0511111152", "Đang hợp tác"],
+      ],
+    );
+
+    const result = await postImport("import", orgA.cookie, buffer);
+
+    expect(result.status).toBe(200);
+
+    const report = result.body as ImportReport;
+    expect(report.summary).toEqual({ total: 2, ok: 1, failed: 1 });
+
+    const bad = report.rows.find((row) => row.rowNumber === 2);
+    expect(bad?.ok).toBe(false);
+    expect(bad?.error).toContain("Đang hợp tác");
+    expect(bad?.error).toContain("Đã dừng hợp tác");
+
+    // Only the good row was written.
+    const { data: goodRows } = await admin
+      .from("partners")
+      .select("id")
+      .eq("name", `${TEST_PREFIX}Status ok ${stamp}`);
+    expect(goodRows ?? []).toHaveLength(1);
+
+    const { data: badRows } = await admin
+      .from("partners")
+      .select("id")
+      .eq("name", `${TEST_PREFIX}Status lạ ${stamp}`);
+    expect(badRows ?? []).toHaveLength(0);
   }, 120_000);
 });

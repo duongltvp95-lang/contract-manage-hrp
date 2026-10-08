@@ -93,6 +93,7 @@ export async function POST(request: NextRequest) {
       taxCode: row.taxCode,
       region: row.region,
       abbreviation: row.abbreviation,
+      status: row.status,
       companies: row.companies,
     });
   }

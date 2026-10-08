@@ -209,6 +209,7 @@ export async function previewPartnersImportAction(
       taxCode: row.taxCode,
       region: row.region,
       abbreviation: row.abbreviation,
+      status: row.status,
       companies: row.companies,
     });
   }
@@ -255,6 +256,7 @@ export async function importPartnersAction(
       taxCode: row.taxCode,
       region: row.region,
       abbreviation: row.abbreviation,
+      status: row.status,
       companies: row.companies,
     });
   }
