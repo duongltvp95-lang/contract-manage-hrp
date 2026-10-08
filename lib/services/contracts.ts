@@ -8,7 +8,7 @@ import {
   type UpdateContractInput,
 } from "@schemas/contract";
 
-import { resolveExpiryPreset, sanitizeSearchTerm, type ContractsQuery } from "@/lib/contracts-query";
+import { DEFAULT_SORT, resolveExpiryPreset, sanitizeSearchTerm, type ContractsQuery } from "@/lib/contracts-query";
 import { getCurrentUser } from "@/lib/auth";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { deleteObject } from "@/lib/r2/objects";
@@ -271,10 +271,17 @@ export async function listContracts({
 }: {
   organizationId: string;
   query: ContractsQuery;
-  /** Round 19 — active (default) lists non-archived, archived lists only archived. */
-  scope?: "active" | "archived";
+  /**
+   * Round 19/20 — active (default) lists non-archived, not-yet-expired;
+   * expired lists non-archived, already-expired; archived lists only archived.
+   */
+  scope?: "active" | "expired" | "archived";
 }): Promise<ServiceResult<ContractListResult>> {
   const supabase = await createClient();
+
+  // "Today" as YYYY-MM-DD, reused from the preset rule (same definition the
+  // dashboard and the expiry presets use — never a second, drifting copy).
+  const today = resolveExpiryPreset("expired").lt as string;
 
   const from = (query.page - 1) * query.pageSize;
   const to = from + query.pageSize - 1;
@@ -288,8 +295,16 @@ export async function listContracts({
     builder = builder.not("archived_at", "is", null);
   } else {
     // Archiving is a soft delete (plan section 66): archived rows stay out of
-    // the active list.
+    // both the active and the expired list.
     builder = builder.is("archived_at", null);
+    if (scope === "expired") {
+      builder = builder.lt("expiry_date", today);
+    } else {
+      // "Chưa hết hạn" = a future (or missing) expiry date. A contract with no
+      // expiry date never expires, so it belongs here rather than disappearing
+      // from both tabs.
+      builder = builder.or(`expiry_date.is.null,expiry_date.gte.${today}`);
+    }
   }
 
   // --- search (plan sections 50, 51; feature round 2 adds the partner link) --
@@ -349,8 +364,14 @@ export async function listContracts({
   if (preset.lt) builder = builder.lt("expiry_date", preset.lt);
 
   // --- sort + pagination ---------------------------------------------------
+  // Round 20: on the expired tab the default sort is "expiry_date desc" (most
+  // recently expired first); an explicit `?sort=` still wins.
+  const sortOverridden = scope === "expired" && query.sort === DEFAULT_SORT;
+  const sortField = sortOverridden ? "expiry_date" : query.sort;
+  const sortAscending = sortOverridden ? false : query.dir === "asc";
+
   const { data, count, error } = await builder
-    .order(query.sort, { ascending: query.dir === "asc", nullsFirst: false })
+    .order(sortField, { ascending: sortAscending, nullsFirst: false })
     .range(from, to);
 
   if (error) {

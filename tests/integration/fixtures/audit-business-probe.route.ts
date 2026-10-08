@@ -120,7 +120,10 @@ export async function POST(request: NextRequest) {
       return result(
         await listContracts({
           organizationId,
-          scope: payload.scope === "archived" ? "archived" : "active",
+          scope:
+            payload.scope === "archived" || payload.scope === "expired"
+              ? payload.scope
+              : "active",
           query: {
             ...DEFAULT_QUERY,
             pageSize: 50,
@@ -157,7 +160,15 @@ export async function POST(request: NextRequest) {
         ),
       );
     case "list_partners":
-      return result(await listPartners({ organizationId }));
+      return result(
+        await listPartners({
+          organizationId,
+          status:
+            payload.status === "active" || payload.status === "stopped"
+              ? (payload.status as PartnerStatus)
+              : undefined,
+        }),
+      );
     case "get_partner":
       return result(await getPartner(String(payload.id ?? ""), { organizationId }));
     case "list_companies":
