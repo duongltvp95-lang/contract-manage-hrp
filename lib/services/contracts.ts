@@ -11,7 +11,7 @@ import {
 import { resolveExpiryPreset, sanitizeSearchTerm, type ContractsQuery } from "@/lib/contracts-query";
 import { createClient } from "@/lib/supabase/server";
 import { recordCurrentUserAudit } from "./audit-logs";
-import { getPartner } from "./partners";
+import { companiesForPartners, getPartner } from "./partners";
 import { dbError, err, ok, type ServiceErr, type ServiceResult } from "./types";
 
 /**
@@ -213,6 +213,8 @@ export async function getContract(
 export type ContractListItem = ContractRow & {
   file_count: number;
   partner_name: string | null;
+  /** The linked partner's company names (round 18); empty when no partner. */
+  companies: string[];
 };
 
 export type ContractListResult = {
@@ -347,6 +349,12 @@ export async function listContracts({
     partners: { name: string } | { name: string }[] | null;
   })[];
   const fileCounts = await countFilesByContract(rawRows.map((row) => row.id));
+  const partnerIds = [
+    ...new Set(
+      rawRows.map((row) => row.partner_id).filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  const companiesByPartner = await companiesForPartners(partnerIds);
   const total = count ?? rawRows.length;
 
   return ok({
@@ -359,6 +367,7 @@ export async function listContracts({
         ...row,
         file_count: fileCounts.get(row.id) ?? 0,
         partner_name: embedded?.name ?? null,
+        companies: row.partner_id ? (companiesByPartner.get(row.partner_id) ?? []) : [],
       };
     }),
     total,

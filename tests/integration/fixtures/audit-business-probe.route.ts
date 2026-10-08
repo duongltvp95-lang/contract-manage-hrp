@@ -5,8 +5,9 @@ import type { AuditAction } from "@schemas/audit-log";
 import type { PartnerStatus } from "@schemas/partner";
 
 import { resolveAccess } from "@/lib/auth";
+import { DEFAULT_QUERY, type ContractsQuery } from "@/lib/contracts-query";
 import { listAuditLogs } from "@/lib/services/audit-logs";
-import { archiveContract, createContract, updateContract } from "@/lib/services/contracts";
+import { archiveContract, createContract, listContracts, updateContract } from "@/lib/services/contracts";
 import {
   getExpiringContracts,
   getRecentContracts,
@@ -113,6 +114,19 @@ export async function POST(request: NextRequest) {
     case "list_contract_files":
       return result(
         await listContractFiles(organizationId, String(payload.contractId ?? "")),
+      );
+    case "list_contracts":
+      return result(
+        await listContracts({
+          organizationId,
+          query: {
+            ...DEFAULT_QUERY,
+            pageSize: 50,
+            ...(typeof payload === "object" && payload
+              ? (payload as Partial<ContractsQuery>)
+              : {}),
+          },
+        }),
       );
     case "update_profile":
       return result(await updateProfile(payload, access.user.id));

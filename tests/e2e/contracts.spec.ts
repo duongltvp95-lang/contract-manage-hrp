@@ -216,4 +216,45 @@ test.describe("contract lifecycle", () => {
     await expect(page.locator("body")).toContainText("This page could not be found");
     await expect(page.locator('[data-testid="document-selector"]')).toHaveCount(0);
   });
+
+  test("shows the company badges on the contracts list (round 18)", async ({ page }) => {
+    const stamp2 = runId();
+    const admin = adminClient();
+    const contractNumber = `${TEST_PREFIX}HD công ty ${stamp2}`;
+
+    // A partner linked to both companies + one contract pointing at it.
+    const { data: partner } = await admin
+      .from("partners")
+      .insert({ organization_id: ORG_A, name: `${TEST_PREFIX}Đối tác công ty ${stamp2}` })
+      .select("id")
+      .single();
+    const partnerId = partner?.id as string;
+    expect(partnerId).toBeTruthy();
+
+    await admin.from("partner_companies").insert([
+      { partner_id: partnerId, company_id: "00000000-0000-4000-8000-000000000001" },
+      { partner_id: partnerId, company_id: "00000000-0000-4000-8000-000000000002" },
+    ]);
+
+    await admin.from("contracts").insert({
+      organization_id: ORG_A,
+      contract_number: contractNumber,
+      partner_id: partnerId,
+    });
+
+    await login(page);
+    await gotoAndSettle(page, "/contracts");
+
+    const row = page.getByRole("row").filter({ hasText: contractNumber });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+
+    // Two company badges (HRP + HR VN), no em-dash.
+    await expect(row.getByTestId("partner-company-badge")).toHaveCount(2);
+    await expect(
+      row.getByTestId("partner-company-badge").filter({ hasText: "HRP" }),
+    ).toBeVisible();
+    await expect(
+      row.getByTestId("partner-company-badge").filter({ hasText: "HR VN" }),
+    ).toBeVisible();
+  });
 });

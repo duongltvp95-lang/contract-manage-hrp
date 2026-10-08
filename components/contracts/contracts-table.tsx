@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CompanyBadges } from "@/components/partners/partner-badges";
 import { EmptyState } from "@/components/shared/empty-state";
 import {
   Table,
@@ -78,6 +79,7 @@ export function ContractsTable({
               hrefFor={hrefFor}
             />
             <TableHead>Đối tác</TableHead>
+            <TableHead>Công ty</TableHead>
             <SortableHead
               field="signed_date"
               label="Ngày ký"
@@ -117,6 +119,11 @@ export function ContractsTable({
                   {/* The linked partner's name wins; the free-text column is the
                       fallback for contracts that predate the directory. */}
                   {partnerDisplayName(row)}
+                </TableCell>
+                <TableCell>
+                  {row.companies.length > 0 ? (
+                    <CompanyBadges companies={row.companies} />
+                  ) : null}
                 </TableCell>
                 <TableCell>{formatDateOnly(row.signed_date)}</TableCell>
                 <TableCell>
