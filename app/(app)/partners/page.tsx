@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Suspense } from "react";
 
 import { PartnerImportSheet } from "@/components/partners/partner-import-sheet";
@@ -8,23 +9,37 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { requireUser } from "@/lib/auth";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { listPartners } from "@/lib/services/partners";
+import { cn } from "@/lib/utils";
 
 /**
- * Partners list — feature round 2, part 2.
+ * Partners list — feature round 2, part 2; round 20 adds status tabs.
  *
- * A pure function of the session: require the user, read the directory for that
- * organization, render. There is no filter state in the URL yet — the directory
- * is small and the combobox does the searching where it matters (inside the
- * contract form).
+ * A pure function of the session + `?status=`: require the user, read the
+ * directory for that organization, render. The status filter lives in the URL
+ * like the contracts scope, so it is shareable and back/forward works.
  */
 
-async function PartnersContent() {
+type RawSearchParams = Record<string, string | string[] | undefined>;
+
+async function PartnersContent({
+  searchParams,
+}: {
+  searchParams: Promise<RawSearchParams>;
+}) {
   const me = await requireUser();
-  const result = await listPartners({ organizationId: me.organizationId });
+  const params = await searchParams;
+  const status =
+    params.status === "active" || params.status === "stopped"
+      ? params.status
+      : undefined;
+
+  const result = await listPartners({ organizationId: me.organizationId, status });
 
   return (
     <div className="space-y-6 p-8">
       <PageHeader />
+
+      <PartnersTabs status={status} />
 
       {result.ok ? (
         <PartnersTable
@@ -38,6 +53,46 @@ async function PartnersContent() {
           <AlertDescription>{result.message}</AlertDescription>
         </Alert>
       )}
+    </div>
+  );
+}
+
+/** Round 20 — all / active / stopped partner tabs. */
+function PartnersTabs({ status }: { status: "active" | "stopped" | undefined }) {
+  const tabCls = (active: boolean) =>
+    cn(
+      "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+      active
+        ? "bg-primary text-primary-foreground"
+        : "text-muted-foreground hover:text-foreground",
+    );
+
+  return (
+    <div
+      className="inline-flex items-center gap-1 rounded-lg border p-1"
+      data-testid="partners-tabs"
+    >
+      <Link
+        href="/partners"
+        data-testid="partner-tab-all"
+        className={tabCls(!status)}
+      >
+        Tất cả
+      </Link>
+      <Link
+        href="/partners?status=active"
+        data-testid="partner-tab-active"
+        className={tabCls(status === "active")}
+      >
+        Đang hợp tác
+      </Link>
+      <Link
+        href="/partners?status=stopped"
+        data-testid="partner-tab-stopped"
+        className={tabCls(status === "stopped")}
+      >
+        Đã dừng hợp tác
+      </Link>
     </div>
   );
 }
@@ -69,10 +124,14 @@ function PartnersFallback() {
   );
 }
 
-export default function PartnersPage() {
+export default function PartnersPage({
+  searchParams,
+}: {
+  searchParams: Promise<RawSearchParams>;
+}) {
   return (
     <Suspense fallback={<PartnersFallback />}>
-      <PartnersContent />
+      <PartnersContent searchParams={searchParams} />
     </Suspense>
   );
 }

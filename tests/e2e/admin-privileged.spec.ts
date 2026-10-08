@@ -83,8 +83,8 @@ test.describe("admin privileged (round 19)", () => {
     await gotoAndSettle(page, "/contracts");
 
     // The archived tab is visible to the privileged admin.
-    await expect(page.getByTestId("tab-archived")).toBeVisible();
-    await clickSafe(page, '[data-testid="tab-archived"]');
+    await expect(page.getByTestId("contract-tab-archived")).toBeVisible();
+    await clickSafe(page, '[data-testid="contract-tab-archived"]');
     await expect(page).toHaveURL(/scope=archived/);
     await expect(page.getByRole("row").filter({ hasText: contractNumber })).toBeVisible();
 
@@ -173,7 +173,7 @@ test.describe("admin privileged (round 19)", () => {
     await gotoAndSettle(page, "/contracts");
 
     // No archived tab, no delete buttons.
-    await expect(page.getByTestId("tab-archived")).toHaveCount(0);
+    await expect(page.getByTestId("contract-tab-archived")).toHaveCount(0);
     await expect(page.locator('[data-testid^="contract-delete-"]')).toHaveCount(0);
 
     // Partners list has no delete button either.

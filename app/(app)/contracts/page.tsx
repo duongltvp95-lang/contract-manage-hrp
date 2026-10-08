@@ -33,11 +33,12 @@ async function ContractsContent({
   const params = await searchParams;
   const query = parseContractsQuery(params);
 
-  // Round 19: the archived tab is owner-email-gated; a non-privileged user who
-  // edits the URL is forced back to the active scope.
+  // Round 19/20: the archived tab is owner-email-gated (a non-privileged user
+  // who edits the URL is forced back to active); the expired tab is for everyone.
   const canDelete = canDeleteEntities(me.email);
-  const requestedScope = params.scope === "archived" ? "archived" : "active";
-  const scope = canDelete ? requestedScope : "active";
+  const raw = params.scope;
+  const requestedScope = raw === "expired" || raw === "archived" ? raw : "active";
+  const scope = requestedScope === "archived" && !canDelete ? "active" : requestedScope;
 
   const result = await listContracts({
     // authoritative, from the session
@@ -80,18 +81,29 @@ async function ContractsContent({
   );
 }
 
-/** Round 19 — active/archived tabs; the archived tab is delete-admin only. */
+/** Round 20 — active/expired tabs for everyone; archived stays delete-admin only. */
 function ContractsTabs({
   scope,
   canDelete,
   query,
 }: {
-  scope: "active" | "archived";
+  scope: "active" | "expired" | "archived";
   canDelete: boolean;
   query: ContractsQuery;
 }) {
   const base = contractsHref({}, query);
-  const archivedHref = `${base}${base.includes("?") ? "&" : "?"}scope=archived`;
+  const withScope = (next: "active" | "expired" | "archived") =>
+    next === "active"
+      ? base
+      : `${base}${base.includes("?") ? "&" : "?"}scope=${next}`;
+
+  const tabCls = (active: boolean) =>
+    cn(
+      "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+      active
+        ? "bg-primary text-primary-foreground"
+        : "text-muted-foreground hover:text-foreground",
+    );
 
   return (
     <div
@@ -99,27 +111,24 @@ function ContractsTabs({
       data-testid="contracts-tabs"
     >
       <Link
-        href={base}
-        data-testid="tab-active"
-        className={cn(
-          "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-          scope === "active"
-            ? "bg-primary text-primary-foreground"
-            : "text-muted-foreground hover:text-foreground",
-        )}
+        href={withScope("active")}
+        data-testid="contract-tab-active"
+        className={tabCls(scope === "active")}
       >
         Đang hoạt động
       </Link>
+      <Link
+        href={withScope("expired")}
+        data-testid="contract-tab-expired"
+        className={tabCls(scope === "expired")}
+      >
+        Đã hết hạn
+      </Link>
       {canDelete && (
         <Link
-          href={archivedHref}
-          data-testid="tab-archived"
-          className={cn(
-            "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-            scope === "archived"
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:text-foreground",
-          )}
+          href={withScope("archived")}
+          data-testid="contract-tab-archived"
+          className={tabCls(scope === "archived")}
         >
           Đã lưu trữ
         </Link>

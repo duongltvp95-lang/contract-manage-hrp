@@ -147,8 +147,9 @@ test.describe("contract lifecycle", () => {
     await expect(detail).toContainText(partnerB.name);
     await expect(detail).not.toContainText(partnerA.name);
 
-    // And so does the list.
-    await gotoAndSettle(page, `/contracts?q=${encodeURIComponent(contractNumber)}`);
+    // And so does the list. The edited expiry is in the past, so the contract
+    // now lives on the "Đã hết hạn" tab (round 20), not the active one.
+    await gotoAndSettle(page, `/contracts?scope=expired&q=${encodeURIComponent(contractNumber)}`);
     await expect(page.locator("body")).toContainText(dmy(newExpiry));
   });
 

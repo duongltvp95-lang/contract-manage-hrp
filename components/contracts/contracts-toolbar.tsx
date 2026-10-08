@@ -23,6 +23,7 @@ import {
   type ContractsQuery,
   type ExpiryPreset,
 } from "@/lib/contracts-query";
+import { cn } from "@/lib/utils";
 
 /**
  * Search + filter controls — plan sections 50, 51, 52.
@@ -39,13 +40,13 @@ export function ContractsToolbar({
   scope = "active",
 }: {
   query: ContractsQuery;
-  scope?: "active" | "archived";
+  scope?: "active" | "expired" | "archived";
 }) {
   const router = useRouter();
   const go = (patch: Partial<ContractsQuery>) => {
     let href = contractsHref(patch, query);
-    if (scope === "archived") {
-      href = `${href}${href.includes("?") ? "&" : "?"}scope=archived`;
+    if (scope !== "active") {
+      href = `${href}${href.includes("?") ? "&" : "?"}scope=${scope}`;
     }
     router.push(href);
   };
@@ -73,7 +74,7 @@ export function ContractsToolbar({
         </Button>
         {hasActiveFilters(query) && (
           <Button type="button" variant="ghost" asChild>
-            <Link href={scope === "archived" ? "/contracts?scope=archived" : "/contracts"}>
+            <Link href={scope !== "active" ? `/contracts?scope=${scope}` : "/contracts"}>
               <X className="mr-2 h-4 w-4" />
               Xoá bộ lọc
             </Link>
@@ -81,31 +82,40 @@ export function ContractsToolbar({
         )}
       </form>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <div className="space-y-1.5">
-          <Label htmlFor="preset">Trạng thái hạn</Label>
-          <Select
-            value={query.preset || ALL}
-            onValueChange={(value) =>
-              go({
-                preset: value === ALL ? "" : (value as ExpiryPreset),
-                page: 1,
-              })
-            }
-          >
-            <SelectTrigger id="preset">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>Tất cả</SelectItem>
-              {PRESET_OPTIONS.map((preset) => (
-                <SelectItem key={preset} value={preset}>
-                  {PRESET_LABELS[preset]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+      <div
+        className={cn(
+          "grid gap-3 sm:grid-cols-2",
+          scope === "active" ? "lg:grid-cols-5" : "lg:grid-cols-4",
+        )}
+      >
+        {/* Round 20: the expiry preset is redundant on the expired/archived tabs
+            (the scope already answers the question), so it is hidden there. */}
+        {scope === "active" && (
+          <div className="space-y-1.5">
+            <Label htmlFor="preset">Trạng thái hạn</Label>
+            <Select
+              value={query.preset || ALL}
+              onValueChange={(value) =>
+                go({
+                  preset: value === ALL ? "" : (value as ExpiryPreset),
+                  page: 1,
+                })
+              }
+            >
+              <SelectTrigger id="preset">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>Tất cả</SelectItem>
+                {PRESET_OPTIONS.map((preset) => (
+                  <SelectItem key={preset} value={preset}>
+                    {PRESET_LABELS[preset]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         <DateFilter
           id="signedFrom"

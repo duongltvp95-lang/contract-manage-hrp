@@ -60,15 +60,15 @@ export function ContractsTable({
   emptyState?: ReactNode;
   /** Round 19 — show the delete action (delete-admin emails only). */
   canDelete?: boolean;
-  /** Round 19 — preserved in the sort links. */
-  scope?: "active" | "archived";
+  /** Round 19/20 — preserved in the sort links. */
+  scope?: "active" | "expired" | "archived";
 }) {
   const router = useRouter();
 
   const hrefFor = (patch: Partial<ContractsQuery>) => {
     let href = contractsHref(patch, query);
-    if (scope === "archived") {
-      href = `${href}${href.includes("?") ? "&" : "?"}scope=archived`;
+    if (scope !== "active") {
+      href = `${href}${href.includes("?") ? "&" : "?"}scope=${scope}`;
     }
     return basePath === "/contracts" ? href : `${basePath}${href.slice("/contracts".length)}`;
   };
