@@ -267,9 +267,12 @@ async function countFilesByContract(
 export async function listContracts({
   organizationId,
   query,
+  scope = "active",
 }: {
   organizationId: string;
   query: ContractsQuery;
+  /** Round 19 — active (default) lists non-archived, archived lists only archived. */
+  scope?: "active" | "archived";
 }): Promise<ServiceResult<ContractListResult>> {
   const supabase = await createClient();
 
@@ -279,10 +282,15 @@ export async function listContracts({
   let builder = supabase
     .from("contracts")
     .select(`${CONTRACT_COLUMNS}, partners(name)`, { count: "exact" })
-    .eq("organization_id", organizationId)
+    .eq("organization_id", organizationId);
+
+  if (scope === "archived") {
+    builder = builder.not("archived_at", "is", null);
+  } else {
     // Archiving is a soft delete (plan section 66): archived rows stay out of
-    // the Wave 1 list.
-    .is("archived_at", null);
+    // the active list.
+    builder = builder.is("archived_at", null);
+  }
 
   // --- search (plan sections 50, 51; feature round 2 adds the partner link) --
   // Three sources, OR'd: the contract number, the free-text partner name that
@@ -657,4 +665,65 @@ export async function deleteContract(
   });
 
   return ok({ id });
+}
+
+/**
+ * Round 19, part 2 — unarchive a contract (owner-only, email-gated).
+ *
+ * Mirrors `archiveContract` with the inverse guard: the update only matches a
+ * row that IS archived, so unarchiving an active contract is a clear error
+ * rather than a silent no-op.
+ */
+export async function unarchiveContract(id: string): Promise<ServiceResult<ContractRow>> {
+  const user = await getCurrentUser();
+  if (!user) return err("unauthenticated", "Bạn cần đăng nhập");
+  if (!canDeleteEntities(user.email)) {
+    return err("forbidden", "Không có quyền bỏ lưu trữ hợp đồng");
+  }
+
+  // Org check — a contract in another organization reads as not found.
+  const contract = await getContract(id, user.organizationId);
+  if (!contract.ok) return contract;
+
+  // The guard: only a currently-archived contract may be unarchived.
+  if (contract.data.archived_at === null) {
+    return err("validation", "Hợp đồng chưa được lưu trữ nên không thể bỏ lưu trữ");
+  }
+
+  // The RLS UPDATE policy freezes archived contracts (`using … archived_at is
+  // null`), so the unarchive — which must UNFREEZE — runs through the
+  // service-role client. The org + archived guards above already authorized it.
+  let admin: ReturnType<typeof createAdminClient>;
+  try {
+    admin = createAdminClient();
+  } catch (error) {
+    return dbError("unarchiveContract", error);
+  }
+
+  const { data, error } = await admin
+    .from("contracts")
+    .update({ archived_at: null })
+    .eq("id", id)
+    .eq("organization_id", user.organizationId)
+    .select(CONTRACT_COLUMNS)
+    .maybeSingle();
+
+  if (error) {
+    return dbError("unarchiveContract", error);
+  }
+
+  if (!data) {
+    return err("not_found", "Không tìm thấy hợp đồng");
+  }
+
+  const unarchived = data as ContractRow;
+
+  await recordCurrentUserAudit({
+    action: "unarchive_contract",
+    targetKind: "contract",
+    targetId: id,
+    metadata: { contractNumber: unarchived.contract_number ?? null },
+  });
+
+  return ok(unarchived);
 }

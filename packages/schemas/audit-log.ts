@@ -31,6 +31,7 @@ export const AUDIT_ACTIONS = [
   "set_partner_status",
   "delete_contract",
   "delete_partner",
+  "unarchive_contract",
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -52,6 +53,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   set_partner_status: "Đổi trạng thái hợp tác",
   delete_contract: "Xoá hợp đồng",
   delete_partner: "Xoá đối tác",
+  unarchive_contract: "Bỏ lưu trữ",
 };
 
 export const AUDIT_TARGET_KINDS = [

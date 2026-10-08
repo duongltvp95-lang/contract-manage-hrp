@@ -1,9 +1,13 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { Suspense } from "react";
 
 import { ContractDetail } from "@/components/contracts/contract-detail";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { requireUser, type CurrentUser } from "@/lib/auth";
+import { canDeleteEntities } from "@/lib/delete-permissions";
 import {
   getContract,
   type ContractDetail as ContractDetailRow,
@@ -66,6 +70,7 @@ async function loadAuthorizedContract(
   requestedFileId: string | undefined;
   user: CurrentUser;
   contract: ContractDetailRow;
+  canViewArchived: boolean;
 }> {
   const { id } = await params;
   const { file: requestedFileId } = await searchParams;
@@ -79,7 +84,11 @@ async function loadAuthorizedContract(
     notFound();
   }
 
-  return { id, requestedFileId, user, contract: contract.data };
+  // Round 19: an archived contract is only viewable by the delete-admin emails.
+  const canViewArchived =
+    contract.data.archived_at === null || canDeleteEntities(user.email);
+
+  return { id, requestedFileId, user, contract: contract.data, canViewArchived };
 }
 
 async function ContractDetailContent({
@@ -136,10 +145,12 @@ export default async function ContractDetailPage({
   params: DetailParams;
   searchParams: DetailSearchParams;
 }) {
-  const { id, requestedFileId, user, contract } = await loadAuthorizedContract(
-    params,
-    searchParams,
-  );
+  const { id, requestedFileId, user, contract, canViewArchived } =
+    await loadAuthorizedContract(params, searchParams);
+
+  if (!canViewArchived) {
+    return <ArchivedForbidden />;
+  }
 
   return (
     <Suspense fallback={<ContractDetailSkeleton />}>
@@ -150,6 +161,23 @@ export default async function ContractDetailPage({
         contract={contract}
       />
     </Suspense>
+  );
+}
+
+/** Round 19 — an archived contract is only shown to the delete-admin emails. */
+function ArchivedForbidden() {
+  return (
+    <div className="p-6" data-testid="contract-archived-forbidden">
+      <Alert>
+        <AlertTitle>Hợp đồng đã lưu trữ</AlertTitle>
+        <AlertDescription>
+          Hợp đồng đã lưu trữ. Chỉ quản trị viên được uỷ quyền mới xem được.
+        </AlertDescription>
+      </Alert>
+      <Button asChild variant="outline" className="mt-4">
+        <Link href="/contracts">Về danh sách hợp đồng</Link>
+      </Button>
+    </div>
   );
 }
 

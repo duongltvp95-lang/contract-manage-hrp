@@ -117,6 +117,9 @@ describe("formatAuditSentence", () => {
     expect(say("delete_partner", { name: "Công ty A" })).toBe(
       'Khương Văn Đường đã xoá đối tác “Công ty A”',
     );
+    expect(say("unarchive_contract", { contractNumber: "HD-001" })).toBe(
+      'Khương Văn Đường đã bỏ lưu trữ hợp đồng “HD-001”',
+    );
   });
 
   it("uses a neutral subject when the actor name is missing", () => {
