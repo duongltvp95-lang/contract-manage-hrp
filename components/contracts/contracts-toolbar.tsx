@@ -107,11 +107,16 @@ export function ContractsToolbar({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>Tất cả</SelectItem>
-                {PRESET_OPTIONS.map((preset) => (
-                  <SelectItem key={preset} value={preset}>
-                    {PRESET_LABELS[preset]}
-                  </SelectItem>
-                ))}
+                {/* Round 20: "Đã hết hạn" is now the expired TAB, so the preset
+                    only keeps the "expiring soon" windows that still make sense
+                    within the active scope. */}
+                {PRESET_OPTIONS.filter((preset) => preset !== "expired").map(
+                  (preset) => (
+                    <SelectItem key={preset} value={preset}>
+                      {PRESET_LABELS[preset]}
+                    </SelectItem>
+                  ),
+                )}
               </SelectContent>
             </Select>
           </div>

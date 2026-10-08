@@ -75,13 +75,15 @@ test.describe("contract list", () => {
   test("searches by contract number", async ({ page }) => {
     await login(page);
     await gotoAndSettle(page, "/contracts");
-    await page.fill('input[name="q"]', expiredNumber);
+    // `soonNumber` is still active; `expiredNumber` lives on the expired tab
+    // (round 20), so a search from the active list must not return it.
+    await page.fill('input[name="q"]', soonNumber);
     await page.locator('form button[type="submit"]').click();
 
-    await expect(page).toHaveURL(new RegExp(`q=${expiredNumber}`));
+    await expect(page).toHaveURL(new RegExp(`q=${soonNumber}`));
     const body = page.locator("body");
-    await expect(body).toContainText(expiredNumber);
-    await expect(body).not.toContainText(soonNumber);
+    await expect(body).toContainText(soonNumber);
+    await expect(body).not.toContainText(expiredNumber);
     await expect(body).toContainText("1 hợp đồng");
   });
 
@@ -105,14 +107,10 @@ test.describe("contract list", () => {
     await expect(page.locator('[data-testid="empty-state"]')).toBeVisible();
   });
 
-  test("the expired filter returns only expired contracts", async ({ page }) => {
+  test("the expired tab returns only expired contracts", async ({ page }) => {
     await login(page);
-    await gotoAndSettle(page, "/contracts");
+    await gotoAndSettle(page, "/contracts?scope=expired");
 
-    await page.locator("#preset").click();
-    await page.getByRole("option", { name: "Đã hết hạn" }).click();
-
-    await expect(page).toHaveURL(/preset=expired/);
     const body = page.locator("body");
     await expect(body).toContainText(expiredNumber);
     await expect(body).not.toContainText(soonNumber);
@@ -177,7 +175,10 @@ test.describe("contract list", () => {
 
   test("clears every filter in one click", async ({ page }) => {
     await login(page);
-    await gotoAndSettle(page, `/contracts?q=${expiredNumber}&preset=expired`);
+    // A filter combo that still matches (no empty state, so only the toolbar's
+    // "Xoá bộ lọc" link exists). `preset=expired` is gone since round 20 — the
+    // expired tab replaced it.
+    await gotoAndSettle(page, `/contracts?q=${soonNumber}&preset=expiring90`);
 
     await page.getByRole("link", { name: /Xoá bộ lọc/ }).click();
     await expect(page).toHaveURL(/\/contracts$/);
