@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { AddPartnerButton, RenamePartnerButton } from "@/components/partners/partner-name-sheet";
 import { CompanyBadges, PartnerStatusBadge } from "@/components/partners/partner-badges";
+import { DeletePartnerButton } from "@/components/partners/delete-partner-button";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,11 +28,17 @@ import type { PartnerWithCount } from "@/lib/services/partners";
  * "Sửa" action. Address is deliberately NOT in the table — it can run to a
  * couple of lines and would crowd the row; the detail page carries it.
  *
- * There is no Xoá column and no delete control of any kind: a partner is
- * referenced by contracts, and the database refuses a client-side delete twice
- * over (no grant, no policy). Editing is the only write the UI offers.
+ * Round 19: a delete action (Trash2) is rendered only for the delete-admin
+ * emails. The database still refuses a client-side delete; the service deletes
+ * through the service-role client after re-checking the email.
  */
-export function PartnersTable({ rows }: { rows: PartnerWithCount[] }) {
+export function PartnersTable({
+  rows,
+  canDelete = false,
+}: {
+  rows: PartnerWithCount[];
+  canDelete?: boolean;
+}) {
   const router = useRouter();
 
   if (rows.length === 0) {
@@ -113,7 +120,10 @@ export function PartnersTable({ rows }: { rows: PartnerWithCount[] }) {
                   className="text-right"
                   onClick={(event) => event.stopPropagation()}
                 >
-                  <RenamePartnerButton partner={row} />
+                  <div className="inline-flex items-center gap-1">
+                    <RenamePartnerButton partner={row} />
+                    {canDelete && <DeletePartnerButton partnerId={row.id} />}
+                  </div>
                 </TableCell>
               </TableRow>
             );

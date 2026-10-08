@@ -9,8 +9,10 @@ import { ContractsToolbar } from "@/components/contracts/contracts-toolbar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth";
-import { parseContractsQuery } from "@/lib/contracts-query";
+import { contractsHref, parseContractsQuery, type ContractsQuery } from "@/lib/contracts-query";
+import { canDeleteEntities } from "@/lib/delete-permissions";
 import { listContracts } from "@/lib/services/contracts";
+import { cn } from "@/lib/utils";
 
 /**
  * Contracts list — plan sections 48-53, 80-82.
@@ -31,17 +33,26 @@ async function ContractsContent({
   const params = await searchParams;
   const query = parseContractsQuery(params);
 
+  // Round 19: the archived tab is owner-email-gated; a non-privileged user who
+  // edits the URL is forced back to the active scope.
+  const canDelete = canDeleteEntities(me.email);
+  const requestedScope = params.scope === "archived" ? "archived" : "active";
+  const scope = canDelete ? requestedScope : "active";
+
   const result = await listContracts({
     // authoritative, from the session
     organizationId: me.organizationId,
     query,
+    scope,
   });
 
   return (
     <div className="space-y-6 p-8">
       <PageHeader />
 
-      <ContractsToolbar query={query} />
+      <ContractsTabs scope={scope} canDelete={canDelete} query={query} />
+
+      <ContractsToolbar query={query} scope={scope} />
 
       {result.ok ? (
         <>
@@ -49,6 +60,8 @@ async function ContractsContent({
             rows={result.data.rows}
             query={query}
             total={result.data.total}
+            canDelete={canDelete}
+            scope={scope}
           />
           <ContractsPagination
             query={query}
@@ -62,6 +75,54 @@ async function ContractsContent({
           <AlertTitle>Không tải được danh sách hợp đồng</AlertTitle>
           <AlertDescription>{result.message}</AlertDescription>
         </Alert>
+      )}
+    </div>
+  );
+}
+
+/** Round 19 — active/archived tabs; the archived tab is delete-admin only. */
+function ContractsTabs({
+  scope,
+  canDelete,
+  query,
+}: {
+  scope: "active" | "archived";
+  canDelete: boolean;
+  query: ContractsQuery;
+}) {
+  const base = contractsHref({}, query);
+  const archivedHref = `${base}${base.includes("?") ? "&" : "?"}scope=archived`;
+
+  return (
+    <div
+      className="inline-flex items-center gap-1 rounded-lg border p-1"
+      data-testid="contracts-tabs"
+    >
+      <Link
+        href={base}
+        data-testid="tab-active"
+        className={cn(
+          "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+          scope === "active"
+            ? "bg-primary text-primary-foreground"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        Đang hoạt động
+      </Link>
+      {canDelete && (
+        <Link
+          href={archivedHref}
+          data-testid="tab-archived"
+          className={cn(
+            "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+            scope === "archived"
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          Đã lưu trữ
+        </Link>
       )}
     </div>
   );

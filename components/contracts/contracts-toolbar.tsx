@@ -34,10 +34,21 @@ import {
 
 const ALL = "all";
 
-export function ContractsToolbar({ query }: { query: ContractsQuery }) {
+export function ContractsToolbar({
+  query,
+  scope = "active",
+}: {
+  query: ContractsQuery;
+  scope?: "active" | "archived";
+}) {
   const router = useRouter();
-  const go = (patch: Partial<ContractsQuery>) =>
-    router.push(contractsHref(patch, query));
+  const go = (patch: Partial<ContractsQuery>) => {
+    let href = contractsHref(patch, query);
+    if (scope === "archived") {
+      href = `${href}${href.includes("?") ? "&" : "?"}scope=archived`;
+    }
+    router.push(href);
+  };
 
   return (
     <div className="space-y-4">
@@ -62,7 +73,7 @@ export function ContractsToolbar({ query }: { query: ContractsQuery }) {
         </Button>
         {hasActiveFilters(query) && (
           <Button type="button" variant="ghost" asChild>
-            <Link href="/contracts">
+            <Link href={scope === "archived" ? "/contracts?scope=archived" : "/contracts"}>
               <X className="mr-2 h-4 w-4" />
               Xoá bộ lọc
             </Link>

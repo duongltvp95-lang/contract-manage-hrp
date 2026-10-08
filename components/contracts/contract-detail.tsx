@@ -2,9 +2,12 @@
 
 import { ArrowLeft, MoreHorizontal } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { ContractActionsMenu } from "@/components/contracts/archive-contract-dialog";
+import { DeleteContractButton } from "@/components/contracts/delete-contract-button";
 import { EditContractSheet } from "@/components/contracts/edit-contract-sheet";
+import { UnarchiveContractButton } from "@/components/contracts/unarchive-contract-button";
 import type { SelectableFile } from "@/components/documents/document-selector";
 import { DocumentViewer } from "@/components/documents/document-viewer";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -52,6 +55,7 @@ export function ContractDetail({
   filesError,
   initialViewUrl,
   initialSelectedId,
+  canDelete = false,
 }: {
   contract: ContractDetailData;
   /** The partner directory, for the Edit Sheet's combobox. */
@@ -62,7 +66,10 @@ export function ContractDetail({
   initialViewUrl?: ViewUrl | null;
   /** `?file=<id>` deep link. */
   initialSelectedId?: string | null;
+  /** Round 19 — show the unarchive/delete actions (delete-admin emails only). */
+  canDelete?: boolean;
 }) {
+  const router = useRouter();
   const archived = Boolean(contract.archived_at);
 
   const fields: [string, string][] = [
@@ -113,6 +120,7 @@ export function ContractDetail({
             <Button variant="ghost" size="icon" aria-label="Thao tác khác" disabled>
               <MoreHorizontal className="h-4 w-4" />
             </Button>
+            {canDelete && <UnarchiveContractButton contractId={contract.id} />}
           </>
         ) : (
           <>
@@ -122,6 +130,14 @@ export function ContractDetail({
               contractNumber={contract.contract_number}
             />
           </>
+        )}
+
+        {canDelete && (
+          <DeleteContractButton
+            contractId={contract.id}
+            label="Xoá hợp đồng"
+            onDeleted={() => router.push("/contracts")}
+          />
         )}
       </header>
 

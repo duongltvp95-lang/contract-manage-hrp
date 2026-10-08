@@ -5,6 +5,8 @@ import { CompleteUploadSchema, type CompleteUploadInput } from "@schemas/file";
 import {
   archiveContract,
   createContract,
+  deleteContract,
+  unarchiveContract,
   updateContract,
   type ContractRow,
 } from "@/lib/services/contracts";
@@ -117,4 +119,38 @@ export async function completeUploadAction(
   });
 
   return fromService(result);
+}
+
+/** Round 19 — hard-delete a contract (owner-email-gated in the service). */
+export async function deleteContractAction(
+  id: unknown,
+): Promise<ActionResult<{ id: string }>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  if (typeof id !== "string" || id.length === 0) {
+    return validationFailure("Thiếu thông tin hợp đồng", [
+      { path: "id", message: "Không xác định được hợp đồng cần xoá" },
+    ]);
+  }
+
+  return fromService(
+    await deleteContract(id, { organizationId: access.user.organizationId }),
+  );
+}
+
+/** Round 19 — unarchive a contract (owner-email-gated in the service). */
+export async function unarchiveContractAction(
+  id: unknown,
+): Promise<ActionResult<ContractRow>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  if (typeof id !== "string" || id.length === 0) {
+    return validationFailure("Thiếu thông tin hợp đồng", [
+      { path: "id", message: "Không xác định được hợp đồng cần bỏ lưu trữ" },
+    ]);
+  }
+
+  return fromService(await unarchiveContract(id));
 }

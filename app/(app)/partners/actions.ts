@@ -13,6 +13,7 @@ import {
 } from "@/lib/partner-import";
 import {
   createPartner,
+  deletePartner,
   importPartners,
   listCompanies,
   previewPartnerImport,
@@ -282,4 +283,22 @@ export async function partnerImportTemplateAction(): Promise<
     ok: true,
     data: { fileName: PARTNER_IMPORT_TEMPLATE_FILENAME, base64 },
   };
+}
+
+/** Round 19 — hard-delete a partner (owner-email-gated in the service). */
+export async function deletePartnerAction(
+  id: unknown,
+): Promise<ActionResult<{ id: string }>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  if (typeof id !== "string" || id.length === 0) {
+    return validationFailure("Thiếu thông tin đối tác", [
+      { path: "id", message: "Không xác định được đối tác cần xoá" },
+    ]);
+  }
+
+  return fromService(
+    await deletePartner(id, { organizationId: access.user.organizationId }),
+  );
 }

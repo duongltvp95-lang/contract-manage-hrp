@@ -53,6 +53,11 @@ export default defineConfig({
           NODE_ENV: "development",
           NEXT_TELEMETRY_DISABLED: "1",
           NEXT_DIST_DIR: ".next-e2e",
+          // Round 19: make the e2e admin a delete-admin for the privileged flow.
+          // NEVER set this on Vercel production (the app default = the owner).
+          DELETE_ADMIN_EMAILS:
+            process.env.DELETE_ADMIN_EMAILS ??
+            `duongltvp95@gmail.com,${process.env.TEST_ADMIN_EMAIL ?? "e2e.wave2@hrpartner.vn"}`,
         },
       },
 });

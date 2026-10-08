@@ -8,12 +8,14 @@ import { ContractsTable } from "@/components/contracts/contracts-table";
 import { ContractsTableSkeleton } from "@/components/contracts/contracts-table-skeleton";
 import { RenamePartnerButton } from "@/components/partners/partner-name-sheet";
 import { CompanyBadges, PartnerStatusBadge } from "@/components/partners/partner-badges";
+import { DeletePartnerButton } from "@/components/partners/delete-partner-button";
 import { PartnerStatusToggle } from "@/components/partners/partner-status-toggle";
 import { NoPartnerContractsEmptyState } from "@/components/partners/partners-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth";
 import { parseContractsQuery } from "@/lib/contracts-query";
+import { canDeleteEntities } from "@/lib/delete-permissions";
 import { listContracts } from "@/lib/services/contracts";
 import { getPartner, type PartnerDetail } from "@/lib/services/partners";
 
@@ -41,6 +43,7 @@ async function loadPartner(params: PartnerParams): Promise<{
   id: string;
   organizationId: string;
   partner: PartnerDetail;
+  canDelete: boolean;
 }> {
   const { id } = await params;
   const me = await requireUser();
@@ -51,7 +54,12 @@ async function loadPartner(params: PartnerParams): Promise<{
     notFound();
   }
 
-  return { id, organizationId: me.organizationId, partner: partner.data };
+  return {
+    id,
+    organizationId: me.organizationId,
+    partner: partner.data,
+    canDelete: canDeleteEntities(me.email),
+  };
 }
 
 async function PartnerContracts({
@@ -177,6 +185,13 @@ export default async function PartnerDetailPage({
             status={loaded.partner.status}
           />
           <RenamePartnerButton partner={loaded.partner} />
+          {loaded.canDelete && (
+            <DeletePartnerButton
+              partnerId={loaded.partner.id}
+              label="Xoá đối tác"
+              redirectTo="/partners"
+            />
+          )}
         </div>
       </header>
 

@@ -96,11 +96,13 @@ async function ContractDetailContent({
   requestedFileId,
   organizationId,
   contract,
+  canDelete,
 }: {
   id: string;
   requestedFileId: string | undefined;
   organizationId: string;
   contract: ContractDetailRow;
+  canDelete: boolean;
 }) {
   // The partner directory's first page is read alongside the files so the Edit
   // Sheet's combobox has its options on first paint; typing searches the whole
@@ -134,6 +136,7 @@ async function ContractDetailContent({
       filesError={files.ok ? null : files.message}
       initialViewUrl={initialViewUrl}
       initialSelectedId={initial?.id ?? null}
+      canDelete={canDelete}
     />
   );
 }
@@ -159,6 +162,7 @@ export default async function ContractDetailPage({
         requestedFileId={requestedFileId}
         organizationId={user.organizationId}
         contract={contract}
+        canDelete={canDeleteEntities(user.email)}
       />
     </Suspense>
   );

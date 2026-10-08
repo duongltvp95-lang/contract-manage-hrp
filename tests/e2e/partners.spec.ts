@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import {
   ORG_A,
@@ -26,8 +26,10 @@ test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
  * the new name follows everywhere.
  *
  * Every screen is also checked for a delete control of any kind: a partner is
- * referenced by contracts and the owner's rule is that no delete path exists —
- * not in the UI, not in the API, not in RLS.
+ * referenced by contracts and, until round 19, the rule was that no delete path
+ * exists at all. Round 19 re-opens the path for the delete-admin emails only, so
+ * the presence/absence of the delete button is now asserted in
+ * `admin-privileged.spec.ts` (privileged admin sees it; a regular user does not).
  */
 
 const stamp = runId();
@@ -39,21 +41,6 @@ let partnerId = "";
 let contractId = "";
 
 test.describe.configure({ mode: "serial" });
-
-/**
- * Asserts that nothing on the page offers to delete a partner.
- *
- * Both Vietnamese spellings are checked ("xoá" and "xóa"), and both a button and
- * a menu item, because a delete could hide behind the actions menu.
- */
-async function expectNoDeleteControl(page: Page): Promise<void> {
-  const deleteish = /(xoá|xóa|delete)/i;
-
-  await expect(page.getByRole("button", { name: deleteish })).toHaveCount(0);
-  await expect(page.getByRole("menuitem", { name: deleteish })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: deleteish })).toHaveCount(0);
-  await expect(page.locator('[data-testid*="delete"]')).toHaveCount(0);
-}
 
 test.describe("partner flow", () => {
   test.beforeAll(async () => {
@@ -111,8 +98,6 @@ test.describe("partner flow", () => {
     await expect(row).toBeVisible();
     await expect(row).toContainText("0");
 
-    await expectNoDeleteControl(page);
-
     const { data } = await adminClient()
       .from("partners")
       .select("id, name, organization_id")
@@ -165,8 +150,6 @@ test.describe("partner flow", () => {
 
     await expect(page.getByTestId("partner-detail-name")).toHaveText(partnerName);
     await expect(page.locator("body")).toContainText(contractNumber);
-
-    await expectNoDeleteControl(page);
   });
 
   test("the contracts list shows the partner name in its column", async ({ page }) => {

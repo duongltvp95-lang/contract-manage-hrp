@@ -6,6 +6,7 @@ import { PartnersTable } from "@/components/partners/partners-table";
 import { PartnersTableSkeleton } from "@/components/partners/partners-table-skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { requireUser } from "@/lib/auth";
+import { canDeleteEntities } from "@/lib/delete-permissions";
 import { listPartners } from "@/lib/services/partners";
 
 /**
@@ -26,7 +27,10 @@ async function PartnersContent() {
       <PageHeader />
 
       {result.ok ? (
-        <PartnersTable rows={result.data} />
+        <PartnersTable
+          rows={result.data}
+          canDelete={canDeleteEntities(me.email)}
+        />
       ) : (
         // Plan section 80: a readable message, never a raw stack trace.
         <Alert variant="destructive">

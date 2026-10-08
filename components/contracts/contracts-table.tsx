@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CompanyBadges } from "@/components/partners/partner-badges";
+import { DeleteContractButton } from "@/components/contracts/delete-contract-button";
 import { EmptyState } from "@/components/shared/empty-state";
 import {
   Table,
@@ -43,6 +44,8 @@ export function ContractsTable({
   total,
   basePath = "/contracts",
   emptyState,
+  canDelete = false,
+  scope = "active",
 }: {
   rows: ContractListItem[];
   query: ContractsQuery;
@@ -55,11 +58,18 @@ export function ContractsTable({
   basePath?: string;
   /** Replaces the default empty state (the partner page has its own wording). */
   emptyState?: ReactNode;
+  /** Round 19 — show the delete action (delete-admin emails only). */
+  canDelete?: boolean;
+  /** Round 19 — preserved in the sort links. */
+  scope?: "active" | "archived";
 }) {
   const router = useRouter();
 
   const hrefFor = (patch: Partial<ContractsQuery>) => {
-    const href = contractsHref(patch, query);
+    let href = contractsHref(patch, query);
+    if (scope === "archived") {
+      href = `${href}${href.includes("?") ? "&" : "?"}scope=archived`;
+    }
     return basePath === "/contracts" ? href : `${basePath}${href.slice("/contracts".length)}`;
   };
 
@@ -94,6 +104,7 @@ export function ContractsTable({
               query={query}
               hrefFor={hrefFor}
             />
+            {canDelete && <TableHead className="text-right">Thao tác</TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -142,6 +153,14 @@ export function ContractsTable({
                 <TableCell className="text-sm text-muted-foreground">
                   {formatDateTime(row.updated_at)}
                 </TableCell>
+                {canDelete && (
+                  <TableCell
+                    className="text-right"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <DeleteContractButton contractId={row.id} />
+                  </TableCell>
+                )}
               </TableRow>
             );
           })}
