@@ -43,6 +43,7 @@ import {
   type PartnerImportReport,
   type PartnerImportRowReport,
 } from "@/lib/partner-import";
+import { PARTNER_STATUS_LABELS } from "@schemas/partner";
 import { cn } from "@/lib/utils";
 
 /**
@@ -249,8 +250,10 @@ export function PartnerImportSheet() {
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   File .xlsx, tối đa {PARTNER_IMPORT_MAX_ROWS} dòng · Cột: Tên đối
-                  tác · Địa chỉ · Mã số thuế · Công ty (HRP / HR VN, cách nhau dấu
-                  phẩy — bỏ trống mặc định HRP).
+                  tác · Tên viết tắt · Khu vực · Địa chỉ · Mã số thuế · Công ty
+                  (HRP / HR VN, cách nhau dấu phẩy — bỏ trống mặc định HRP) ·
+                  Trạng thái hợp tác (Đang hợp tác / Đã dừng hợp tác — bỏ trống
+                  mặc định Đang hợp tác).
                 </p>
               </div>
 
@@ -387,7 +390,8 @@ function ImportRowsTable({ rows }: { rows: PartnerImportRowReport[] }) {
             <TableHead>Tên đối tác</TableHead>
             <TableHead>Địa chỉ</TableHead>
             <TableHead>Mã số thuế</TableHead>
-            <TableHead>Trạng thái</TableHead>
+            <TableHead>Trạng thái hợp tác</TableHead>
+            <TableHead>Kết quả</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -401,6 +405,12 @@ function ImportRowsTable({ rows }: { rows: PartnerImportRowReport[] }) {
               <TableCell className="max-w-[12rem] truncate">{row.name || "—"}</TableCell>
               <TableCell className="max-w-[12rem] truncate">{row.address || "—"}</TableCell>
               <TableCell className="font-mono text-xs">{row.taxCode || "—"}</TableCell>
+              <TableCell
+                className="text-sm text-muted-foreground"
+                data-testid="partner-import-row-status"
+              >
+                {PARTNER_STATUS_LABELS[row.status ?? "active"]}
+              </TableCell>
               <TableCell>
                 <RowStatus row={row} />
               </TableCell>

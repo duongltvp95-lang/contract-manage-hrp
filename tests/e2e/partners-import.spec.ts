@@ -195,4 +195,68 @@ test.describe("partner import from Excel", () => {
       .eq("tax_code", "0511111113");
     expect(data ?? []).toHaveLength(0);
   });
+
+  test("the status column previews the label and imports the status (round 22)", async ({ page }) => {
+    test.setTimeout(180_000);
+
+    const stoppedName = `${TEST_PREFIX}Nhập dừng ${stamp}`;
+    const activeName = `${TEST_PREFIX}Nhập đang ${stamp}`;
+
+    const path = await buildImportWorkbook(
+      ["Tên đối tác", "Mã số thuế", "Trạng thái hợp tác"],
+      [
+        [stoppedName, "0511111141", "Đã dừng hợp tác"],
+        // Empty status cell → defaults to active at the service.
+        [activeName, "0511111142", ""],
+      ],
+    );
+
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    await clickSafe(page, '[data-testid="partner-import-button"]');
+    await expect(page.getByTestId("partner-import-sheet")).toBeVisible();
+
+    await page
+      .locator('[data-testid="partner-import-dropzone"] input[type="file"]')
+      .setInputFiles(path);
+
+    const preview = page.getByTestId("partner-import-preview");
+    await expect(preview).toBeVisible({ timeout: 30_000 });
+
+    // The preview shows the per-row status label.
+    const rowWith = (text: string) =>
+      page.getByTestId("partner-import-row").filter({ hasText: text });
+
+    await expect(rowWith(stoppedName).getByTestId("partner-import-row-status")).toHaveText(
+      "Đã dừng hợp tác",
+    );
+    await expect(rowWith(activeName).getByTestId("partner-import-row-status")).toHaveText(
+      "Đang hợp tác",
+    );
+
+    await page.getByTestId("partner-import-confirm").click();
+    await expect(page.getByText("Đã nhập 2 đối tác")).toBeVisible({ timeout: 15_000 });
+
+    // The database agrees on both statuses.
+    const admin = adminClient();
+    const { data } = await admin
+      .from("partners")
+      .select("name, status")
+      .in("name", [stoppedName, activeName])
+      .order("name");
+    const stopped = data?.find((row) => row.name === stoppedName);
+    const active = data?.find((row) => row.name === activeName);
+    expect(stopped?.status).toBe("stopped");
+    expect(active?.status).toBe("active");
+
+    // The refreshed list shows the badges.
+    await gotoAndSettle(page, "/partners");
+    const stoppedRow = page.getByTestId("partner-row").filter({ hasText: stoppedName });
+    await expect(stoppedRow).toBeVisible({ timeout: 30_000 });
+    await expect(stoppedRow).toContainText("Đã dừng hợp tác");
+
+    const activeRow = page.getByTestId("partner-row").filter({ hasText: activeName });
+    await expect(activeRow).toContainText("Đang hợp tác");
+  });
 });
