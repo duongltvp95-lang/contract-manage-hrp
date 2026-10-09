@@ -99,6 +99,8 @@ export function PartnerNameSheet({
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [companies, setCompanies] = useState<Company[]>([]);
+  const [companiesError, setCompaniesError] = useState<string | null>(null);
+  const [companiesRetry, setCompaniesRetry] = useState(0);
 
   const isControlled = open !== undefined;
   const sheetOpen = isControlled ? open : uncontrolledOpen;
@@ -126,26 +128,42 @@ export function PartnerNameSheet({
   // Load the org's companies when the sheet OPENS (not on mount — the partners
   // list mounts one sheet per row, and fetching per row would fire a storm of
   // server actions for nothing). Reopening refetches; the list is tiny.
+  //
+  // Round 27 — a FAILED load must not leave the submit button silently disabled
+  // forever: the error is surfaced with a retry, so a status-only edit can
+  // never be blocked by an invisible companies-load failure.
   useEffect(() => {
     if (!sheetOpen) return;
     let active = true;
-    listCompaniesAction().then((result) => {
-      if (!active || !result.ok) return;
-      setCompanies(result.data);
-      if (partner) {
-        form.setValue(
-          "companyIds",
-          result.data
-            .filter((company) => partner.companies.includes(company.name))
-            .map((company) => company.id),
-        );
-      }
-    });
+    listCompaniesAction()
+      .then((result) => {
+        if (!active) return;
+        if (!result.ok) {
+          setCompaniesError(
+            result.message || "Không tải được danh sách công ty",
+          );
+          return;
+        }
+        setCompaniesError(null);
+        setCompanies(result.data);
+        if (partner) {
+          form.setValue(
+            "companyIds",
+            result.data
+              .filter((company) => partner.companies.includes(company.name))
+              .map((company) => company.id),
+          );
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        setCompaniesError("Không tải được danh sách công ty. Vui lòng thử lại.");
+      });
     return () => {
       active = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheetOpen]);
+  }, [sheetOpen, companiesRetry]);
 
   async function onSubmit(values: CreatePartnerInput) {
     setFormError(null);
@@ -368,7 +386,29 @@ export function PartnerNameSheet({
                   <FormItem>
                     <FormLabel>Công ty</FormLabel>
                     <div className="space-y-2">
-                      {companies.length === 0 ? (
+                      {companiesError ? (
+                        <Alert
+                          variant="destructive"
+                          data-testid="partner-companies-error"
+                        >
+                          <AlertTitle>Không tải được danh sách công ty</AlertTitle>
+                          <AlertDescription className="flex items-center gap-2">
+                            <span>{companiesError}</span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setCompaniesError(null);
+                                setCompaniesRetry((n) => n + 1);
+                              }}
+                              data-testid="partner-companies-retry"
+                            >
+                              Thử lại
+                            </Button>
+                          </AlertDescription>
+                        </Alert>
+                      ) : companies.length === 0 ? (
                         <p className="text-sm text-muted-foreground">
                           Đang tải danh sách công ty…
                         </p>

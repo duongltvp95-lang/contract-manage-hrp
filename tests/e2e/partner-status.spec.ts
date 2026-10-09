@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  ORG_A,
   TEST_PREFIX,
   adminClient,
   clickSafe,
@@ -8,6 +9,7 @@ import {
   hasLiveBackend,
   login,
   runId,
+  seedPartner,
   sweep,
   writeArtifact,
 } from "./helpers";
@@ -193,5 +195,97 @@ test.describe("partner status + companies (round 10)", () => {
     await expect(row).toBeVisible({ timeout: 30_000 });
     await expect(row.getByTestId("partner-company-badge").filter({ hasText: "HRP" })).toBeVisible();
     await expect(row.getByTestId("partner-company-badge").filter({ hasText: "HR VN" })).toBeVisible();
+  });
+
+  test("edits the status through the edit form and persists it both ways (round 27)", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    const editName = `${TEST_PREFIX}Sửa trạng thái ${stamp}`;
+    const admin = adminClient();
+    const seeded = await seedPartner(admin, {
+      organizationId: ORG_A,
+      name: editName,
+    });
+    await admin
+      .from("partner_companies")
+      .insert({ partner_id: seeded.id, company_id: "00000000-0000-4000-8000-000000000001" });
+
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    // Active → stopped via the edit form.
+    await expect(
+      page.getByTestId("partner-row").filter({ hasText: editName }),
+    ).toBeVisible({ timeout: 30_000 });
+
+    await clickSafe(
+      page,
+      `[data-testid="partner-row"][data-partner-name="${editName}"] [data-testid="partner-rename-button"]`,
+    );
+    await expect(page.getByTestId("partner-name-sheet")).toBeVisible();
+    // Wait for the companies so the form's companyIds are resolved.
+    await expect(
+      page.locator('[data-testid="company-checkbox-HRP"]'),
+    ).toBeVisible({ timeout: 15_000 });
+
+    await clickSafe(page, '[data-testid="partner-status-select"]');
+    await page.getByRole("option", { name: "Đã dừng hợp tác" }).click();
+    await clickSafe(page, '[data-testid="partner-name-submit"]');
+    await expect(page.getByTestId("partner-name-sheet")).toBeHidden({
+      timeout: 20_000,
+    });
+
+    // The partner moved to the stopped tab with the grey badge.
+    await clickSafe(page, '[data-testid="partner-tab-stopped"]');
+    const stoppedRow = page.getByTestId("partner-row").filter({ hasText: editName });
+    await expect(stoppedRow).toBeVisible({ timeout: 30_000 });
+    await expect(stoppedRow.getByTestId("partner-status-stopped")).toBeVisible();
+
+    // A hard reload keeps it.
+    await gotoAndSettle(page, "/partners?status=stopped");
+    await expect(
+      page
+        .getByTestId("partner-row")
+        .filter({ hasText: editName })
+        .getByTestId("partner-status-stopped"),
+    ).toBeVisible({ timeout: 30_000 });
+
+    // Stopped → active via the same form.
+    await clickSafe(
+      page,
+      `[data-testid="partner-row"][data-partner-name="${editName}"] [data-testid="partner-rename-button"]`,
+    );
+    await expect(page.getByTestId("partner-name-sheet")).toBeVisible();
+    await expect(
+      page.locator('[data-testid="company-checkbox-HRP"]'),
+    ).toBeVisible({ timeout: 15_000 });
+
+    await clickSafe(page, '[data-testid="partner-status-select"]');
+    await page.getByRole("option", { name: "Đang hợp tác" }).click();
+    await clickSafe(page, '[data-testid="partner-name-submit"]');
+    await expect(page.getByTestId("partner-name-sheet")).toBeHidden({
+      timeout: 20_000,
+    });
+
+    // Back on the active tab with the green badge.
+    await clickSafe(page, '[data-testid="partner-tab-active"]');
+    await expect(
+      page
+        .getByTestId("partner-row")
+        .filter({ hasText: editName })
+        .getByTestId("partner-status-active"),
+    ).toBeVisible({ timeout: 30_000 });
+
+    // The database agrees on the round trip.
+    const { data } = await admin
+      .from("partners")
+      .select("status")
+      .eq("id", seeded.id)
+      .single();
+    expect(data?.status).toBe("active");
+
+    await seeded.cleanup();
   });
 });
