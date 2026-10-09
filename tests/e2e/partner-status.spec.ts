@@ -178,7 +178,7 @@ test.describe("partner status + companies (round 10)", () => {
     const preview = page.getByTestId("partner-import-preview");
     await expect(preview).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("partner-import-summary")).toHaveText(
-      "1 dòng hợp lệ · 0 dòng lỗi",
+      "1 dòng sẽ thêm mới · 0 dòng sẽ cập nhật · 0 dòng lỗi",
     );
 
     await clickSafe(page, '[data-testid="partner-import-confirm"]');
