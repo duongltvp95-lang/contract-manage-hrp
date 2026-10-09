@@ -149,6 +149,61 @@ test.describe("admin privileged (round 19)", () => {
     await expect(page.getByText(/không thể xoá/)).toBeVisible({ timeout: 15_000 });
   });
 
+  test("bulk-deletes selected partners and reports the busy one (round 24)", async ({ page }) => {
+    const stamp = runId();
+    const admin = adminClient();
+    const freeA = await seedPartner(admin, `${TEST_PREFIX}ĐT bulk A ${stamp}`);
+    const freeB = await seedPartner(admin, `${TEST_PREFIX}ĐT bulk B ${stamp}`);
+    const busy = await seedPartner(admin, `${TEST_PREFIX}ĐT bulk bận ${stamp}`);
+    await seedContract(admin, `${TEST_PREFIX}HD chặn bulk ${stamp}`, busy);
+
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    for (const id of [freeA, freeB, busy]) {
+      await clickSafe(page, `[data-testid="partner-select-${id}"]`);
+    }
+
+    await clickSafe(page, '[data-testid="bulk-delete-partners"]');
+    await clickSafe(page, '[data-testid="bulk-delete-partners-confirm"]');
+
+    // Two deleted, one reported with its reason.
+    await expect(page.getByText("Đã xoá 2 đối tác")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/đang có \d+ hợp đồng/)).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // The busy partner survives.
+    const { data } = await adminClient()
+      .from("partners")
+      .select("id")
+      .eq("id", busy);
+    expect(data ?? []).toHaveLength(1);
+  });
+
+  test("bulk-deletes selected contracts (round 24)", async ({ page }) => {
+    const stamp = runId();
+    const admin = adminClient();
+    const contractA = await seedContract(admin, `${TEST_PREFIX}HD bulk A ${stamp}`, null);
+    const contractB = await seedContract(admin, `${TEST_PREFIX}HD bulk B ${stamp}`, null);
+
+    await login(page);
+    await gotoAndSettle(page, "/contracts");
+
+    await clickSafe(page, `[data-testid="contract-select-${contractA}"]`);
+    await clickSafe(page, `[data-testid="contract-select-${contractB}"]`);
+    await clickSafe(page, '[data-testid="bulk-delete-contracts"]');
+    await clickSafe(page, '[data-testid="bulk-delete-contracts-confirm"]');
+
+    await expect(page.getByText("Đã xoá 2 hợp đồng")).toBeVisible({ timeout: 15_000 });
+
+    const { data } = await adminClient()
+      .from("contracts")
+      .select("id")
+      .in("id", [contractA, contractB]);
+    expect(data ?? []).toHaveLength(0);
+  });
+
   test("a regular user sees no delete controls and cannot view archived", async ({ page }) => {
     const stamp = runId();
     const admin = adminClient();
@@ -172,13 +227,17 @@ test.describe("admin privileged (round 19)", () => {
     await login(page, email, password);
     await gotoAndSettle(page, "/contracts");
 
-    // No archived tab, no delete buttons.
+    // No archived tab, no delete buttons, no bulk-selection checkboxes.
     await expect(page.getByTestId("contract-tab-archived")).toHaveCount(0);
     await expect(page.locator('[data-testid^="contract-delete-"]')).toHaveCount(0);
+    await expect(page.getByTestId("contract-select-all")).toHaveCount(0);
+    await expect(page.locator('[data-testid^="contract-select-"]')).toHaveCount(0);
 
-    // Partners list has no delete button either.
+    // Partners list has no delete button or checkbox either.
     await gotoAndSettle(page, "/partners");
     await expect(page.locator('[data-testid^="partner-delete-"]')).toHaveCount(0);
+    await expect(page.getByTestId("partner-select-all")).toHaveCount(0);
+    await expect(page.locator('[data-testid^="partner-select-"]')).toHaveCount(0);
 
     // The archived contract's detail is forbidden.
     await gotoAndSettle(page, `/contracts/${contractId}`);

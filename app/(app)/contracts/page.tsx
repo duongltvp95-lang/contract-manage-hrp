@@ -58,6 +58,7 @@ async function ContractsContent({
       {result.ok ? (
         <>
           <ContractsTable
+            key={JSON.stringify([scope, query])}
             rows={result.data.rows}
             query={query}
             total={result.data.total}

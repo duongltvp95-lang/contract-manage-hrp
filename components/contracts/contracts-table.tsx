@@ -3,11 +3,13 @@
 import { ArrowDown, ArrowUp, ChevronsUpDown, FilePlus2, Plus, SearchX } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { CompanyBadges } from "@/components/partners/partner-badges";
+import { BulkDeleteContractsButton } from "@/components/contracts/bulk-delete-contracts-button";
 import { DeleteContractButton } from "@/components/contracts/delete-contract-button";
 import { EmptyState } from "@/components/shared/empty-state";
 import {
@@ -64,6 +66,25 @@ export function ContractsTable({
   scope?: "active" | "expired" | "archived";
 }) {
   const router = useRouter();
+  // Round 24 — bulk selection. The page remounts this table with a `key` when
+  // the tab/page/sort changes, so a selection never survives a list change.
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const selectedSet = new Set(selectedIds);
+  const allSelected =
+    rows.length > 0 && rows.every((row) => selectedSet.has(row.id));
+
+  const toggleRow = (id: string) => {
+    setSelectedIds((previous) =>
+      previous.includes(id)
+        ? previous.filter((existing) => existing !== id)
+        : [...previous, id],
+    );
+  };
+
+  const toggleAll = () => {
+    setSelectedIds(allSelected ? [] : rows.map((row) => row.id));
+  };
 
   const hrefFor = (patch: Partial<ContractsQuery>) => {
     let href = contractsHref(patch, query);
@@ -78,16 +99,33 @@ export function ContractsTable({
   }
 
   return (
-    <div className="rounded-xl shadow-sm">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <SortableHead
-              field="contract_number"
-              label="Số hợp đồng"
-              query={query}
-              hrefFor={hrefFor}
-            />
+    <div className="space-y-3">
+      {canDelete && selectedIds.length > 0 && (
+        <BulkDeleteContractsButton
+          ids={selectedIds}
+          onDone={() => setSelectedIds([])}
+        />
+      )}
+      <div className="rounded-xl shadow-sm">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              {canDelete && (
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={allSelected}
+                    onCheckedChange={toggleAll}
+                    aria-label="Chọn tất cả hợp đồng"
+                    data-testid="contract-select-all"
+                  />
+                </TableHead>
+              )}
+              <SortableHead
+                field="contract_number"
+                label="Số hợp đồng"
+                query={query}
+                hrefFor={hrefFor}
+              />
             <TableHead>Đối tác</TableHead>
             <TableHead>Công ty</TableHead>
             <SortableHead
@@ -116,6 +154,16 @@ export function ContractsTable({
                 className="cursor-pointer"
                 onClick={() => router.push(href)}
               >
+                {canDelete && (
+                  <TableCell onClick={(event) => event.stopPropagation()}>
+                    <Checkbox
+                      checked={selectedSet.has(row.id)}
+                      onCheckedChange={() => toggleRow(row.id)}
+                      aria-label="Chọn hợp đồng"
+                      data-testid={`contract-select-${row.id}`}
+                    />
+                  </TableCell>
+                )}
                 <TableCell className="font-medium">
                   {/* Real link so keyboard and screen-reader users can open the row. */}
                   <Link
@@ -165,10 +213,11 @@ export function ContractsTable({
             );
           })}
         </TableBody>
-      </Table>
-      <p className="border-t px-3 py-2 text-xs text-muted-foreground">
-        {total} hợp đồng
-      </p>
+        </Table>
+        <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+          {total} hợp đồng
+        </p>
+      </div>
     </div>
   );
 }

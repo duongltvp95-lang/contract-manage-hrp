@@ -14,6 +14,7 @@ import {
 import {
   createPartner,
   deletePartner,
+  deletePartners,
   importPartners,
   listCompanies,
   previewPartnerImport,
@@ -25,6 +26,7 @@ import {
   type PartnerImportServiceRow,
   type PartnerSearchRow,
 } from "@/lib/services/partners";
+import type { BulkDeleteItem } from "@/lib/services/contracts";
 import type { PartnerStatus } from "@schemas/partner";
 import {
   authorized,
@@ -306,5 +308,29 @@ export async function deletePartnerAction(
 
   return fromService(
     await deletePartner(id, { organizationId: access.user.organizationId }),
+  );
+}
+
+/** Round 24 — bulk hard-delete of partners (owner-email-gated in the service). */
+export async function deletePartnersAction(
+  ids: unknown,
+): Promise<ActionResult<{ results: BulkDeleteItem[] }>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  if (
+    !Array.isArray(ids) ||
+    ids.length === 0 ||
+    ids.some((id) => typeof id !== "string" || id.length === 0)
+  ) {
+    return validationFailure("Thiếu thông tin đối tác", [
+      { path: "ids", message: "Danh sách đối tác cần xoá không hợp lệ" },
+    ]);
+  }
+
+  return fromService(
+    await deletePartners(ids as string[], {
+      organizationId: access.user.organizationId,
+    }),
   );
 }

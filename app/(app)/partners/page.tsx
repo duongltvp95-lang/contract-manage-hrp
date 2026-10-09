@@ -44,6 +44,7 @@ async function PartnersContent({
 
       {result.ok ? (
         <PartnersTable
+          key={status ?? "all"}
           rows={result.data}
           canDelete={canDeleteEntities(me.email)}
         />

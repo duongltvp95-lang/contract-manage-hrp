@@ -3,13 +3,16 @@
 import { Building2, Plus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 import { AddPartnerButton, RenamePartnerButton } from "@/components/partners/partner-name-sheet";
 import { CompanyBadges, PartnerStatusBadge } from "@/components/partners/partner-badges";
+import { BulkDeletePartnersButton } from "@/components/partners/bulk-delete-partners-button";
 import { DeletePartnerButton } from "@/components/partners/delete-partner-button";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -40,6 +43,25 @@ export function PartnersTable({
   canDelete?: boolean;
 }) {
   const router = useRouter();
+  // Round 24 — bulk selection. The page remounts this table with a `key` when
+  // the tab changes, so a selection never survives a list change.
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const selectedSet = new Set(selectedIds);
+  const allSelected =
+    rows.length > 0 && rows.every((row) => selectedSet.has(row.id));
+
+  const toggleRow = (id: string) => {
+    setSelectedIds((previous) =>
+      previous.includes(id)
+        ? previous.filter((existing) => existing !== id)
+        : [...previous, id],
+    );
+  };
+
+  const toggleAll = () => {
+    setSelectedIds(allSelected ? [] : rows.map((row) => row.id));
+  };
 
   if (rows.length === 0) {
     return (
@@ -55,34 +77,62 @@ export function PartnersTable({
   }
 
   return (
-    <div className="rounded-xl shadow-sm">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Tên đối tác</TableHead>
-            <TableHead>Mã số thuế</TableHead>
-            <TableHead>Khu vực</TableHead>
-            <TableHead>Trạng thái</TableHead>
-            <TableHead>Công ty</TableHead>
-            <TableHead className="text-center">Số hợp đồng</TableHead>
-            <TableHead>Cập nhật lúc</TableHead>
-            <TableHead className="text-right">Thao tác</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => {
-            const href = `/partners/${row.id}`;
+    <div className="space-y-3">
+      {canDelete && selectedIds.length > 0 && (
+        <BulkDeletePartnersButton
+          ids={selectedIds}
+          names={new Map(rows.map((row) => [row.id, row.name]))}
+          onDone={() => setSelectedIds([])}
+        />
+      )}
+      <div className="rounded-xl shadow-sm">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              {canDelete && (
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={allSelected}
+                    onCheckedChange={toggleAll}
+                    aria-label="Chọn tất cả đối tác"
+                    data-testid="partner-select-all"
+                  />
+                </TableHead>
+              )}
+              <TableHead>Tên đối tác</TableHead>
+              <TableHead>Mã số thuế</TableHead>
+              <TableHead>Khu vực</TableHead>
+              <TableHead>Trạng thái</TableHead>
+              <TableHead>Công ty</TableHead>
+              <TableHead className="text-center">Số hợp đồng</TableHead>
+              <TableHead>Cập nhật lúc</TableHead>
+              <TableHead className="text-right">Thao tác</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => {
+              const href = `/partners/${row.id}`;
 
-            return (
-              <TableRow
-                key={row.id}
-                className="cursor-pointer"
-                onClick={() => router.push(href)}
-                data-testid="partner-row"
-                data-partner-name={row.name}
-                data-partner-tax-code={row.tax_code ?? ""}
-              >
-                <TableCell className="font-medium">
+              return (
+                <TableRow
+                  key={row.id}
+                  className="cursor-pointer"
+                  onClick={() => router.push(href)}
+                  data-testid="partner-row"
+                  data-partner-name={row.name}
+                  data-partner-tax-code={row.tax_code ?? ""}
+                >
+                  {canDelete && (
+                    <TableCell onClick={(event) => event.stopPropagation()}>
+                      <Checkbox
+                        checked={selectedSet.has(row.id)}
+                        onCheckedChange={() => toggleRow(row.id)}
+                        aria-label="Chọn đối tác"
+                        data-testid={`partner-select-${row.id}`}
+                      />
+                    </TableCell>
+                  )}
+                  <TableCell className="font-medium">
                   {/* A real link, so the row is reachable by keyboard too. */}
                   <Link
                     href={href}
@@ -142,10 +192,11 @@ export function PartnersTable({
             );
           })}
         </TableBody>
-      </Table>
-      <p className="border-t px-3 py-2 text-xs text-muted-foreground">
-        {rows.length} đối tác
-      </p>
+        </Table>
+        <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+          {rows.length} đối tác
+        </p>
+      </div>
     </div>
   );
 }

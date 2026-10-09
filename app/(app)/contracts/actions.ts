@@ -6,8 +6,10 @@ import {
   archiveContract,
   createContract,
   deleteContract,
+  deleteContracts,
   unarchiveContract,
   updateContract,
+  type BulkDeleteItem,
   type ContractRow,
 } from "@/lib/services/contracts";
 import { completeUpload, type ContractFileRow } from "@/lib/services/files";
@@ -136,6 +138,30 @@ export async function deleteContractAction(
 
   return fromService(
     await deleteContract(id, { organizationId: access.user.organizationId }),
+  );
+}
+
+/** Round 24 — bulk hard-delete of contracts (owner-email-gated in the service). */
+export async function deleteContractsAction(
+  ids: unknown,
+): Promise<ActionResult<{ results: BulkDeleteItem[] }>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  if (
+    !Array.isArray(ids) ||
+    ids.length === 0 ||
+    ids.some((id) => typeof id !== "string" || id.length === 0)
+  ) {
+    return validationFailure("Thiếu thông tin hợp đồng", [
+      { path: "ids", message: "Danh sách hợp đồng cần xoá không hợp lệ" },
+    ]);
+  }
+
+  return fromService(
+    await deleteContracts(ids as string[], {
+      organizationId: access.user.organizationId,
+    }),
   );
 }
 
