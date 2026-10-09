@@ -100,6 +100,7 @@ export function PartnersTable({
                 </TableHead>
               )}
               <TableHead>Tên đối tác</TableHead>
+              <TableHead>Tên viết tắt</TableHead>
               <TableHead>Mã số thuế</TableHead>
               <TableHead>Khu vực</TableHead>
               <TableHead>Trạng thái</TableHead>
@@ -133,24 +134,22 @@ export function PartnersTable({
                     </TableCell>
                   )}
                   <TableCell className="font-medium">
-                  {/* A real link, so the row is reachable by keyboard too. */}
-                  <Link
-                    href={href}
-                    className="hover:underline"
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    {row.name}
-                  </Link>
-                  {row.abbreviation ? (
-                    <Badge
-                      variant="outline"
-                      className="ml-2 font-mono text-xs"
-                      data-testid={`partner-abbr-badge-${row.id}`}
+                    {/* A real link, so the row is reachable by keyboard too. */}
+                    <Link
+                      href={href}
+                      className="hover:underline"
+                      onClick={(event) => event.stopPropagation()}
                     >
-                      {row.abbreviation}
-                    </Badge>
-                  ) : null}
-                </TableCell>
+                      {row.name}
+                    </Link>
+                  </TableCell>
+                  {/* Round 26 — the abbreviation lives in its own column. */}
+                  <TableCell
+                    className="font-mono text-sm text-muted-foreground"
+                    data-testid={`partner-abbr-cell-${row.id}`}
+                  >
+                    {row.abbreviation ?? ""}
+                  </TableCell>
                 <TableCell className="font-mono text-sm">
                   {row.tax_code ? (
                     row.tax_code

@@ -51,8 +51,9 @@ test.describe("partner region + abbreviation", () => {
 
     const row = page.getByTestId("partner-row").filter({ hasText: partnerName });
     await expect(row).toBeVisible();
-    // The abbreviation badge + the Khu vực column.
-    await expect(row.locator('[data-testid^="partner-abbr-badge-"]')).toHaveText("ĐK");
+    // Round 26 — the abbreviation lives in its own column, and the Khu vực
+    // column shows the region.
+    await expect(row.locator('[data-testid^="partner-abbr-cell-"]')).toHaveText("ĐK");
     await expect(row).toContainText("Miền Bắc");
 
     // Capture the id for later tests, then open the detail.
@@ -81,7 +82,7 @@ test.describe("partner region + abbreviation", () => {
     ).toBeVisible({ timeout: 15_000 });
   });
 
-  test("edits the abbreviation and the badge follows", async ({ page }) => {
+  test("edits the abbreviation and the column follows", async ({ page }) => {
     await login(page);
     await gotoAndSettle(page, `/partners/${partnerId}`);
 
@@ -96,9 +97,9 @@ test.describe("partner region + abbreviation", () => {
 
     await expect(page.getByTestId("partner-detail-abbreviation")).toHaveText("ABC");
 
-    // The list badge follows too.
+    // The list column follows too.
     await gotoAndSettle(page, "/partners");
     const row = page.getByTestId("partner-row").filter({ hasText: partnerName });
-    await expect(row.locator('[data-testid^="partner-abbr-badge-"]')).toHaveText("ABC");
+    await expect(row.locator('[data-testid^="partner-abbr-cell-"]')).toHaveText("ABC");
   });
 });
