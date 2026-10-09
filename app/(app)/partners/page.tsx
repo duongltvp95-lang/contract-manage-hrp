@@ -3,6 +3,7 @@ import { Suspense } from "react";
 
 import { PartnerImportSheet } from "@/components/partners/partner-import-sheet";
 import { AddPartnerButton } from "@/components/partners/partner-name-sheet";
+import { PartnersExportMenu } from "@/components/partners/partners-export-menu";
 import { PartnersTable } from "@/components/partners/partners-table";
 import { PartnersTableSkeleton } from "@/components/partners/partners-table-skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -107,6 +108,7 @@ function PageHeader() {
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        <PartnersExportMenu />
         <AddPartnerButton />
         <PartnerImportSheet />
       </div>

@@ -123,9 +123,11 @@ export function PartnerNameSheet({
     },
   });
 
-  // Load the org's companies once; pre-check the edit-mode selection by mapping
-  // the current company names back to ids.
+  // Load the org's companies when the sheet OPENS (not on mount — the partners
+  // list mounts one sheet per row, and fetching per row would fire a storm of
+  // server actions for nothing). Reopening refetches; the list is tiny.
   useEffect(() => {
+    if (!sheetOpen) return;
     let active = true;
     listCompaniesAction().then((result) => {
       if (!active || !result.ok) return;
@@ -143,7 +145,7 @@ export function PartnerNameSheet({
       active = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sheetOpen]);
 
   async function onSubmit(values: CreatePartnerInput) {
     setFormError(null);

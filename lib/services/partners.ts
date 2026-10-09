@@ -87,8 +87,10 @@ export type PartnerContext = {
  * One extra query rather than a PostgREST embedded count, mirroring
  * `countFilesByContract` in `contracts.ts`: the shape stays explicit and RLS
  * applies exactly once per row.
+ *
+ * Exported (round 23) so the partners export can reuse the same count.
  */
-async function countContractsByPartner(
+export async function countContractsByPartner(
   partnerIds: string[],
   organizationId: string,
 ): Promise<Map<string, number>> {
