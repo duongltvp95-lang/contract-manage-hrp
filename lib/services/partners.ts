@@ -15,6 +15,7 @@ import { PARTNER_SEARCH_LIMIT } from "@/lib/partner-display";
 import {
   buildMergePatch,
   matchExistingPartner,
+  mergeDirectoryEntry,
   type MergeablePartner,
   type MergeIncoming,
 } from "@/lib/partner-merge";
@@ -731,48 +732,37 @@ export type PartnerImportServiceRow = Pick<
   | "hasCompanyColumn"
 >;
 
-const IMPORT_DUPLICATE_MESSAGE = (ownerName: string) =>
-  `Mã số thuế đã được dùng cho đối tác khác trong tổ chức (Đã thuộc về “${ownerName}”)`;
-
 /**
- * Preview: marks which rows collide with an existing tax code in the database,
+ * Preview — round 25: predicts, for every valid row, whether the import will
+ * CREATE a partner ("Thêm mới") or MERGE into an existing one ("Cập nhật"),
  * WITHOUT writing anything.
  *
- * The organization always comes from the caller's session; a tax code that
- * exists in ANOTHER organization is not a conflict, because partners are
- * organization-scoped.
+ * The same 5-key rule the import uses runs against the organization's
+ * directory, and the directory is updated in-memory row by row so a later row
+ * in the same file is predicted against what the earlier rows would have done.
+ * A match carries `updated: true`, the target id and the partner's name.
  */
 export async function previewPartnerImport(
   rows: PartnerImportServiceRow[],
   { organizationId }: PartnerContext,
 ): Promise<ServiceResult<PartnerImportRowReport[]>> {
-  const existing = await findPartnersByTaxCodes(
-    rows.map((row) => row.taxCode),
-    organizationId,
-  );
+  const directory = await listPartners({ organizationId });
+  if (!directory.ok) return directory;
+
+  const existing: MergeablePartner[] = directory.data.map((partner) => ({
+    id: partner.id,
+    name: partner.name,
+    tax_code: partner.tax_code,
+    abbreviation: partner.abbreviation,
+    region: partner.region,
+    address: partner.address,
+    status: partner.status,
+    companies: partner.companies,
+  }));
 
   return ok(
     rows.map((row): PartnerImportRowReport => {
-      const code = row.taxCode.trim();
-      const conflicts = code ? existing.get(code) : undefined;
-
-      if (conflicts && conflicts.length > 0) {
-        return {
-          rowNumber: row.rowNumber,
-          name: row.name,
-          address: row.address,
-          taxCode: row.taxCode,
-          region: row.region,
-          abbreviation: row.abbreviation,
-          status: row.status,
-          companies: row.companies,
-          hasCompanyColumn: row.hasCompanyColumn,
-          ok: false,
-          error: IMPORT_DUPLICATE_MESSAGE(conflicts[0].name),
-        };
-      }
-
-      return {
+      const base: PartnerImportRowReport = {
         rowNumber: row.rowNumber,
         name: row.name,
         address: row.address,
@@ -784,6 +774,48 @@ export async function previewPartnerImport(
         hasCompanyColumn: row.hasCompanyColumn,
         ok: true,
       };
+
+      const incoming: MergeIncoming = {
+        name: row.name ?? "",
+        taxCode: row.taxCode ?? "",
+        abbreviation: row.abbreviation ?? "",
+        region: row.region ?? "",
+        address: row.address ?? "",
+        status: row.status ?? null,
+        companies: row.companies ?? [],
+        hasCompanyColumn: Boolean(row.hasCompanyColumn),
+      };
+
+      const match = matchExistingPartner(existing, incoming);
+
+      if (match) {
+        // Predict the merge in-memory for the rows that follow.
+        const index = existing.findIndex((partner) => partner.id === match.id);
+        if (index >= 0) {
+          existing[index] = mergeDirectoryEntry(match, incoming);
+        }
+
+        return {
+          ...base,
+          updated: true,
+          partnerId: match.id,
+          matchedPartnerName: match.name,
+        };
+      }
+
+      // Predict the create in-memory for the rows that follow.
+      existing.push({
+        id: `preview-${row.rowNumber}`,
+        name: incoming.name,
+        tax_code: incoming.taxCode === "" ? null : incoming.taxCode,
+        address: incoming.address === "" ? null : incoming.address,
+        region: incoming.region === "" ? null : incoming.region,
+        abbreviation: incoming.abbreviation === "" ? null : incoming.abbreviation,
+        status: incoming.status ?? "active",
+        companies: incoming.companies,
+      });
+
+      return { ...base };
     }),
   );
 }
@@ -833,7 +865,13 @@ export async function importPartners(
 
   const reportRow = (
     row: PartnerImportServiceRow,
-    extra: { ok: boolean; error?: string; partnerId?: string; updated?: boolean },
+    extra: {
+      ok: boolean;
+      error?: string;
+      partnerId?: string;
+      updated?: boolean;
+      matchedPartnerName?: string;
+    },
   ): PartnerImportRowReport => ({
     rowNumber: row.rowNumber,
     name: row.name,
@@ -848,6 +886,9 @@ export async function importPartners(
     ...(extra.error ? { error: extra.error } : {}),
     ...(extra.partnerId ? { partnerId: extra.partnerId } : {}),
     ...(extra.updated ? { updated: true } : {}),
+    ...(extra.matchedPartnerName
+      ? { matchedPartnerName: extra.matchedPartnerName }
+      : {}),
   });
 
   for (const row of rows) {
@@ -930,20 +971,17 @@ export async function importPartners(
         // can match the merged state.
         const index = existing.findIndex((partner) => partner.id === match.id);
         if (index >= 0) {
-          existing[index] = {
-            ...match,
-            name: patch.name ?? match.name,
-            tax_code: patch.tax_code !== undefined ? patch.tax_code : match.tax_code,
-            address: patch.address !== undefined ? patch.address : match.address,
-            region: patch.region !== undefined ? patch.region : match.region,
-            abbreviation:
-              patch.abbreviation !== undefined ? patch.abbreviation : match.abbreviation,
-            status: (patch.status as MergeablePartner["status"]) ?? match.status,
-            companies: [...new Set([...match.companies, ...companiesToAdd])],
-          };
+          existing[index] = mergeDirectoryEntry(match, incoming);
         }
 
-        results.push(reportRow(row, { ok: true, updated: true, partnerId: match.id }));
+        results.push(
+          reportRow(row, {
+            ok: true,
+            updated: true,
+            partnerId: match.id,
+            matchedPartnerName: match.name,
+          }),
+        );
         continue;
       }
 

@@ -119,6 +119,30 @@ export type MergePatch = {
 };
 
 /**
+ * Applies the merge prediction to a directory entry — used by BOTH the import
+ * (after a real update) and the preview (to predict what a later row in the
+ * same file would match).
+ */
+export function mergeDirectoryEntry(
+  existing: MergeablePartner,
+  incoming: MergeIncoming,
+): MergeablePartner {
+  const { patch, companiesToAdd } = buildMergePatch(existing, incoming);
+
+  return {
+    ...existing,
+    name: patch.name ?? existing.name,
+    tax_code: patch.tax_code !== undefined ? patch.tax_code : existing.tax_code,
+    address: patch.address !== undefined ? patch.address : existing.address,
+    region: patch.region !== undefined ? patch.region : existing.region,
+    abbreviation:
+      patch.abbreviation !== undefined ? patch.abbreviation : existing.abbreviation,
+    status: (patch.status as PartnerStatus | undefined) ?? existing.status,
+    companies: [...new Set([...existing.companies, ...companiesToAdd])],
+  };
+}
+
+/**
  * Builds the overwrite patch: a non-empty incoming value wins; empty incoming
  * values leave the existing field alone. The name always wins. Companies are a
  * UNION only when the file carries the "Công ty" column.

@@ -495,8 +495,10 @@ export function validatePartnerImportRows(
 export type PartnerImportRowReport = PartnerImportRow & {
   /** Set when this row was actually imported (created or merged). */
   partnerId?: string;
-  /** Round 25 — true when the row MERGED into an existing partner. */
+  /** Round 25 — true when the row MERGED into (or will merge into) an existing partner. */
   updated?: boolean;
+  /** Round 25 — the partner this row will overwrite (preview only). */
+  matchedPartnerName?: string;
 };
 
 export type PartnerImportSummary = {

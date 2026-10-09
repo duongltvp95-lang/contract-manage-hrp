@@ -82,6 +82,7 @@ type ImportReport = {
     ok: boolean;
     partnerId?: string;
     updated?: boolean;
+    matchedPartnerName?: string;
     error?: string;
   }[];
   summary: { total: number; ok: number; failed: number; updated: number };
@@ -240,7 +241,7 @@ suite("partner import — Excel (round 7)", () => {
     expect(audit ?? []).toHaveLength(1);
   }, 120_000);
 
-  it("preview flags the database duplicate without writing", async () => {
+  it("preview predicts the database match as Cập nhật without writing (round 25)", async () => {
     const buffer = await buildWorkbook([[`${TEST_PREFIX}Xem trước trùng ${stamp}`, "", taxInDb]]);
 
     const result = await postImport("preview", orgA.cookie, buffer);
@@ -248,8 +249,17 @@ suite("partner import — Excel (round 7)", () => {
     expect(result.status).toBe(200);
 
     const report = result.body as ImportReport;
-    expect(report.rows[0]?.ok).toBe(false);
-    expect(report.rows[0]?.error).toContain("Mã số thuế đã được dùng");
+    expect(report.rows[0]?.ok).toBe(true);
+    expect(report.rows[0]?.updated).toBe(true);
+    // The earlier merge test may already have overwritten the seeded partner's
+    // name — compare against its CURRENT name, not the original.
+    const { data: current } = await admin
+      .from("partners")
+      .select("name")
+      .eq("id", seeded.id)
+      .single();
+    expect(report.rows[0]?.matchedPartnerName).toBe(current?.name);
+    expect(report.summary).toEqual({ total: 1, ok: 1, failed: 0, updated: 1 });
 
     const { data } = await admin
       .from("partners")

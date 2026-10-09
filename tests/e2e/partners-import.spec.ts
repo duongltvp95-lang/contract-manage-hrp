@@ -77,6 +77,7 @@ test.describe("partner import from Excel", () => {
     const nameA = `${TEST_PREFIX}Nhập A ${stamp}`;
     const nameB = `${TEST_PREFIX}Nhập B ${stamp}`;
     const dupName = `${TEST_PREFIX}Nhập trùng MST ${stamp}`;
+    const seededName = `${TEST_PREFIX}Đối tác đã có MST ${stamp}`;
 
     const path = await buildImportWorkbook(
       ["Tên đối tác", "Địa chỉ", "Mã số thuế"],
@@ -107,32 +108,33 @@ test.describe("partner import from Excel", () => {
     const rowWith = (text: string) =>
       page.getByTestId("partner-import-row").filter({ hasText: text });
 
-    await expect(rowWith(nameA)).toContainText("Hợp lệ");
-    await expect(rowWith(nameB)).toContainText("Hợp lệ");
-    await expect(rowWith(dupName)).toContainText("Mã số thuế đã được dùng");
+    // Round 25 — the matching row is predicted as an update, not an error.
+    await expect(rowWith(nameA)).toContainText("Thêm mới");
+    await expect(rowWith(nameB)).toContainText("Thêm mới");
+    await expect(rowWith(dupName)).toContainText(`Cập nhật ${seededName}`);
     await expect(rowWith("Chỉ có địa chỉ, thiếu tên")).toContainText(
       "Tên đối tác không được để trống",
     );
 
     await expect(page.getByTestId("partner-import-summary")).toHaveText(
-      "2 dòng hợp lệ · 2 dòng lỗi",
+      "2 dòng sẽ thêm mới · 1 dòng sẽ cập nhật · 1 dòng lỗi",
     );
 
     const confirm = page.getByTestId("partner-import-confirm");
-    await expect(confirm).toHaveText("Nhập 2 đối tác");
+    await expect(confirm).toHaveText("Nhập 3 đối tác");
     await confirm.click();
 
     // Success toast…
-    await expect(page.getByText("Đã nhập 2 đối tác")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Đã nhập 3 đối tác")).toBeVisible({ timeout: 15_000 });
 
-    // …and, because two rows failed, the sheet stays open with the per-row
+    // …and, because one row failed, the sheet stays open with the per-row
     // result so the reasons remain visible.
     const result = page.getByTestId("partner-import-result");
     await expect(result).toBeVisible({ timeout: 30_000 });
-    await expect(result).toContainText("Đã nhập 2 · Lỗi 2");
+    await expect(result).toContainText("Đã thêm 2 · Đã cập nhật 1 · Lỗi 1");
     await expect(
       result.getByTestId("partner-import-row").filter({ hasText: dupName }),
-    ).toContainText("Mã số thuế đã được dùng");
+    ).toContainText(`Cập nhật ${seededName}`);
 
     await clickSafe(page, '[data-testid="partner-import-done"]');
     await expect(page.getByTestId("partner-import-sheet")).toBeHidden({
@@ -147,23 +149,20 @@ test.describe("partner import from Excel", () => {
       page.getByTestId("partner-row").filter({ hasText: nameB }),
     ).toBeVisible();
 
-    // The database agrees: two rows created, the duplicate not.
+    // The database agrees: two rows created, and the matching row OVERWROTE the
+    // seeded partner instead of failing.
     const admin = adminClient();
     const { data: imported } = await admin
       .from("partners")
       .select("name, tax_code")
       .like("name", `${TEST_PREFIX}Nhập%`);
 
-    expect(imported?.map((row) => row.name).sort()).toEqual([nameA, nameB].sort());
-    expect(imported?.map((row) => row.tax_code).sort()).toEqual(
-      ["0511111111", "0511111112"].sort(),
+    expect(imported?.map((row) => row.name).sort()).toEqual(
+      [nameA, nameB, dupName].sort(),
     );
-
-    const { data: duplicates } = await admin
-      .from("partners")
-      .select("id")
-      .eq("name", dupName);
-    expect(duplicates ?? []).toHaveLength(0);
+    expect(imported?.map((row) => row.tax_code).sort()).toEqual(
+      ["0511111111", "0511111112", duplicateTax].sort(),
+    );
   });
 
   test("a file without the name column shows a clear error and creates nothing", async ({ page }) => {
@@ -258,5 +257,123 @@ test.describe("partner import from Excel", () => {
 
     const activeRow = page.getByTestId("partner-row").filter({ hasText: activeName });
     await expect(activeRow).toContainText("Đang hợp tác");
+  });
+
+  test("previews an update for a matching partner and applies it (round 25)", async ({ page }) => {
+    test.setTimeout(180_000);
+
+    const seededName = `${TEST_PREFIX}ĐT ghi đè ${stamp}`;
+    const newName = `${TEST_PREFIX}ĐT mới ${stamp}`;
+    const newAddress = `Địa chỉ mới ${stamp}`;
+
+    // An existing partner (same company HRP) to overwrite.
+    const admin = adminClient();
+    const seeded = await seedPartner(admin, {
+      organizationId: ORG_A,
+      name: seededName,
+      taxCode: `21${String(Date.now()).slice(-8)}`,
+    });
+    await admin
+      .from("partner_companies")
+      .insert({ partner_id: seeded.id, company_id: "00000000-0000-4000-8000-000000000001" });
+
+    const path = await buildImportWorkbook(
+      ["Tên đối tác", "Tên viết tắt", "Khu vực", "Địa chỉ", "Mã số thuế", "Công ty", "Trạng thái hợp tác"],
+      [
+        // Same name, same company → Cập nhật, with a new address to overwrite.
+        [seededName, "", "", newAddress, `22${String(Date.now()).slice(-8)}`, "HRP", ""],
+        // Brand new → Thêm mới.
+        [newName, "", "", "", `23${String(Date.now()).slice(-8)}`, "HRP", ""],
+      ],
+    );
+
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    await clickSafe(page, '[data-testid="partner-import-button"]');
+    await page
+      .locator('[data-testid="partner-import-dropzone"] input[type="file"]')
+      .setInputFiles(path);
+
+    const preview = page.getByTestId("partner-import-preview");
+    await expect(preview).toBeVisible({ timeout: 30_000 });
+
+    const rowWith = (text: string) =>
+      page.getByTestId("partner-import-row").filter({ hasText: text });
+
+    await expect(rowWith(seededName)).toContainText(`Cập nhật ${seededName}`);
+    await expect(rowWith(newName)).toContainText("Thêm mới");
+    await expect(page.getByTestId("partner-import-summary")).toHaveText(
+      "1 dòng sẽ thêm mới · 1 dòng sẽ cập nhật · 0 dòng lỗi",
+    );
+
+    await page.getByTestId("partner-import-confirm").click();
+    await expect(page.getByText("Đã nhập 2 đối tác")).toBeVisible({ timeout: 15_000 });
+
+    // The sheet closed (no failures) — the list now has the new partner.
+    await expect(page.getByTestId("partner-import-sheet")).toBeHidden({
+      timeout: 15_000,
+    });
+    await expect(
+      page.getByTestId("partner-row").filter({ hasText: newName }),
+    ).toBeVisible({ timeout: 30_000 });
+
+    // The seeded partner was overwritten in place, not duplicated.
+    const { data: rows } = await adminClient()
+      .from("partners")
+      .select("name, address")
+      .or(`name.eq.${seededName},name.eq.${newName}`);
+    expect(rows ?? []).toHaveLength(2);
+    const overwritten = rows?.find((row) => row.name === seededName);
+    expect(overwritten?.address).toBe(newAddress);
+  });
+
+  test("a same-name row under a different company creates a second partner (round 25)", async ({ page }) => {
+    test.setTimeout(180_000);
+
+    const sharedName = `${TEST_PREFIX}ĐT trùng tên khác công ty ${stamp}`;
+
+    // The existing partner belongs to HR VN.
+    const admin = adminClient();
+    const seeded = await seedPartner(admin, {
+      organizationId: ORG_A,
+      name: sharedName,
+      taxCode: `24${String(Date.now()).slice(-8)}`,
+    });
+    await admin
+      .from("partner_companies")
+      .insert({ partner_id: seeded.id, company_id: "00000000-0000-4000-8000-000000000002" });
+
+    // The file row has the SAME name but company HRP — no overlap → Thêm mới.
+    const path = await buildImportWorkbook(
+      ["Tên đối tác", "Tên viết tắt", "Khu vực", "Địa chỉ", "Mã số thuế", "Công ty", "Trạng thái hợp tác"],
+      [[sharedName, "", "", "", `25${String(Date.now()).slice(-8)}`, "HRP", ""]],
+    );
+
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    await clickSafe(page, '[data-testid="partner-import-button"]');
+    await page
+      .locator('[data-testid="partner-import-dropzone"] input[type="file"]')
+      .setInputFiles(path);
+
+    const preview = page.getByTestId("partner-import-preview");
+    await expect(preview).toBeVisible({ timeout: 30_000 });
+
+    await expect(page.getByTestId("partner-import-row")).toContainText("Thêm mới");
+    await expect(page.getByTestId("partner-import-summary")).toHaveText(
+      "1 dòng sẽ thêm mới · 0 dòng sẽ cập nhật · 0 dòng lỗi",
+    );
+
+    await page.getByTestId("partner-import-confirm").click();
+    await expect(page.getByText("Đã nhập 1 đối tác")).toBeVisible({ timeout: 15_000 });
+
+    // Two SEPARATE partners now share the name.
+    const { data } = await adminClient()
+      .from("partners")
+      .select("id")
+      .eq("name", sharedName);
+    expect(data ?? []).toHaveLength(2);
   });
 });

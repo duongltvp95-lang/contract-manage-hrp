@@ -5,6 +5,7 @@ import {
   Download,
   FileSpreadsheet,
   Loader2,
+  RefreshCw,
   UploadCloud,
   XCircle,
 } from "lucide-react";
@@ -305,7 +306,8 @@ export function PartnerImportSheet() {
                     className="text-xs text-muted-foreground"
                     data-testid="partner-import-summary"
                   >
-                    {preview.summary.ok} dòng hợp lệ · {preview.summary.failed} dòng lỗi
+                    {preview.summary.ok - preview.summary.updated} dòng sẽ thêm mới ·{" "}
+                    {preview.summary.updated} dòng sẽ cập nhật · {preview.summary.failed} dòng lỗi
                   </p>
                 </div>
                 <Button
@@ -355,8 +357,12 @@ export function PartnerImportSheet() {
               ------------------------------------------------------------ */}
           {result && (
             <div className="space-y-4" data-testid="partner-import-result">
-              <p className="text-sm font-medium">
-                Đã nhập {result.summary.ok} · Lỗi {result.summary.failed}
+              <p
+                className="text-sm font-medium"
+                data-testid="partner-import-result-summary"
+              >
+                Đã thêm {result.summary.ok - result.summary.updated} · Đã cập nhật{" "}
+                {result.summary.updated} · Lỗi {result.summary.failed}
               </p>
 
               <ImportRowsTable rows={result.rows} />
@@ -423,17 +429,36 @@ function ImportRowsTable({ rows }: { rows: PartnerImportRowReport[] }) {
 }
 
 function RowStatus({ row }: { row: PartnerImportRowReport }) {
+  if (row.ok && row.updated) {
+    // Round 25 — this row will overwrite an existing partner.
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700"
+        data-testid="partner-import-row-update"
+      >
+        <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+        Cập nhật {row.matchedPartnerName ?? "đối tác đã có"}
+      </span>
+    );
+  }
+
   if (row.ok) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700"
+        data-testid="partner-import-row-create"
+      >
         <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-        Hợp lệ
+        Thêm mới
       </span>
     );
   }
 
   return (
-    <span className="inline-flex items-start gap-1 text-xs text-destructive">
+    <span
+      className="inline-flex items-start gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700"
+      data-testid="partner-import-row-error"
+    >
       <XCircle className="mt-px h-3.5 w-3.5 shrink-0" />
       <span>{row.error ?? "Lỗi"}</span>
     </span>
