@@ -10,7 +10,7 @@ import {
 
 import { DEFAULT_SORT, resolveExpiryPreset, sanitizeSearchTerm, type ContractsQuery } from "@/lib/contracts-query";
 import { getCurrentUser } from "@/lib/auth";
-import { canDeleteEntities } from "@/lib/delete-permissions";
+import { canDeleteEntities, BULK_DELETE_LIMIT } from "@/lib/delete-permissions";
 import { deleteObject } from "@/lib/r2/objects";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -686,6 +686,49 @@ export async function deleteContract(
   });
 
   return ok({ id });
+}
+
+/** Round 24 — one per-item result of a bulk delete. */
+export type BulkDeleteItem = {
+  id: string;
+  ok: boolean;
+  /** The readable reason when `ok` is false (e.g. "Không tìm thấy hợp đồng"). */
+  error?: string;
+};
+
+/**
+ * Round 24 — bulk hard-delete of contracts (owner-only, email-gated).
+ *
+ * The permission gate + the per-item logic are the SINGLE `deleteContract` —
+ * nothing is copied. Every id resolves independently: one failure (another
+ * organization, missing, R2 outage) never blocks the rest of the batch.
+ */
+export async function deleteContracts(
+  ids: string[],
+  { organizationId }: { organizationId: string },
+): Promise<ServiceResult<{ results: BulkDeleteItem[] }>> {
+  const user = await getCurrentUser();
+  if (!user) return err("unauthenticated", "Bạn cần đăng nhập");
+  if (!canDeleteEntities(user.email)) {
+    return err("forbidden", "Không có quyền xoá hợp đồng");
+  }
+
+  if (ids.length > BULK_DELETE_LIMIT) {
+    return err(
+      "validation",
+      `Chỉ xoá tối đa ${BULK_DELETE_LIMIT} hợp đồng mỗi lần`,
+    );
+  }
+
+  const results: BulkDeleteItem[] = [];
+  for (const id of ids) {
+    const result = await deleteContract(id, { organizationId });
+    results.push(
+      result.ok ? { id, ok: true } : { id, ok: false, error: result.message },
+    );
+  }
+
+  return ok({ results });
 }
 
 /**

@@ -7,7 +7,7 @@ import type { PartnerStatus } from "@schemas/partner";
 import { resolveAccess } from "@/lib/auth";
 import { DEFAULT_QUERY, type ContractsQuery } from "@/lib/contracts-query";
 import { listAuditLogs } from "@/lib/services/audit-logs";
-import { archiveContract, createContract, deleteContract, listContracts, unarchiveContract, updateContract } from "@/lib/services/contracts";
+import { archiveContract, createContract, deleteContract, deleteContracts, listContracts, unarchiveContract, updateContract } from "@/lib/services/contracts";
 import {
   getExpiringContracts,
   getRecentContracts,
@@ -16,6 +16,7 @@ import { completeUpload, listContractFiles } from "@/lib/services/files";
 import {
   createPartner,
   deletePartner,
+  deletePartners,
   getPartner,
   importPartners,
   listCompanies,
@@ -137,6 +138,14 @@ export async function POST(request: NextRequest) {
       return result(await deleteContract(String(payload.id ?? ""), { organizationId }));
     case "delete_partner":
       return result(await deletePartner(String(payload.id ?? ""), { organizationId }));
+    case "delete_contracts":
+      return result(
+        await deleteContracts((payload.ids ?? []) as string[], { organizationId }),
+      );
+    case "delete_partners":
+      return result(
+        await deletePartners((payload.ids ?? []) as string[], { organizationId }),
+      );
     case "unarchive_contract":
       return result(await unarchiveContract(String(payload.id ?? "")));
     case "update_profile":

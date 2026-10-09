@@ -29,3 +29,6 @@ export function canDeleteEntities(userEmail: string | null | undefined): boolean
   if (!userEmail) return false;
   return readDeleteAdminEmails().includes(userEmail.trim().toLowerCase());
 }
+
+/** Round 24 — hard cap for one bulk-delete call. */
+export const BULK_DELETE_LIMIT = 100;

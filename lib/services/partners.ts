@@ -8,11 +8,12 @@ import {
 
 import type { PartnerImportRow, PartnerImportRowReport } from "@/lib/partner-import";
 import { getCurrentUser } from "@/lib/auth";
-import { canDeleteEntities } from "@/lib/delete-permissions";
+import { canDeleteEntities, BULK_DELETE_LIMIT } from "@/lib/delete-permissions";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { PARTNER_SEARCH_LIMIT } from "@/lib/partner-display";
 import { recordCurrentUserAudit } from "./audit-logs";
+import type { BulkDeleteItem } from "./contracts";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
@@ -999,4 +1000,39 @@ export async function deletePartner(
   });
 
   return ok({ id });
+}
+
+/**
+ * Round 24 — bulk hard-delete of partners (owner-only, email-gated).
+ *
+ * The permission gate + the per-item logic are the SINGLE `deletePartner` —
+ * nothing is copied. Every id resolves independently: a partner that still has
+ * contracts is refused (with the count) without stopping the rest of the batch.
+ */
+export async function deletePartners(
+  ids: string[],
+  { organizationId }: PartnerContext,
+): Promise<ServiceResult<{ results: BulkDeleteItem[] }>> {
+  const user = await getCurrentUser();
+  if (!user) return err("unauthenticated", "Bạn cần đăng nhập");
+  if (!canDeleteEntities(user.email)) {
+    return err("forbidden", "Không có quyền xoá đối tác");
+  }
+
+  if (ids.length > BULK_DELETE_LIMIT) {
+    return err(
+      "validation",
+      `Chỉ xoá tối đa ${BULK_DELETE_LIMIT} đối tác mỗi lần`,
+    );
+  }
+
+  const results: BulkDeleteItem[] = [];
+  for (const id of ids) {
+    const result = await deletePartner(id, { organizationId });
+    results.push(
+      result.ok ? { id, ok: true } : { id, ok: false, error: result.message },
+    );
+  }
+
+  return ok({ results });
 }
