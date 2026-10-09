@@ -360,3 +360,106 @@ suite("partners — RLS and search (feature round 2)", () => {
     expect(response.status).toBe(401);
   });
 });
+
+suite("partners — contract-count filter (round 28)", () => {
+  let admin: SupabaseClient;
+  let orgA: TestSession;
+
+  let withContract: SeededPartner;
+  let withoutContract: SeededPartner;
+  let stoppedWithContract: SeededPartner;
+
+  const stamp = Date.now().toString(36);
+
+  beforeAll(async () => {
+    admin = adminClient();
+    await sweepTestRows(admin);
+    orgA = await signInAsAdmin();
+
+    withContract = await seedPartner(admin, {
+      organizationId: ORG_A,
+      name: `${TEST_PREFIX}Có HĐ ${stamp}`,
+    });
+    withoutContract = await seedPartner(admin, {
+      organizationId: ORG_A,
+      name: `${TEST_PREFIX}Không HĐ ${stamp}`,
+    });
+    stoppedWithContract = await seedPartner(admin, {
+      organizationId: ORG_A,
+      name: `${TEST_PREFIX}Dừng có HĐ ${stamp}`,
+    });
+    await admin
+      .from("partners")
+      .update({ status: "stopped" })
+      .eq("id", stoppedWithContract.id);
+
+    await admin.from("contracts").insert([
+      {
+        organization_id: ORG_A,
+        contract_number: `${TEST_PREFIX}HĐ1 ${stamp}`,
+        partner_id: withContract.id,
+      },
+      {
+        organization_id: ORG_A,
+        contract_number: `${TEST_PREFIX}HĐ2 ${stamp}`,
+        partner_id: stoppedWithContract.id,
+      },
+    ]);
+  }, 180_000);
+
+  afterAll(async () => {
+    if (admin) await sweepTestRows(admin);
+  }, 180_000);
+
+  async function listViaProbe(
+    contracts?: "has" | "none",
+    status?: "active" | "stopped",
+  ) {
+    const response = await fetch(`${BASE_URL}/api/audit-business-probe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", cookie: orgA.cookie },
+      body: JSON.stringify({
+        action: "list_partners",
+        payload: { contracts, status },
+      }),
+    });
+
+    return (await response.json().catch(() => null)) as {
+      ok: boolean;
+      data?: { id: string }[];
+    };
+  }
+
+  it('"has" returns only partners with contracts', async () => {
+    const result = await listViaProbe("has");
+    expect(result.ok).toBe(true);
+    const ids = (result.data ?? []).map((partner) => partner.id);
+    expect(ids).toContain(withContract.id);
+    expect(ids).toContain(stoppedWithContract.id);
+    expect(ids).not.toContain(withoutContract.id);
+  });
+
+  it('"none" returns only partners without contracts', async () => {
+    const result = await listViaProbe("none");
+    const ids = (result.data ?? []).map((partner) => partner.id);
+    expect(ids).toContain(withoutContract.id);
+    expect(ids).not.toContain(withContract.id);
+    expect(ids).not.toContain(stoppedWithContract.id);
+  });
+
+  it("combines with the status filter", async () => {
+    const result = await listViaProbe("has", "stopped");
+    const ids = (result.data ?? []).map((partner) => partner.id);
+    expect(ids).toContain(stoppedWithContract.id);
+    expect(ids).not.toContain(withContract.id);
+    expect(ids).not.toContain(withoutContract.id);
+  });
+
+  it("absent filter returns everything", async () => {
+    const result = await listViaProbe();
+    const ids = (result.data ?? []).map((partner) => partner.id);
+    expect(ids).toContain(withContract.id);
+    expect(ids).toContain(withoutContract.id);
+    expect(ids).toContain(stoppedWithContract.id);
+  });
+});

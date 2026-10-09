@@ -213,9 +213,12 @@ async function deletePartnerRollback(partnerId: string): Promise<void> {
 export async function listPartners({
   organizationId,
   status,
+  contracts,
 }: PartnerContext & {
   /** Round 20 — filter by status; absent = all (unchanged). */
   status?: PartnerStatus;
+  /** Round 28 — filter by the computed contract count; absent = all. */
+  contracts?: "has" | "none";
 }): Promise<ServiceResult<PartnerWithCount[]>> {
   const supabase = await createClient();
 
@@ -240,13 +243,22 @@ export async function listPartners({
     companiesForPartners(rows.map((row) => row.id)),
   ]);
 
-  return ok(
-    rows.map((row) => ({
-      ...row,
-      contract_count: counts.get(row.id) ?? 0,
-      companies: (companyMap.get(row.id) ?? []).sort(),
-    })),
-  );
+  const withCounts = rows.map((row) => ({
+    ...row,
+    contract_count: counts.get(row.id) ?? 0,
+    companies: (companyMap.get(row.id) ?? []).sort(),
+  }));
+
+  // Round 28 — the count-based filter runs AFTER the counts are computed
+  // (JS filter; the list has no pagination).
+  if (contracts === "has") {
+    return ok(withCounts.filter((row) => row.contract_count >= 1));
+  }
+  if (contracts === "none") {
+    return ok(withCounts.filter((row) => row.contract_count === 0));
+  }
+
+  return ok(withCounts);
 }
 
 /** A partner as returned by the quick-search RPC (round 6). */

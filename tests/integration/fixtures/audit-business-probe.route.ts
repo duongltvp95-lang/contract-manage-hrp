@@ -176,6 +176,10 @@ export async function POST(request: NextRequest) {
             payload.status === "active" || payload.status === "stopped"
               ? (payload.status as PartnerStatus)
               : undefined,
+          contracts:
+            payload.contracts === "has" || payload.contracts === "none"
+              ? (payload.contracts as "has" | "none")
+              : undefined,
         }),
       );
     case "get_partner":
