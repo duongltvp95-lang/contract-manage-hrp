@@ -224,17 +224,17 @@ suite("audit — business actions (round 8)", () => {
     expect(rows[0].metadata).toMatchObject({ changed: ["name", "taxCode"] });
   }, 120_000);
 
-  it("import_partners writes exactly one row with created/failed counts", async () => {
+  it("import_partners writes exactly one row with created/updated/failed counts (round 25)", async () => {
     const result = await probe(orgA, "import_partners", {
       rows: [
         { rowNumber: 2, name: `${TEST_PREFIX}Nhập 1 ${stamp}`, address: "", taxCode: "0511111121", companies: ["HRP"] },
         { rowNumber: 3, name: `${TEST_PREFIX}Nhập 2 ${stamp}`, address: "", taxCode: "0511111122", companies: ["HRP"] },
-        // Collides with `taxInDb` seeded above.
+        // Matches `taxInDb` seeded above → MERGES (round 25) instead of failing.
         { rowNumber: 4, name: `${TEST_PREFIX}Nhập trùng ${stamp}`, address: "", taxCode: taxInDb, companies: ["HRP"] },
       ],
     });
 
-    expect(result.body.ok).toBe(true);
+    expect(result.body).toMatchObject({ ok: true });
 
     // `import_partners` has a NULL target, so it cannot be found by target id.
     // Scope to this file's window instead of counting globally: other files in
@@ -247,7 +247,7 @@ suite("audit — business actions (round 8)", () => {
       target_kind: "partner",
       target_id: null,
     });
-    expect(rows[0].metadata).toMatchObject({ created: 2, failed: 1 });
+    expect(rows[0].metadata).toMatchObject({ created: 2, updated: 1, failed: 0 });
   }, 120_000);
 
   it("update_profile writes one row", async () => {

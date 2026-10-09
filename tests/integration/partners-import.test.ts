@@ -81,9 +81,10 @@ type ImportReport = {
     taxCode: string;
     ok: boolean;
     partnerId?: string;
+    updated?: boolean;
     error?: string;
   }[];
-  summary: { total: number; ok: number; failed: number };
+  summary: { total: number; ok: number; failed: number; updated: number };
 };
 
 suite("partner import — Excel (round 7)", () => {
@@ -151,7 +152,7 @@ suite("partner import — Excel (round 7)", () => {
     expect(result.status).toBe(200);
 
     const report = result.body as ImportReport;
-    expect(report.summary).toEqual({ total: 3, ok: 2, failed: 1 });
+    expect(report.summary).toEqual({ total: 3, ok: 2, failed: 1, updated: 0 });
 
     const invalid = report.rows.find((row) => row.rowNumber === 3);
     expect(invalid?.ok).toBe(false);
@@ -176,7 +177,7 @@ suite("partner import — Excel (round 7)", () => {
     expect(result.status).toBe(200);
 
     const report = result.body as ImportReport;
-    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0 });
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 0 });
     expect(report.rows.every((row) => typeof row.partnerId === "string")).toBe(true);
 
     const { data } = await admin
@@ -196,7 +197,7 @@ suite("partner import — Excel (round 7)", () => {
     expect(data?.[1]?.address).toBeNull();
   }, 120_000);
 
-  it("a tax code that already exists fails only that row", async () => {
+  it("a tax code that already exists merges into that partner (round 25)", async () => {
     const buffer = await buildWorkbook([
       [`${TEST_PREFIX}Trùng MST ${stamp}`, "", taxInDb], // exists via seed
       [`${TEST_PREFIX}Không trùng ${stamp}`, "", "0511111131"],
@@ -207,24 +208,36 @@ suite("partner import — Excel (round 7)", () => {
     expect(result.status).toBe(200);
 
     const report = result.body as ImportReport;
-    expect(report.summary).toEqual({ total: 2, ok: 1, failed: 1 });
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 1 });
 
-    const duplicated = report.rows.find((row) => row.taxCode === taxInDb);
-    expect(duplicated?.ok).toBe(false);
-    expect(duplicated?.error).toContain("Mã số thuế đã được dùng");
+    // The duplicate row MERGED into the seeded partner (its name is overwritten).
+    const merged = report.rows.find((row) => row.taxCode === taxInDb);
+    expect(merged?.ok).toBe(true);
+    expect(merged?.updated).toBe(true);
+    expect(merged?.partnerId).toBe(seeded.id);
 
-    // The failing row was NOT inserted; the other one was.
     const { data } = await admin
       .from("partners")
-      .select("name")
-      .like("name", `${TEST_PREFIX}Trùng MST%`);
-    expect(data ?? []).toHaveLength(0);
+      .select("id, name")
+      .eq("id", seeded.id)
+      .single();
+    expect(data?.name).toBe(`${TEST_PREFIX}Trùng MST ${stamp}`);
 
+    // The other row was created normally.
     const { data: imported } = await admin
       .from("partners")
       .select("id")
       .eq("name", `${TEST_PREFIX}Không trùng ${stamp}`);
     expect(imported ?? []).toHaveLength(1);
+
+    // The merge wrote an update_partner audit row.
+    const { data: audit } = await admin
+      .from("audit_logs")
+      .select("target_id")
+      .eq("action", "update_partner")
+      .eq("target_id", seeded.id)
+      .gte("created_at", startedAt);
+    expect(audit ?? []).toHaveLength(1);
   }, 120_000);
 
   it("preview flags the database duplicate without writing", async () => {
@@ -262,7 +275,7 @@ suite("partner import — Excel (round 7)", () => {
 
       const report = result.body as ImportReport;
       expect(report.rows[0]?.ok).toBe(true);
-      expect(report.summary).toEqual({ total: 1, ok: 1, failed: 0 });
+      expect(report.summary).toEqual({ total: 1, ok: 1, failed: 0, updated: 0 });
 
       // The new row lives in ORG_B; ORG_A keeps its own partner with the same
       // code. Partners are organization-scoped.
@@ -291,7 +304,7 @@ suite("partner import — Excel (round 7)", () => {
     expect(result.status).toBe(200);
 
     const report = result.body as ImportReport;
-    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0 });
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 0 });
 
     const { data } = await admin
       .from("partners")
@@ -320,7 +333,7 @@ suite("partner import — Excel (round 7)", () => {
     expect(result.status).toBe(200);
 
     const report = result.body as ImportReport;
-    expect(report.summary).toEqual({ total: 2, ok: 1, failed: 1 });
+    expect(report.summary).toEqual({ total: 2, ok: 1, failed: 1, updated: 0 });
 
     const bad = report.rows.find((row) => row.rowNumber === 2);
     expect(bad?.ok).toBe(false);
@@ -339,5 +352,180 @@ suite("partner import — Excel (round 7)", () => {
       .select("id")
       .eq("name", `${TEST_PREFIX}Status lạ ${stamp}`);
     expect(badRows ?? []).toHaveLength(0);
+  }, 120_000);
+});
+
+suite("partner import — merge (round 25)", () => {
+  let admin: SupabaseClient;
+  let orgA: TestSession;
+  let startedAt: string;
+
+  const stamp = Date.now().toString(36);
+  // Tax codes must be 10 digits.
+  const numericStamp = String(Date.now()).slice(-8);
+
+  // The full template header set — the Công ty column drives the company rule.
+  const fullHeaders = [
+    "Tên đối tác",
+    "Tên viết tắt",
+    "Khu vực",
+    "Địa chỉ",
+    "Mã số thuế",
+    "Công ty",
+    "Trạng thái hợp tác",
+  ];
+
+  beforeAll(async () => {
+    admin = adminClient();
+    await sweepTestRows(admin);
+    startedAt = new Date().toISOString();
+    orgA = await signInAsAdmin();
+  }, 180_000);
+
+  afterAll(async () => {
+    if (admin) await sweepTestRows(admin);
+    if (admin && startedAt) {
+      await admin
+        .from("audit_logs")
+        .delete()
+        .in("action", ["import_partners", "update_partner"])
+        .gte("created_at", startedAt);
+    }
+  }, 180_000);
+
+  it("two rows with the same tax code and company merge into one partner", async () => {
+    const buffer = await buildWorkbookWithHeaders(fullHeaders, [
+      [`${TEST_PREFIX}Trùng file A ${stamp}`, "TA", "Bắc Ninh", `Địa chỉ A ${stamp}`, `05${numericStamp}`, "HRP", "Đang hợp tác"],
+      [`${TEST_PREFIX}Trùng file B ${stamp}`, "TB", "Hà Nội", `Địa chỉ B ${stamp}`, `05${numericStamp}`, "HRP", "Đang hợp tác"],
+    ]);
+
+    const result = await postImport("import", orgA.cookie, buffer);
+    expect(result.status).toBe(200);
+
+    const report = result.body as ImportReport;
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 1 });
+
+    // One partner whose name was overwritten by the SECOND row.
+    const { data } = await admin
+      .from("partners")
+      .select("name")
+      .eq("tax_code", `05${numericStamp}`);
+    expect(data).toHaveLength(1);
+    expect(data?.[0]?.name).toBe(`${TEST_PREFIX}Trùng file B ${stamp}`);
+
+    // The merge wrote an update_partner audit row.
+    const { data: audit } = await admin
+      .from("audit_logs")
+      .select("target_id")
+      .eq("action", "update_partner")
+      .gte("created_at", startedAt);
+    expect(audit ?? []).toHaveLength(1);
+  }, 120_000);
+
+  it("the same tax code under a different company creates a second partner", async () => {
+    const buffer = await buildWorkbookWithHeaders(fullHeaders, [
+      [`${TEST_PREFIX}Khác công ty A ${stamp}`, "", "", "", `06${numericStamp}`, "HRP", ""],
+      [`${TEST_PREFIX}Khác công ty B ${stamp}`, "", "", "", `06${numericStamp}`, "HR VN", ""],
+    ]);
+
+    const result = await postImport("import", orgA.cookie, buffer);
+    const report = result.body as ImportReport;
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 0 });
+
+    const { data } = await admin
+      .from("partners")
+      .select("id")
+      .eq("tax_code", `06${numericStamp}`);
+    expect(data).toHaveLength(2);
+  }, 120_000);
+
+  it("the same name under the same company merges even with different tax codes", async () => {
+    const buffer = await buildWorkbookWithHeaders(fullHeaders, [
+      [`${TEST_PREFIX}Trùng tên ${stamp}`, "", "", "Địa chỉ 1", `07${numericStamp}`, "HRP", ""],
+      [`${TEST_PREFIX}Trùng tên ${stamp}`, "", "", "Địa chỉ 2", `08${numericStamp}`, "HRP", ""],
+    ]);
+
+    const result = await postImport("import", orgA.cookie, buffer);
+    const report = result.body as ImportReport;
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 1 });
+
+    const { data } = await admin
+      .from("partners")
+      .select("id")
+      .like("name", `${TEST_PREFIX}Trùng tên ${stamp}%`);
+    expect(data).toHaveLength(1);
+  }, 120_000);
+
+  it("two rows sharing only the address merge", async () => {
+    const sharedAddress = `Địa chỉ X ${stamp}`;
+    const buffer = await buildWorkbook([
+      [`${TEST_PREFIX}Chung địa chỉ A ${stamp}`, sharedAddress, `11${numericStamp}`],
+      [`${TEST_PREFIX}Chung địa chỉ B ${stamp}`, sharedAddress, `12${numericStamp}`],
+    ]);
+
+    const result = await postImport("import", orgA.cookie, buffer);
+    const report = result.body as ImportReport;
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 1 });
+
+    const { data } = await admin
+      .from("partners")
+      .select("id")
+      .eq("address", sharedAddress);
+    expect(data).toHaveLength(1);
+  }, 120_000);
+
+  it("two rows sharing only the region merge (stronger keys differ)", async () => {
+    const sharedRegion = `Vùng ${stamp}`;
+    const buffer = await buildWorkbookWithHeaders(
+      ["Tên đối tác", "Khu vực", "Mã số thuế"],
+      [
+        [`${TEST_PREFIX}Chung khu vực A ${stamp}`, sharedRegion, `13${numericStamp}`],
+        [`${TEST_PREFIX}Chung khu vực B ${stamp}`, sharedRegion, `14${numericStamp}`],
+      ],
+    );
+
+    const result = await postImport("import", orgA.cookie, buffer);
+    const report = result.body as ImportReport;
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 1 });
+
+    const { data } = await admin
+      .from("partners")
+      .select("id")
+      .eq("region", sharedRegion);
+    expect(data).toHaveLength(1);
+  }, 120_000);
+
+  it("rows that share nothing stay separate", async () => {
+    const buffer = await buildWorkbook([
+      [`${TEST_PREFIX}Khác hẳn A ${stamp}`, `Địa chỉ khác A ${stamp}`, `15${numericStamp}`],
+      [`${TEST_PREFIX}Khác hẳn B ${stamp}`, `Địa chỉ khác B ${stamp}`, `16${numericStamp}`],
+    ]);
+
+    const result = await postImport("import", orgA.cookie, buffer);
+    const report = result.body as ImportReport;
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 0 });
+
+    const { data } = await admin
+      .from("partners")
+      .select("id")
+      .like("name", `${TEST_PREFIX}Khác hẳn%`);
+    expect(data).toHaveLength(2);
+  }, 120_000);
+
+  it("rows without a tax code always create new partners", async () => {
+    const buffer = await buildWorkbookWithHeaders(["Tên đối tác"], [
+      [`${TEST_PREFIX}Không MST A ${stamp}`],
+      [`${TEST_PREFIX}Không MST B ${stamp}`],
+    ]);
+
+    const result = await postImport("import", orgA.cookie, buffer);
+    const report = result.body as ImportReport;
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 0 });
+
+    const { data } = await admin
+      .from("partners")
+      .select("id")
+      .like("name", `${TEST_PREFIX}Không MST%`);
+    expect(data).toHaveLength(2);
   }, 120_000);
 });

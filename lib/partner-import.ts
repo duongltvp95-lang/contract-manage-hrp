@@ -143,6 +143,8 @@ export type ParsedPartnerImportRow = {
   statusText: string;
   /** Raw "Công ty" cell text; empty when the column is absent. */
   companyText: string;
+  /** Round 25 — true when the file actually has a "Công ty" column. */
+  hasCompanyColumn: boolean;
 };
 
 export type PartnerImportRow = {
@@ -156,6 +158,8 @@ export type PartnerImportRow = {
   status: PartnerStatus | null;
   /** Resolved company names (e.g. ["HRP", "HR VN"]), at least one. */
   companies: string[];
+  /** Round 25 — true when the file actually has a "Công ty" column. */
+  hasCompanyColumn: boolean;
   ok: boolean;
   error?: string;
 };
@@ -329,6 +333,7 @@ export async function parsePartnerWorkbook(
       abbreviation,
       statusText,
       companyText,
+      hasCompanyColumn: columns.company !== undefined,
     });
   }
 
@@ -428,6 +433,7 @@ export function validatePartnerImportRows(
         abbreviation: row.abbreviation,
         status: null,
         companies: [DEFAULT_COMPANY],
+        hasCompanyColumn: row.hasCompanyColumn,
         ok: false,
         error: parsed.error.issues[0]?.message ?? "Dữ liệu không hợp lệ",
       };
@@ -444,6 +450,7 @@ export function validatePartnerImportRows(
         abbreviation: parsed.data.abbreviation ?? "",
         status: null,
         companies: [DEFAULT_COMPANY],
+        hasCompanyColumn: row.hasCompanyColumn,
         ok: false,
         error: status.error,
       };
@@ -460,6 +467,7 @@ export function validatePartnerImportRows(
         abbreviation: parsed.data.abbreviation ?? "",
         status: status.status,
         companies: [DEFAULT_COMPANY],
+        hasCompanyColumn: row.hasCompanyColumn,
         ok: false,
         error: companies.error,
       };
@@ -474,41 +482,31 @@ export function validatePartnerImportRows(
       abbreviation: parsed.data.abbreviation ?? "",
       status: status.status,
       companies: companies.companies,
+      hasCompanyColumn: row.hasCompanyColumn,
       ok: true,
     };
   });
 
-  const occurrences = new Map<string, number>();
-  for (const row of validated) {
-    const code = row.taxCode.trim();
-    if (!code) continue;
-    occurrences.set(code, (occurrences.get(code) ?? 0) + 1);
-  }
-
-  return validated.map((row) => {
-    const code = row.taxCode.trim();
-    if (code && (occurrences.get(code) ?? 0) > 1) {
-      return {
-        ...row,
-        ok: false,
-        error: `Mã số thuế “${code}” bị trùng trong file`,
-      };
-    }
-    return row;
-  });
+  // Round 25: the in-file duplicate flag is GONE — two rows with the same tax
+  // code (or any other key) now merge into one partner instead of failing.
+  return validated;
 }
 
 export type PartnerImportRowReport = PartnerImportRow & {
-  /** Set when this row was actually imported. */
+  /** Set when this row was actually imported (created or merged). */
   partnerId?: string;
+  /** Round 25 — true when the row MERGED into an existing partner. */
+  updated?: boolean;
 };
 
 export type PartnerImportSummary = {
   total: number;
-  /** Preview: số dòng hợp lệ. Import: số dòng đã nhập. */
+  /** Preview: số dòng hợp lệ. Import: số dòng đã nhập (mới + cập nhật). */
   ok: number;
   /** Preview: số dòng không hợp lệ. Import: số dòng lỗi (kể cả trùng DB). */
   failed: number;
+  /** Round 25 — số dòng ghi đè lên đối tác đã có. */
+  updated: number;
 };
 
 export type PartnerImportReport = {
@@ -519,6 +517,7 @@ export type PartnerImportReport = {
 /** Builds the report shape both actions return. Pure, so it is unit-tested. */
 export function summarisePartnerImport(rows: PartnerImportRowReport[]): PartnerImportReport {
   const okCount = rows.filter((row) => row.ok).length;
+  const updatedCount = rows.filter((row) => row.updated).length;
 
   return {
     rows,
@@ -526,6 +525,7 @@ export function summarisePartnerImport(rows: PartnerImportRowReport[]): PartnerI
       total: rows.length,
       ok: okCount,
       failed: rows.length - okCount,
+      updated: updatedCount,
     },
   };
 }

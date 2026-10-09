@@ -213,6 +213,7 @@ export async function previewPartnersImportAction(
       abbreviation: row.abbreviation,
       status: row.status,
       companies: row.companies,
+      hasCompanyColumn: row.hasCompanyColumn,
     });
   }
 
@@ -260,6 +261,7 @@ export async function importPartnersAction(
       abbreviation: row.abbreviation,
       status: row.status,
       companies: row.companies,
+      hasCompanyColumn: row.hasCompanyColumn,
     });
   }
 

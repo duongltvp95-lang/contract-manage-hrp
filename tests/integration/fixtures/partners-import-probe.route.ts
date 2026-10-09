@@ -95,6 +95,7 @@ export async function POST(request: NextRequest) {
       abbreviation: row.abbreviation,
       status: row.status,
       companies: row.companies,
+      hasCompanyColumn: row.hasCompanyColumn,
     });
   }
 

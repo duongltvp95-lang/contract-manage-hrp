@@ -12,6 +12,12 @@ import { canDeleteEntities, BULK_DELETE_LIMIT } from "@/lib/delete-permissions";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { PARTNER_SEARCH_LIMIT } from "@/lib/partner-display";
+import {
+  buildMergePatch,
+  matchExistingPartner,
+  type MergeablePartner,
+  type MergeIncoming,
+} from "@/lib/partner-merge";
 import { recordCurrentUserAudit } from "./audit-logs";
 import type { BulkDeleteItem } from "./contracts";
 import { dbError, err, ok, type ServiceResult } from "./types";
@@ -722,6 +728,7 @@ export type PartnerImportServiceRow = Pick<
   | "abbreviation"
   | "status"
   | "companies"
+  | "hasCompanyColumn"
 >;
 
 const IMPORT_DUPLICATE_MESSAGE = (ownerName: string) =>
@@ -759,6 +766,7 @@ export async function previewPartnerImport(
           abbreviation: row.abbreviation,
           status: row.status,
           companies: row.companies,
+          hasCompanyColumn: row.hasCompanyColumn,
           ok: false,
           error: IMPORT_DUPLICATE_MESSAGE(conflicts[0].name),
         };
@@ -773,6 +781,7 @@ export async function previewPartnerImport(
         abbreviation: row.abbreviation,
         status: row.status,
         companies: row.companies,
+        hasCompanyColumn: row.hasCompanyColumn,
         ok: true,
       };
     }),
@@ -780,23 +789,19 @@ export async function previewPartnerImport(
 }
 
 /**
- * Imports the given validated rows, one by one.
+ * Imports the given validated rows, one by one — round 25 adds the merge.
  *
  * One failing row never stops the batch: the per-row result carries its own
- * `ok`/`error`, and the caller reports the summary. Rows whose tax code already
- * exists in the organization are refused BEFORE any insert (same message the
- * preview shows), so a previewed batch does not change meaning between the two
- * steps. Each imported partner is linked to its resolved companies.
+ * `ok`/`error`, and the caller reports the summary. A row that matches an
+ * existing partner (the 5-key rule in `lib/partner-merge.ts`) OVERWRITES it
+ * instead of failing — except when the file carries a "Công ty" column and no
+ * existing partner shares a company, in which case a new partner is created.
+ * Each imported partner is linked to its resolved companies.
  */
 export async function importPartners(
   rows: PartnerImportServiceRow[],
   { organizationId }: PartnerContext,
 ): Promise<ServiceResult<PartnerImportRowReport[]>> {
-  const existing = await findPartnersByTaxCodes(
-    rows.map((row) => row.taxCode),
-    organizationId,
-  );
-
   // The parse already validated names against the known companies; resolve them
   // to database ids here (folded, case-insensitive).
   const companies = await listCompanies({ organizationId });
@@ -806,50 +811,143 @@ export async function importPartners(
     companies.data.map((company) => [company.name.trim().toLowerCase(), company.id]),
   );
 
+  // The merge needs the whole directory. One query for the batch keeps it
+  // simple; the matching itself is pure (lib/partner-merge.ts). The directory
+  // list is the same query the partners page runs.
+  const directory = await listPartners({ organizationId });
+  if (!directory.ok) return directory;
+
+  const existing: MergeablePartner[] = directory.data.map((partner) => ({
+    id: partner.id,
+    name: partner.name,
+    tax_code: partner.tax_code,
+    abbreviation: partner.abbreviation,
+    region: partner.region,
+    address: partner.address,
+    status: partner.status,
+    companies: partner.companies,
+  }));
+
   const supabase = await createClient();
   const results: PartnerImportRowReport[] = [];
 
+  const reportRow = (
+    row: PartnerImportServiceRow,
+    extra: { ok: boolean; error?: string; partnerId?: string; updated?: boolean },
+  ): PartnerImportRowReport => ({
+    rowNumber: row.rowNumber,
+    name: row.name,
+    address: row.address,
+    taxCode: row.taxCode,
+    region: row.region,
+    abbreviation: row.abbreviation,
+    status: row.status,
+    companies: row.companies,
+    hasCompanyColumn: row.hasCompanyColumn,
+    ok: extra.ok,
+    ...(extra.error ? { error: extra.error } : {}),
+    ...(extra.partnerId ? { partnerId: extra.partnerId } : {}),
+    ...(extra.updated ? { updated: true } : {}),
+  });
+
   for (const row of rows) {
     const code = row.taxCode.trim();
-    const conflicts = code ? existing.get(code) : undefined;
-
-    if (conflicts && conflicts.length > 0) {
-      results.push({
-        rowNumber: row.rowNumber,
-        name: row.name,
-        address: row.address,
-        taxCode: row.taxCode,
-        region: row.region,
-        abbreviation: row.abbreviation,
-        status: row.status,
-        companies: row.companies,
-        ok: false,
-        error: IMPORT_DUPLICATE_MESSAGE(conflicts[0].name),
-      });
-      continue;
-    }
-
     const companyIds = row.companies
       .map((name) => companyIdByName.get(name.trim().toLowerCase()))
       .filter((id): id is string => Boolean(id));
 
     if (companyIds.length === 0) {
-      results.push({
-        rowNumber: row.rowNumber,
-        name: row.name,
-        address: row.address,
-        taxCode: row.taxCode,
-        region: row.region,
-        abbreviation: row.abbreviation,
-        status: row.status,
-        companies: row.companies,
-        ok: false,
-        error: "Không nhận diện được công ty",
-      });
+      results.push(reportRow(row, { ok: false, error: "Không nhận diện được công ty" }));
       continue;
     }
 
+    const incoming: MergeIncoming = {
+      name: row.name ?? "",
+      taxCode: row.taxCode ?? "",
+      abbreviation: row.abbreviation ?? "",
+      region: row.region ?? "",
+      address: row.address ?? "",
+      status: row.status ?? null,
+      companies: row.companies ?? [],
+      hasCompanyColumn: Boolean(row.hasCompanyColumn),
+    };
+
+    const match = matchExistingPartner(existing, incoming);
+
     try {
+      if (match) {
+        // MERGE — overwrite the matched partner.
+        const { patch, changed, companiesToAdd } = buildMergePatch(match, incoming);
+
+        if (Object.keys(patch).length > 0) {
+          const { error: updateError } = await supabase
+            .from("partners")
+            .update(patch)
+            .eq("id", match.id)
+            .eq("organization_id", organizationId);
+
+          if (updateError) {
+            if (updateError) console.error("[service:importPartners]", updateError);
+            results.push(reportRow(row, {
+              ok: false,
+              error: "Không thể cập nhật đối tác này. Vui lòng thử lại.",
+            }));
+            continue;
+          }
+        }
+
+        if (companiesToAdd.length > 0) {
+          const newIds = companiesToAdd
+            .map((name) => companyIdByName.get(name.trim().toLowerCase()))
+            .filter((id): id is string => Boolean(id));
+
+          if (newIds.length > 0) {
+            const { error: junctionError } = await supabase
+              .from("partner_companies")
+              .insert(newIds.map((companyId) => ({ partner_id: match.id, company_id: companyId })));
+
+            if (junctionError) {
+              console.error("[service:importPartners]", junctionError);
+              results.push(reportRow(row, {
+                ok: false,
+                error: "Không thể cập nhật đối tác này. Vui lòng thử lại.",
+              }));
+              continue;
+            }
+          }
+        }
+
+        if (changed.length > 0) {
+          await recordCurrentUserAudit({
+            action: "update_partner",
+            targetKind: "partner",
+            targetId: match.id,
+            metadata: { name: patch.name ?? match.name, changed },
+          });
+        }
+
+        // Keep the in-memory directory in sync so a later row in the SAME file
+        // can match the merged state.
+        const index = existing.findIndex((partner) => partner.id === match.id);
+        if (index >= 0) {
+          existing[index] = {
+            ...match,
+            name: patch.name ?? match.name,
+            tax_code: patch.tax_code !== undefined ? patch.tax_code : match.tax_code,
+            address: patch.address !== undefined ? patch.address : match.address,
+            region: patch.region !== undefined ? patch.region : match.region,
+            abbreviation:
+              patch.abbreviation !== undefined ? patch.abbreviation : match.abbreviation,
+            status: (patch.status as MergeablePartner["status"]) ?? match.status,
+            companies: [...new Set([...match.companies, ...companiesToAdd])],
+          };
+        }
+
+        results.push(reportRow(row, { ok: true, updated: true, partnerId: match.id }));
+        continue;
+      }
+
+      // CREATE — no match (or a different company).
       const { data, error } = await supabase
         .from("partners")
         .insert({
@@ -868,18 +966,10 @@ export async function importPartners(
       if (error || !data) {
         // The raw driver error goes to the server log; the user gets a safe line.
         if (error) console.error("[service:importPartners]", error);
-        results.push({
-          rowNumber: row.rowNumber,
-          name: row.name,
-          address: row.address,
-          taxCode: row.taxCode,
-          region: row.region,
-          abbreviation: row.abbreviation,
-          status: row.status,
-          companies: row.companies,
+        results.push(reportRow(row, {
           ok: false,
           error: "Không thể tạo đối tác này. Vui lòng thử lại.",
-        });
+        }));
         continue;
       }
 
@@ -891,57 +981,42 @@ export async function importPartners(
 
       if (junctionError) {
         await deletePartnerRollback(partnerId);
-        results.push({
-          rowNumber: row.rowNumber,
-          name: row.name,
-          address: row.address,
-          taxCode: row.taxCode,
-          region: row.region,
-          abbreviation: row.abbreviation,
-          status: row.status,
-          companies: row.companies,
+        results.push(reportRow(row, {
           ok: false,
           error: "Không thể tạo đối tác này. Vui lòng thử lại.",
-        });
+        }));
         continue;
       }
 
-      results.push({
-        rowNumber: row.rowNumber,
+      existing.push({
+        id: partnerId,
         name: row.name,
-        address: row.address,
-        taxCode: row.taxCode,
-        region: row.region,
-        abbreviation: row.abbreviation,
-        status: row.status,
+        tax_code: code === "" ? null : code,
+        address: row.address.trim() === "" ? null : row.address.trim(),
+        region: normaliseOptionalText(row.region) ?? null,
+        abbreviation: normaliseOptionalText(row.abbreviation) ?? null,
+        status: row.status ?? "active",
         companies: row.companies,
-        ok: true,
-        partnerId,
       });
+
+      results.push(reportRow(row, { ok: true, partnerId }));
     } catch {
-      results.push({
-        rowNumber: row.rowNumber,
-        name: row.name,
-        address: row.address,
-        taxCode: row.taxCode,
-        region: row.region,
-        abbreviation: row.abbreviation,
-        status: row.status,
-        companies: row.companies,
+      results.push(reportRow(row, {
         ok: false,
         error: "Không thể tạo đối tác này. Vui lòng thử lại.",
-      });
+      }));
     }
   }
 
   // One audit row for the whole batch, with the outcome counts.
   if (results.length > 0) {
-    const created = results.filter((row) => row.ok).length;
+    const created = results.filter((row) => row.ok && !row.updated).length;
+    const updated = results.filter((row) => row.ok && row.updated).length;
     await recordCurrentUserAudit({
       action: "import_partners",
       targetKind: "partner",
       targetId: null,
-      metadata: { created, failed: results.length - created },
+      metadata: { created, updated, failed: results.length - created - updated },
     });
   }
 
