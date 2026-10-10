@@ -12,6 +12,7 @@ import {
   type PartnerImportRowReport,
 } from "@/lib/partner-import";
 import {
+  companiesForOnePartner,
   createPartner,
   deletePartner,
   deletePartners,
@@ -21,7 +22,6 @@ import {
   searchPartners,
   setPartnerStatus,
   updatePartner,
-  companiesForOnePartner,
   type Company,
   type PartnerDetail,
   type PartnerImportServiceRow,
@@ -97,11 +97,11 @@ export async function partnerCompaniesAction(
     ]);
   }
 
-  const names = await companiesForOnePartner(id, {
+  const result = await companiesForOnePartner(id, {
     organizationId: access.user.organizationId,
   });
 
-  return { ok: true, data: names };
+  return fromService(result);
 }
 
 export async function updatePartnerAction(

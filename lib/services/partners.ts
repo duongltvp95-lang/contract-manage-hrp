@@ -144,28 +144,54 @@ export async function listCompanies({
 }
 
 /**
+ * The company names linked to one partner, alphabetically.
+ *
+ * Round 32 — split into two layers:
+ *   - `companiesForOnePartner` (export) is the public, lazy entry point used
+ *     by the combobox. It guards on `organizationId` so a partner that belongs
+ *     to another tenant returns `[]` (same "do not leak existence" rule as
+ *     `getPartner`).
+ *   - `companiesForPartnerInternal` (file-private) is the cheap variant used
+ *     by callers that have already verified the partner belongs to the
+ *     caller's organization: `getPartner`, `setPartnerStatus`,
+ *     `findBlockingTaxCodeConflict`. It skips the second lookup.
+ */
+async function companiesForPartnerInternal(partnerId: string): Promise<string[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("partner_companies")
+    .select("companies(name)")
+    .eq("partner_id", partnerId);
+
+  const names: string[] = [];
+  for (const row of (data ?? []) as {
+    companies: { name: string } | { name: string }[] | null;
+  }[]) {
+    const embedded = Array.isArray(row.companies) ? row.companies[0] : row.companies;
+    if (embedded?.name) names.push(embedded.name);
+  }
+
+  return names.sort();
+}
+
+/**
  * Round 32 — công ty liên kết của 1 đối tác, gọi lazy từ combobox.
  *
  * RLS đã chặn partner ở org khác ở mức `partner_companies`, nhưng check
  * tường minh `organization_id` trên bảng `partners` để trả về []
  * thay vì lộ sự tồn tại (giống `getPartner`).
  *
- * Trả `[]` khi partner không thuộc `organizationId` hoặc không tồn tại —
- * khớp với tinh thần "không lộ sự tồn tại của đối tượng ở org khác".
- *
- * Chữ ký giữ dạng `string[]` (thay vì `ServiceResult<string[]>`) để các
- * caller cũ trong service layer (`getPartner`, `setPartnerStatus`,
- * `updatePartner`, `findBlockingTaxCodeConflict`) không phải unwrap thêm
- * một lớp nữa. Lỗi DB thật sự vẫn được log qua `console.error` để không
- * chặn luồng nghiệp vụ nhưng vẫn truy vết được — đây là hàm lazy từ UI,
- * không nằm trên đường chính của mutation.
+ * Khi partner không thuộc `organizationId` → `{ ok: true, data: [] }`.
+ * Lỗi DB được log qua `console.error` nhưng trả `[]` để không chặn luồng
+ * nghiệp vụ — đây là hàm lazy từ UI, không nằm trên đường chính của
+ * mutation.
  */
 export async function companiesForOnePartner(
   partnerId: unknown,
   { organizationId }: PartnerContext,
-): Promise<string[]> {
+): Promise<ServiceResult<string[]>> {
   if (typeof partnerId !== "string" || partnerId.length === 0) {
-    return [];
+    return ok([]);
   }
 
   try {
@@ -182,35 +208,17 @@ export async function companiesForOnePartner(
 
     if (partnerError) {
       console.error("[service:companiesForOnePartner] partner lookup", partnerError);
-      return [];
+      return ok([]);
     }
 
     if (!partnerRow) {
-      return [];
+      return ok([]);
     }
 
-    const { data, error } = await supabase
-      .from("partner_companies")
-      .select("companies(name)")
-      .eq("partner_id", partnerId);
-
-    if (error) {
-      console.error("[service:companiesForOnePartner] junction", error);
-      return [];
-    }
-
-    const names: string[] = [];
-    for (const row of (data ?? []) as {
-      companies: { name: string } | { name: string }[] | null;
-    }[]) {
-      const embedded = Array.isArray(row.companies) ? row.companies[0] : row.companies;
-      if (embedded?.name) names.push(embedded.name);
-    }
-
-    return names.sort();
+    return ok(await companiesForPartnerInternal(partnerId));
   } catch (error) {
     console.error("[service:companiesForOnePartner] unexpected", error);
-    return [];
+    return ok([]);
   }
 }
 
@@ -370,7 +378,7 @@ export async function getPartner(
     return err("not_found", "Không tìm thấy đối tác");
   }
 
-  const companies = await companiesForOnePartner(id, { organizationId });
+  const companies = await companiesForPartnerInternal(id);
   return ok({ ...(data as PartnerRow), companies });
 }
 
@@ -458,7 +466,7 @@ async function findBlockingTaxCodeConflict(
 
   if (incomingCompanyNames === null) return conflict;
 
-  const existingNames = await companiesForOnePartner(conflict.id, { organizationId });
+  const existingNames = await companiesForPartnerInternal(conflict.id);
   const overlap = existingNames.filter((name) => incomingCompanyNames.includes(name));
   return overlap.length > 0 ? conflict : null;
 }
@@ -735,7 +743,7 @@ export async function updatePartner(
       }
     }
   } else {
-    companyNames = await companiesForOnePartner(id, { organizationId });
+    companyNames = await companiesForPartnerInternal(id);
   }
 
   if (!updated) {
@@ -803,7 +811,7 @@ export async function setPartnerStatus(
   }
 
   const updated = data as PartnerRow;
-  const companies = await companiesForOnePartner(id, { organizationId });
+  const companies = await companiesForPartnerInternal(id);
 
   await recordCurrentUserAudit({
     action: "set_partner_status",
