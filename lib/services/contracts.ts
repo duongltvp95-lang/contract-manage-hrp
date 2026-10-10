@@ -381,13 +381,15 @@ export async function listContracts({
   const rawRows = (data ?? []) as unknown as (ContractRow & {
     partners: { name: string } | { name: string }[] | null;
   })[];
-  const fileCounts = await countFilesByContract(rawRows.map((row) => row.id));
   const partnerIds = [
     ...new Set(
       rawRows.map((row) => row.partner_id).filter((id): id is string => Boolean(id)),
     ),
   ];
-  const companiesByPartner = await companiesForPartners(partnerIds);
+  const [fileCounts, companiesByPartner] = await Promise.all([
+    countFilesByContract(rawRows.map((row) => row.id)),
+    companiesForPartners(partnerIds),
+  ]);
   const total = count ?? rawRows.length;
 
   return ok({
