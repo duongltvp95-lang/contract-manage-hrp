@@ -1,11 +1,12 @@
 "use client";
 
-import { Check, ChevronsUpDown, Loader2, Plus, Search } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ChevronsUpDown, Loader2, Plus, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { partnerCompaniesAction, searchPartnersAction } from "@/app/(app)/partners/actions";
 import { CompanyBadges } from "@/components/partners/partner-badges";
 import { PartnerNameSheet } from "@/components/partners/partner-name-sheet";
+import { PartnerOptionRow } from "@/components/partners/partner-option-row";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -114,10 +115,6 @@ export function PartnerCombobox({
       return seeded;
     },
   );
-  // Track in-flight fetches by id so a second effect tick that wants the same
-  // id does not fire a duplicate request. Plain Set in a ref because the
-  // effect should not re-run when the set changes.
-  const inflightRef = useRef<Set<string>>(new Set());
 
   // Cancel any in-flight debounced search when the combobox unmounts.
   useEffect(() => {
@@ -132,18 +129,46 @@ export function PartnerCombobox({
     selectedPartner ??
     null;
 
-  // Round 32 — fetch companies for the selected partner so the trigger can
-  // show its badge too. Preloaded data wins; otherwise we hit the server once.
+  const needle = term.trim();
+  // Memoised so the options list below (and the effect that reads it) does
+  // not see a new array reference on every render. The dependency is the
+  // needle, the in-memory page and the server result, exactly the inputs that
+  // decide which options are visible.
+  const visible = useMemo(() => {
+    if (!needle) return partners;
+    if (results === null) return filterPartners(partners, needle);
+    return results ?? [];
+  }, [needle, results, partners]);
+
+  // The linked partner stays visible and selectable even when it is outside
+  // the loaded slice (editing a contract whose partner sorts past page one).
+  // Memoised so the effect below does not re-run on every render — the
+  // eslint rule cares about reference stability, and recreating the array
+  // would loop the effect forever.
+  const options = useMemo(
+    () =>
+      selected && !visible.some((partner) => partner.id === selected.id)
+        ? [selected, ...visible]
+        : visible,
+    [selected, visible],
+  );
+
+  // Round 32 — fetch companies for the SELECTED option (so the trigger can
+  // show its badge). Options inside the popover handle their own fetch (see
+  // `PartnerOptionRow`); the trigger needs the data even before the popover
+  // opens. Preloaded data wins; otherwise we hit the server once.
+  //
+  // The map `companiesByPartner` is the single source of truth: if it is
+  // already filled in (including the empty `[]` we write on failure), we
+  // skip. React 19 strict mode runs the effect twice on mount, but the second
+  // tick sees the just-set state and skips, so there is no duplicate request.
   useEffect(() => {
     if (!selected) return;
     if (Array.isArray(selected.companies) && selected.companies.length > 0) return;
     if (companiesByPartner[selected.id] !== undefined) return;
-    if (inflightRef.current.has(selected.id)) return;
 
-    const inflight = inflightRef.current;
-    inflight.add(selected.id);
-    let cancelled = false;
     const idAtStart = selected.id;
+    let cancelled = false;
     void partnerCompaniesAction(idAtStart)
       .then((result) => {
         if (cancelled) return;
@@ -151,72 +176,14 @@ export function PartnerCombobox({
         setCompaniesByPartner((current) => ({ ...current, [idAtStart]: names }));
       })
       .catch(() => {
-        // Lazy UI hint: failures must not break the picker. Render an empty
-        // list for this id so we never re-fetch on every render.
         if (cancelled) return;
         setCompaniesByPartner((current) => ({ ...current, [idAtStart]: [] }));
-      })
-      .finally(() => {
-        if (!cancelled) inflight.delete(idAtStart);
       });
 
     return () => {
       cancelled = true;
-      inflight.delete(idAtStart);
     };
   }, [selected, companiesByPartner]);
-
-  const needle = term.trim();
-  const visible = needle
-    ? results === null
-      ? filterPartners(partners, needle)
-      : (results ?? [])
-    : partners;
-
-  // The linked partner stays visible and selectable even when it is outside
-  // the loaded slice (editing a contract whose partner sorts past page one).
-  const options =
-    selected && !visible.some((partner) => partner.id === selected.id)
-      ? [selected, ...visible]
-      : visible;
-
-  // Round 32 — for every id in the visible list (plus the selected one),
-  // trigger a single fetch if we do not have the data yet. The effect runs
-  // when the option list changes (open / type) so the badges land before
-  // the user has a chance to read them.
-  useEffect(() => {
-    const targets: PartnerOption[] = [];
-    const seen = new Set<string>();
-    for (const option of options) {
-      if (seen.has(option.id)) continue;
-      seen.add(option.id);
-      if (Array.isArray(option.companies) && option.companies.length > 0) continue;
-      if (companiesByPartner[option.id] !== undefined) continue;
-      if (inflightRef.current.has(option.id)) continue;
-      targets.push(option);
-    }
-
-    if (targets.length === 0) return;
-
-    for (const target of targets) {
-      inflightRef.current.add(target.id);
-      void partnerCompaniesAction(target.id)
-        .then((result) => {
-          const names = result.ok && result.data ? result.data : [];
-          setCompaniesByPartner((current) => ({ ...current, [target.id]: names }));
-        })
-        .catch(() => {
-          setCompaniesByPartner((current) => ({ ...current, [target.id]: [] }));
-        })
-        .finally(() => {
-          inflightRef.current.delete(target.id);
-        });
-    }
-    // We intentionally exclude `companiesByPartner` from the deps: the effect
-    // runs when the option list changes; once a fetch lands, `companiesByPartner`
-    // updates and the next render skips already-loaded ids.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options]);
 
   const capped = Boolean(needle) && (results?.length ?? 0) >= PARTNER_SEARCH_LIMIT;
 
@@ -332,43 +299,24 @@ export function PartnerCombobox({
                 Không tìm thấy đối tác
               </p>
             ) : (
-              options.map((partner) => {
-                const names = companiesFor(partner);
-                return (
-                  <button
-                    key={partner.id}
-                    type="button"
-                    data-testid="partner-option"
-                    data-partner-id={partner.id}
-                    onClick={() => {
-                      onChange(partner.id);
-                      setPicked(partner);
-                      setOpen(false);
-                      setTerm("");
-                      setResults(null);
-                    }}
-                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
-                  >
-                    <Check
-                      className={cn(
-                        "h-4 w-4 shrink-0",
-                        partner.id === value ? "opacity-100" : "opacity-0",
-                      )}
-                    />
-                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span className="block truncate">{partner.name}</span>
-                      {partner.tax_code ? (
-                        <span className="block truncate text-xs text-muted-foreground">
-                          MST {partner.tax_code}
-                        </span>
-                      ) : null}
-                      {names && names.length > 0 ? (
-                        <CompanyBadges companies={names} />
-                      ) : null}
-                    </span>
-                  </button>
-                );
-              })
+              options.map((partner) => (
+                <PartnerOptionRow
+                  key={partner.id}
+                  option={partner}
+                  isSelected={partner.id === value}
+                  companies={companiesFor(partner)}
+                  onCompaniesLoaded={(id, names) => {
+                    setCompaniesByPartner((current) => ({ ...current, [id]: names }));
+                  }}
+                  onSelect={() => {
+                    onChange(partner.id);
+                    setPicked(partner);
+                    setOpen(false);
+                    setTerm("");
+                    setResults(null);
+                  }}
+                />
+              ))
             )}
             {capped ? (
               <p
