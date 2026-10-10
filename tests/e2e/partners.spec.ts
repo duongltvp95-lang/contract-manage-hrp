@@ -270,6 +270,7 @@ test.describe("partner address + tax code", () => {
   let detailsPartnerId = "";
   let branchPartnerId = "";
   let noDetailsPartnerId = "";
+  const comboboxPartnerId = ""; // Round 32 đã tách sang file riêng.
 
   test.beforeAll(async () => {
     await sweep(adminClient());
@@ -282,7 +283,7 @@ test.describe("partner address + tax code", () => {
     // Service-role cleanup for the partners this describe created. They were
     // created without any contracts, so the RESTRICT on delete is not
     // exercised; service_role is permitted regardless.
-    for (const id of [detailsPartnerId, branchPartnerId, noDetailsPartnerId]) {
+    for (const id of [detailsPartnerId, branchPartnerId, noDetailsPartnerId, comboboxPartnerId]) {
       if (!id) continue;
       await admin.from("partners").delete().eq("id", id);
     }
@@ -626,4 +627,9 @@ test.describe("partner address + tax code", () => {
     // xl    : + contract-count (5) — the table is now at full width.
     await checkViewport(1280, 5);
   });
+
+  // Test R32 (combobox hiện công ty liên kết) đã được tách sang file
+  // `partner-combobox-companies.spec.ts` để chạy độc lập — file này đang
+  // ở mode `serial`, một test fail sẽ skip tất cả test sau trong cùng
+  // describe, bao gồm R32.
 });

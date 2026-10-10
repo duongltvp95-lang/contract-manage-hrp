@@ -2,7 +2,7 @@
 
 > Tài liệu này là nguồn sự thật duy nhất để một AI Coding Agent mới tiếp quản dự án.
 > Repo: `D:\HRP-app\Contract-mange-hrp` (GitHub: `duongltvp95-lang/contract-manage-hrp`, branch `main`).
-> HEAD hiện tại: **e64bdb3** (round 30) — đã push, `origin/main` đồng bộ, tree sạch.
+> HEAD hiện tại: **a0e2cda** (round 29 + round 31) — đã push, `origin/main` đồng bộ, tree sạch.
 
 ---
 
@@ -87,11 +87,13 @@ tests/{unit,integration,e2e}/
 - **R22**: import đọc cột **Trạng thái hợp tác** (bỏ trống → mặc định Đang hợp tác; giá trị lạ → lỗi dòng).
 - **R23**: **Xuất Excel đối tác** (3 scope: tất cả / đang / đã dừng) + fix nghẽn fetch companies theo từng dòng (chỉ fetch khi mở sheet).
 - **R24**: **xoá hàng loạt** (checkbox + nút "Xoá đã chọn (N)", xử lý từng thực thể độc lập, per-item lỗi, cap 100).
-- **R25**: import **chống trùng 5 khoá** theo thứ tự ưu tiên **MST → Tên viết tắt → Tên đối tác → Địa chỉ → Khu vực** → ghi đè (điền-thiếu + union công ty) **TRỪ khi khác công ty (không giao) → tạo mới**. Preview hiện "Thêm mới / Cập nhật \<tên\> / Lỗi". Chỉ áp dụng cho IMPORT — form tay giữ nguyên (xem R29 pending).
+- **R25**: import **chống trùng 5 khoá** theo thứ tự ưu tiên **MST → Tên viết tắt → Tên đối tác → Địa chỉ → Khu vực** → ghi đè (điền-thiếu + union công ty) **TRỪ khi khác công ty (không giao) → tạo mới**. Preview hiện "Thêm mới / Cập nhật \<tên\> / Lỗi". **Import giữ nguyên hành vi này; form tay từ R29 cũng đã so công ty theo cùng tinh thần.**
 - **R26**: cột "Tên viết tắt" tách riêng trong bảng Đối tác.
 - **R27**: fix lỗi "không lưu được" — nếu tải danh sách công ty fail, form giờ **hiện Alert + nút Thử lại** (trước đây im lặng khoá nút Lưu). Đường lưu status đã xác minh chạy đúng + có e2e chống tái diễn.
 - **R28**: bộ lọc **Số hợp đồng** (Tất cả / Có / Chưa có) kết hợp tab trạng thái (`?contracts=`).
 - **R30**: **bộ lọc trực tiếp trong header cột** Đối tác (Tên/Tên viết tắt/Khu vực = ô nhập khớp chứa bỏ dấu; Công ty = dropdown derive từ dữ liệu) — client-side, AND nhau, kết hợp filter server; **xoá cột "Cập nhật lúc"**.
+- **R29**: check trùng MST ở **form tay có so công ty** (trước chặn cứng mọi MST trùng) — MST trùng với đối tác khác mà **hai bên có công ty giao nhau → vẫn lỗi**; **khác công ty hoàn toàn → cho phép**. `updatePartner` không gửi `companyIds` (không đổi công ty) → giữ hành vi chặn cứng. Hàm `findBlockingTaxCodeConflict()` trong `lib/services/partners.ts`, dùng chung cho `createPartner` + `updatePartner`. Import (R25) không đổi.
+- **R31**: bảng Đối tác **ẩn bớt cột theo breakpoint** — `< sm`: Tên/Trạng thái/Thao tác (3 cột) · `sm`: + Tên viết tắt, MST (5) · `md`: + Khu vực (6) · `lg`: + Công ty (7) · `xl`: + Số hợp đồng (đủ 8). Ô filter nằm bên trong `<th>` nên ẩn theo cột, không cần class riêng.
 - Các round nhỏ khác: favicon `app/favicon.ico` (file của owner), logo sidebar trong suốt.
 
 ## 7. GATE (phải xanh trước khi push)
@@ -99,7 +101,7 @@ tests/{unit,integration,e2e}/
 ```
 pnpm build · typecheck · lint (0 warning) · unit · FULL integration · FULL e2e (mọi spec)
 ```
-Số liệu chuẩn gần nhất: unit **272/272** · integration **152/152 + 1 skip** · e2e **98/98 + 3 skip** · build PASS.
+Số liệu chuẩn gần nhất (đo ở round 31, full gate): unit **272/272** · integration **157/157 + 1 skip** · e2e **100 pass + 3 skip / 0 fail** · typecheck + lint (0 warning) + build PASS. Lần này là full e2e đầu tiên **0 fail** trong nhiều round (2 test `accent.spec.ts` từng flaky đã xanh).
 Dọn dẹp sau mỗi lần chạy: probe tự xoá (`app/api` chỉ còn `admin`/`files`/`partners`) · junction = 143 row thật (giữ) · audit test rows dọn về 0 (giữ nhật ký thật) · theme e2e.wave2 về null · port 3000/3100 trống.
 
 ## 8. QUY TRÌNH LÀM VIỆC (user ↔ T1 ↔ AI coding)
@@ -111,53 +113,11 @@ Dọn dẹp sau mỗi lần chạy: probe tự xoá (`app/api` chỉ còn `admin
 
 ## 9. VIỆC ĐANG TREO (LÀM NGAY SAU KHI TIẾP QUẢN)
 
-### ROUND 29 — SỬA LỖI: form đối tác báo trùng MST khi KHÁC công ty (user đã báo lỗi, prompt đã duyệt — chưa chạy)
+**Không có task nào đang treo.** Round 29 (check trùng MST theo công ty) và round 31 (bảng ẩn cột theo breakpoint) đều đã merge + push ở commit a0e2cda.
 
-Prompt đầy đủ đã chốt (copy nguyên văn để giao):
+Ở thời điểm này, Owner **chưa chốt scope cho round kế tiếp** — người tiếp quản nên mở hội thoại với Owner để chốt task mới.
 
-```
-Bạn là AI Coding Agent (T2). Round 29 (1 task): Sửa check trùng MST ở form đối
-tác — khác công ty thì cho thêm + rà các trường khác + full gate.
-HEAD hiện tại: e64bdb3, tree sạch.
-
-ĐỌC TRƯỚC: .cursor/rules/agent-working-rules.mdc · lib/services/partners.ts
-(createPartner + updatePartner đang dùng findPartnerByTaxCode chặn CỨNG mọi MST
-trùng; findPartnersByTaxCodes + companiesForPartner có sẵn) · lib/partner-merge.ts
-(logic so công ty overlap — tái dùng tinh thần).
-
-YÊU CẦU:
-1) SỬA CHECK MST THEO CÔNG TY (cả createPartner lẫn updatePartner):
-   - Khi MST đến trùng với partner khác: lấy companies của partner đó
-     (companiesForPartner) → so GIAO với công ty đang gửi (companyIds → tên
-     company qua listCompanies):
-     · Giao ≠ rỗng → lỗi như cũ: "Mã số thuế đã được dùng cho đối tác khác
-       trong tổ chức" (+ tên partner).
-     · Giao = rỗng (khác công ty hoàn toàn) → CHO PHÉP tạo/sửa.
-     · Form không gửi companyIds (update không đổi công ty) → giữ hành vi cũ
-       (chặn trùng MST).
-   - KHÔNG đổi hành vi import (round 25) và KHÔNG tự ghi đè ở form tay.
-2) RÀ CÁC TRƯỜNG KHÁC: kiểm tra createPartner/updatePartner còn chỗ nào chặn
-   trùng/độc nhất khác không (name/abbreviation/address/region) — báo cáo rõ
-   từng trường: có check không, có cần sửa không (dự kiến: không có check nào
-   khác → chỉ MST có lỗi này).
-3) TESTS:
-   - Integration (mở rộng partner-status-companies hoặc file mới): tạo partner
-     MST X công ty HRP → tạo tiếp MST X công ty HR VN → THÀNH CÔNG (2 dòng) ·
-     tạo MST X công ty HRP lần nữa → LỖI · updatePartner đổi MST sang MST của
-     partner khác công ty → OK · cùng công ty → lỗi · import vẫn đúng hành vi
-     round 25 (test cũ xanh).
-   - E2E (mở rộng partners.spec.ts): form thêm tay: MST trùng + tick công ty
-     KHÁC → thêm thành công; MST trùng + tick công ty TRÙNG → thấy lỗi MST.
-     Dọn dữ liệu test; KHÔNG đụng dữ liệu thật owner.
-4) FULL GATE: pnpm build + FULL INTEGRATION + FULL E2E (mọi spec) → báo số
-   liệu THẬT từng tầng. Dọn dẹp sau chạy (probe/junction 143 row thật giữ
-   nguyên/audit test row/theme e2e.wave2 về null/port trống). Flake môi trường
-   → chạy lại tối đa 2 lần, ghi rõ.
-5) KHÔNG commit/push — chờ chốt.
-
-BÁO CÁO 5 mục (đã làm + file; kết quả test thật; lệch + lý do; commit? chưa;
-rủi ro/việc còn lại).
-```
+Các ý tưởng tương lai chưa làm: xem ## 11.
 
 ## 10. LƯU Ý KỸ THUẬT KHÁC (gotchas đã đúc kết)
 
@@ -172,7 +132,7 @@ rủi ro/việc còn lại).
 
 ## 11. Ý TƯỞNG TƯƠNG LAI (owner từng nhắc, chưa làm)
 
-- Responsive: ẩn bớt cột bảng Đối tác trên màn hình hẹp.
+- Sticky cột "Tên" khi cuộn ngang bảng Đối tác trên màn hình hẹp (R31 mới chỉ ẩn cột, chưa cuộn ngang dễ đọc).
 - Pagination cho Đối tác → khi có thì chuyển bộ lọc client (R30) xuống server.
 - Export CSV (hiện chỉ txt/xlsx) nếu owner yêu cầu.
 - Cảnh báo thực tế khoá "Khu vực" trong chống trùng import (khoá yếu nhất — nếu gộp nhầm đối tác cùng miền thì bỏ khoá).
