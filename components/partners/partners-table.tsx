@@ -44,6 +44,15 @@ import type { PartnerWithCount } from "@/lib/services/partners";
  * folded; company select). The filters AND together and run on the rows the
  * server already narrowed (status tab + contract-count filter). The bulk
  * select-all operates on the FILTERED list.
+ *
+ * Round 31 — responsive columns (T1 chốt breakpoints — không tự đổi):
+ *   < sm  : Tên, Trạng thái, Thao tác (3 cột)
+ *   sm    : + Tên viết tắt, MST (5 cột)
+ *   md    : + Khu vực (6 cột)
+ *   lg    : + Công ty (7 cột)
+ *   xl    : + Số hợp đồng (đủ 8 cột — giữ hành vi hiện tại)
+ * Filter input trong header ẩn cùng breakpoint với cột tương ứng (vì filter
+ * nằm bên trong <th> ẩn, không cần class riêng).
  */
 export function PartnersTable({
   rows,
@@ -162,7 +171,7 @@ export function PartnersTable({
                   data-testid="partner-filter-name"
                 />
               </TableHead>
-              <TableHead>
+              <TableHead className="hidden sm:table-cell" data-testid="partner-head-abbr">
                 Tên viết tắt
                 <Input
                   value={abbrFilter}
@@ -173,8 +182,10 @@ export function PartnersTable({
                   data-testid="partner-filter-abbr"
                 />
               </TableHead>
-              <TableHead>Mã số thuế</TableHead>
-              <TableHead>
+              <TableHead className="hidden sm:table-cell" data-testid="partner-head-tax-code">
+                Mã số thuế
+              </TableHead>
+              <TableHead className="hidden md:table-cell" data-testid="partner-head-region">
                 Khu vực
                 <Input
                   value={regionFilter}
@@ -185,8 +196,8 @@ export function PartnersTable({
                   data-testid="partner-filter-region"
                 />
               </TableHead>
-              <TableHead>Trạng thái</TableHead>
-              <TableHead>
+              <TableHead data-testid="partner-head-status">Trạng thái</TableHead>
+              <TableHead className="hidden lg:table-cell" data-testid="partner-head-company">
                 Công ty
                 <Select
                   value={companyFilter}
@@ -209,8 +220,10 @@ export function PartnersTable({
                   </SelectContent>
                 </Select>
               </TableHead>
-              <TableHead className="text-center">Số hợp đồng</TableHead>
-              <TableHead className="text-right">Thao tác</TableHead>
+              <TableHead className="hidden text-center xl:table-cell" data-testid="partner-head-contract-count">
+                Số hợp đồng
+              </TableHead>
+              <TableHead className="text-right" data-testid="partner-head-actions">Thao tác</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -247,7 +260,7 @@ export function PartnersTable({
                         />
                       </TableCell>
                     )}
-                    <TableCell className="font-medium">
+                    <TableCell className="font-medium" data-testid={`partner-name-cell-${row.id}`}>
                       {/* A real link, so the row is reachable by keyboard too. */}
                       <Link
                         href={href}
@@ -259,28 +272,28 @@ export function PartnersTable({
                     </TableCell>
                     {/* Round 26 — the abbreviation lives in its own column. */}
                     <TableCell
-                      className="font-mono text-sm text-muted-foreground"
+                      className="hidden font-mono text-sm text-muted-foreground sm:table-cell"
                       data-testid={`partner-abbr-cell-${row.id}`}
                     >
                       {row.abbreviation ?? ""}
                     </TableCell>
-                    <TableCell className="font-mono text-sm">
+                    <TableCell className="hidden font-mono text-sm sm:table-cell">
                       {row.tax_code ? (
                         row.tax_code
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className="hidden text-muted-foreground md:table-cell">
                       {row.region ?? ""}
                     </TableCell>
                     <TableCell>
                       <PartnerStatusBadge status={row.status} />
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden lg:table-cell">
                       <CompanyBadges companies={row.companies} />
                     </TableCell>
-                    <TableCell className="text-center">
+                    <TableCell className="hidden text-center xl:table-cell">
                       {row.contract_count > 0 ? (
                         <Badge variant="secondary" data-testid="partner-contract-count">
                           {row.contract_count}

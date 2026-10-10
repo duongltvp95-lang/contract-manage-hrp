@@ -12,6 +12,7 @@ import {
   login,
   pickDate,
   runId,
+  seedPartner,
   selectPartner,
   sweep,
 } from "./helpers";
@@ -427,6 +428,48 @@ test.describe("partner address + tax code", () => {
     await clickSafe(page, '[data-testid="partner-name-sheet"] button:has-text("Huỷ")');
   });
 
+  test("accepts a duplicate tax code under a different company (round 29)", async ({
+    page,
+  }) => {
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    await clickSafe(page, '[data-testid="partner-add-button"]');
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeVisible();
+
+    const name = `${TEST_PREFIX}Trùng MST khác công ty ${stamp}`;
+    await page.fill("#partnerName", name);
+    // HR VN — a COMPLETELY different company from partnerWithDetails (HRP).
+    await clickSafe(page, '[data-testid="company-checkbox-HR VN"]');
+    await page.fill("#partnerTaxCode", taxCode); // Same code as partnerWithDetails.
+    await clickSafe(page, '[data-testid="partner-name-submit"]');
+
+    // Allowed — the sheet closes and the new partner shows in the list.
+    await expect(page.locator('[data-testid="partner-name-sheet"]')).toBeHidden({
+      timeout: 30_000,
+    });
+    await expect(
+      page.getByTestId("partner-row").filter({ hasText: name }),
+    ).toBeVisible({ timeout: 30_000 });
+
+    // Two partners now share the code (one per company).
+    const { data } = await adminClient()
+      .from("partners")
+      .select("id")
+      .eq("tax_code", taxCode);
+    expect(data ?? []).toHaveLength(2);
+
+    // Remove the extra partner so the serial suite stays deterministic.
+    const { data: created } = await adminClient()
+      .from("partners")
+      .select("id")
+      .eq("name", name)
+      .maybeSingle();
+    if (created) {
+      await adminClient().from("partners").delete().eq("id", created.id);
+    }
+  });
+
   test("creates a partner with both fields left blank (backwards-compatible)", async ({
     page,
   }) => {
@@ -522,5 +565,65 @@ test.describe("partner address + tax code", () => {
 
     expect(data?.address).toBe(updatedAddress);
     expect(data?.tax_code).toBe(updatedTaxCode);
+  });
+
+  test("responsive columns show the correct subset at each breakpoint (round 31)", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    // Round 31 — a partner in the list is enough; we only assert which
+    // header / cell testids are visible at each viewport. We do not need to
+    // seed region/abbreviation because we only count visible *headers*.
+    const admin = adminClient();
+    await seedPartner(admin, {
+      organizationId: ORG_A,
+      name: `${TEST_PREFIX}Responsive ${stamp}`,
+      taxCode: "0311223344",
+    });
+
+    await login(page);
+    await gotoAndSettle(page, "/partners");
+
+    // All viewport checks share one helper: count the visible header testids
+    // and assert that the three "always visible" headers are present.
+    const checkViewport = async (width: number, expectedVisible: number) => {
+      await page.setViewportSize({ width, height: 800 });
+      // Force a layout re-evaluation.
+      await page.waitForTimeout(150);
+
+      // The "always visible" headers (Tên / Trạng thái / Thao tác).
+      await expect(page.getByTestId("partner-head-status")).toBeVisible();
+      await expect(page.getByTestId("partner-head-actions")).toBeVisible();
+      // Tên cell uses a per-row testid; use the row testid as proxy — the
+      // first row's name link is always rendered.
+      await expect(page.getByTestId("partner-row").first()).toBeVisible();
+
+      // The set of optional headers and their visibility.
+      const optional = [
+        "partner-head-abbr",
+        "partner-head-tax-code",
+        "partner-head-region",
+        "partner-head-company",
+        "partner-head-contract-count",
+      ];
+      const visibleCount = (
+        await Promise.all(
+          optional.map((id) => page.getByTestId(id).isVisible()),
+        )
+      ).filter(Boolean).length;
+      expect(visibleCount).toBe(expectedVisible);
+    };
+
+    // < sm  : 3 always-visible only (no optional).
+    await checkViewport(375, 0);
+    // sm    : + abbr + tax-code (2).
+    await checkViewport(640, 2);
+    // md    : + region (3).
+    await checkViewport(768, 3);
+    // lg    : + company (4).
+    await checkViewport(1024, 4);
+    // xl    : + contract-count (5) — the table is now at full width.
+    await checkViewport(1280, 5);
   });
 });

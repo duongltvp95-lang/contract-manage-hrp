@@ -387,6 +387,31 @@ async function findPartnerByTaxCode(
 }
 
 /**
+ * Round 29 — the tax-code conflict is COMPANY-AWARE.
+ *
+ * The same tax code under a COMPLETELY different company is allowed (mirrors
+ * the round 25 import rule); an overlap with the caller's companies still
+ * blocks. `incomingCompanyNames === null` means the caller sent no company
+ * info (an update that leaves the companies untouched) — the old strict
+ * behaviour stays in that case.
+ */
+async function findBlockingTaxCodeConflict(
+  taxCode: string,
+  organizationId: string,
+  incomingCompanyNames: string[] | null,
+  excludeId?: string,
+): Promise<PartnerRow | null> {
+  const conflict = await findPartnerByTaxCode(taxCode, organizationId, excludeId);
+  if (!conflict) return null;
+
+  if (incomingCompanyNames === null) return conflict;
+
+  const existingNames = await companiesForPartner(conflict.id);
+  const overlap = existingNames.filter((name) => incomingCompanyNames.includes(name));
+  return overlap.length > 0 ? conflict : null;
+}
+
+/**
  * Normalises the optional fields on the input. The Zod schema trims them and
  * accepts `""`; here we collapse the empty form to `null` so the database
  * stores a real NULL instead of an empty string, and the partial-update rule
@@ -433,17 +458,6 @@ export async function createPartner(
   const status = parsed.data.status ?? "active";
   const companyIds = parsed.data.companyIds;
 
-  if (taxCode) {
-    const conflict = await findPartnerByTaxCode(taxCode, organizationId);
-    if (conflict) {
-      return err(
-        "validation",
-        "Mã số thuế đã được dùng cho đối tác khác trong tổ chức",
-        [{ path: "taxCode", message: `Đã thuộc về "${conflict.name}"` }],
-      );
-    }
-  }
-
   // Every chosen company must belong to the caller's organization, or the
   // junction would link another tenant's company onto this partner.
   const companies = await listCompanies({ organizationId });
@@ -454,6 +468,28 @@ export async function createPartner(
   const invalidCompany = companyIds.find((id) => !orgCompanyIds.has(id));
   if (invalidCompany) {
     return err("validation", "Công ty được chọn không thuộc tổ chức của bạn");
+  }
+
+  const companyNames = orgCompanies
+    .filter((company) => companyIds.includes(company.id))
+    .map((company) => company.name)
+    .sort();
+
+  // Round 29 — the tax-code check runs with the company names: the same code
+  // under a completely different company is allowed.
+  if (taxCode) {
+    const conflict = await findBlockingTaxCodeConflict(
+      taxCode,
+      organizationId,
+      companyNames,
+    );
+    if (conflict) {
+      return err(
+        "validation",
+        "Mã số thuế đã được dùng cho đối tác khác trong tổ chức",
+        [{ path: "taxCode", message: `Đã thuộc về "${conflict.name}"` }],
+      );
+    }
   }
 
   const supabase = await createClient();
@@ -489,11 +525,6 @@ export async function createPartner(
     await deletePartnerRollback(created.id);
     return dbError("createPartner", junctionError);
   }
-
-  const companyNames = orgCompanies
-    .filter((company) => companyIds.includes(company.id))
-    .map((company) => company.name)
-    .sort();
 
   // Fire-and-forget: a failed write must never block the create.
   await recordCurrentUserAudit({
@@ -564,24 +595,9 @@ export async function updatePartner(
     return err("validation", "Không có thay đổi nào để lưu");
   }
 
-  if ("tax_code" in patch && patch.tax_code) {
-    const conflict = await findPartnerByTaxCode(
-      patch.tax_code,
-      organizationId,
-      id,
-    );
-    if (conflict) {
-      return err(
-        "validation",
-        "Mã số thuế đã được dùng cho đối tác khác trong tổ chức",
-        [{ path: "taxCode", message: `Đã thuộc về "${conflict.name}"` }],
-      );
-    }
-  }
-
-  // Resolve the company names once, used both for the junction write and the
-  // audit metadata.
-  let companyNames: string[] = [];
+  // Resolve the company names once, used for the junction write, the round 29
+  // tax-code overlap check and the audit metadata.
+  let companyNames: string[] | null = null;
   let orgCompanyIds = new Set<string>();
   let orgCompanies: Company[] = [];
 
@@ -600,6 +616,25 @@ export async function updatePartner(
     companyNames = orgCompanies
       .filter((company) => companyIds.includes(company.id))
       .map((company) => company.name);
+  }
+
+  // Round 29 — the tax-code conflict is company-aware: the same code under a
+  // completely different company is allowed; without companyIds in the payload
+  // (companies untouched) the old strict behaviour stays.
+  if ("tax_code" in patch && patch.tax_code) {
+    const conflict = await findBlockingTaxCodeConflict(
+      patch.tax_code,
+      organizationId,
+      companyNames,
+      id,
+    );
+    if (conflict) {
+      return err(
+        "validation",
+        "Mã số thuế đã được dùng cho đối tác khác trong tổ chức",
+        [{ path: "taxCode", message: `Đã thuộc về "${conflict.name}"` }],
+      );
+    }
   }
 
   const supabase = await createClient();
@@ -666,6 +701,8 @@ export async function updatePartner(
     updated = data as PartnerRow;
   }
 
+  const finalNames = (companyNames ?? []).sort();
+
   const changed = Object.keys(patch).map((key) =>
     key === "tax_code" ? "taxCode" : key,
   );
@@ -678,11 +715,11 @@ export async function updatePartner(
     metadata: {
       name: updated.name,
       changed,
-      ...(hasCompanies ? { companies: companyNames.sort() } : {}),
+      ...(hasCompanies ? { companies: finalNames } : {}),
     },
   });
 
-  return ok({ ...updated, companies: companyNames.sort() });
+  return ok({ ...updated, companies: finalNames });
 }
 
 /**
