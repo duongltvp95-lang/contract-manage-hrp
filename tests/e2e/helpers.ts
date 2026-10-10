@@ -23,6 +23,15 @@ export const ORG_B = "22222222-2222-2222-2222-222222222222";
 export const TEST_PREFIX = "E2ETEST-";
 
 /**
+ * Round 32 — HRP company UUID, seeded by
+ * `20261009000000_partner_status_companies.sql`. Tests that need to attach a
+ * partner to HRP use this id; the second company (HR VN) is
+ * `00000000-0000-4000-8000-000000000002` and is not exported because no test
+ * currently needs it.
+ */
+export const HRP_COMPANY_ID = "00000000-0000-4000-8000-000000000001";
+
+/**
  * The account the suite signs in as.
  *
  * No fallback values, deliberately: an earlier revision defaulted the password

@@ -12,6 +12,7 @@ import {
   type PartnerImportRowReport,
 } from "@/lib/partner-import";
 import {
+  companiesForOnePartner,
   createPartner,
   deletePartner,
   deletePartners,
@@ -73,6 +74,32 @@ export async function searchPartnersAction(
 
   const query = typeof term === "string" ? term : "";
   const result = await searchPartners(query);
+
+  return fromService(result);
+}
+
+/**
+ * Round 32 — công ty liên kết của 1 đối tác, gọi lazy từ combobox.
+ *
+ * Service trả về `[]` khi partner không thuộc organization — không lộ sự
+ * tồn tại. Action chỉ unwrap session, không cần map lỗi riêng vì
+ * `companiesForOnePartner` đã tự nuốt lỗi DB.
+ */
+export async function partnerCompaniesAction(
+  id: unknown,
+): Promise<ActionResult<string[]>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  if (typeof id !== "string" || id.length === 0) {
+    return validationFailure("Thiếu thông tin đối tác", [
+      { path: "id", message: "Không xác định được đối tác" },
+    ]);
+  }
+
+  const result = await companiesForOnePartner(id, {
+    organizationId: access.user.organizationId,
+  });
 
   return fromService(result);
 }
