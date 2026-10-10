@@ -42,7 +42,9 @@
     ".next-test/dev/dev/types/**/*.ts",
     ".next-test/types/**/*.ts",
     ".next-e2e/types/**/*.ts",
-    ".next-e2e/dev/types/**/*.ts"
+    ".next-e2e/dev/types/**/*.ts",
+    ".next-int/types/**/*.ts",
+    ".next-int/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
