@@ -18,10 +18,18 @@
 /.next/
 /out/
 .next-test
-.next-e2e
+.next-e2e*/
+.next-*/
 .next-int
 /test-results/
 /playwright-report/
+
+# Dev server runtime logs (PID 18760, xem .cursor/prompts)
+.dev-server*.log
+*.err.log
+
+# Cursor prompts (Owner T1 tạo local, không commit)
+.cursor/prompts/
 
 # production
 /build
