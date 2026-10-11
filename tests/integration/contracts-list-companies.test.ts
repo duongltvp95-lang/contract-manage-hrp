@@ -101,8 +101,11 @@ suite("contracts list companies (round 18)", () => {
     const rows = (listed.data as { rows: ListRow[] }).rows;
 
     const linkedRow = rows.find((row) => row.id === linkedContractId);
-    expect(linkedRow?.companies).toEqual(expect.arrayContaining(["HRP", "HR VN"]));
-    expect(linkedRow?.companies).toHaveLength(2);
+    // Round 37 — the company on a contract is `contracts.company_id`, not the
+    // partner's full company set. The contract was created with companyId=HRP,
+    // so only HRP is shown; HR VN is not, even though the partner also links
+    // to HR VN via partner_companies.
+    expect(linkedRow?.companies).toEqual(["HRP"]);
 
     const unlinkedRow = rows.find((row) => row.id === unlinkedContractId);
     expect(unlinkedRow?.companies).toEqual([]);

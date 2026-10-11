@@ -15,7 +15,7 @@ import { deleteObject } from "@/lib/r2/objects";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { recordCurrentUserAudit } from "./audit-logs";
-import { companiesForPartners, getCompany, getPartner } from "./partners";
+import { getCompany, getPartner } from "./partners";
 import { dbError, err, ok, type ServiceErr, type ServiceResult } from "./types";
 
 /**
@@ -259,7 +259,17 @@ export async function getContract(
 export type ContractListItem = ContractRow & {
   file_count: number;
   partner_name: string | null;
-  /** The linked partner's company names (round 18); empty when no partner. */
+  /**
+   * The company the contract is signed for (round 33 → round 37).
+   *
+   *   - Round 18: read the partner's `partner_companies` set; showed every
+   *     company the partner is linked to, which is misleading for partners
+   *     that work with more than one company.
+   *   - Round 37: read `contracts.company_id` and embed the company name
+   *     through the FK. The array holds 0 or 1 name — 0 when the contract
+   *     predates round 33 (`company_id IS NULL`) or when the contract was
+   *     created without a company.
+   */
   companies: string[];
 };
 
@@ -330,7 +340,14 @@ export async function listContracts({
 
   let builder = supabase
     .from("contracts")
-    .select(`${CONTRACT_COLUMNS}, partners(name)`, { count: "exact" })
+    // Round 37 — the "Công ty" column on the contract list shows the company
+    // the contract is signed for (contracts.company_id), NOT every company the
+    // partner is linked to via partner_companies. Before this fix, a merged
+    // partner (e.g. DONGYANG after round 35) showed the full partner_companies
+    // set on every one of its contracts, which was misleading. The embed
+    // `companies!contracts_company_id_fkey(name)` reads the company through the
+    // many-to-one FK set up in round 33, and is the only writer for this column.
+    .select(`${CONTRACT_COLUMNS}, partners(name), companies!contracts_company_id_fkey(name)`, { count: "exact" })
     .eq("organization_id", organizationId);
 
   if (scope === "archived") {
@@ -422,29 +439,32 @@ export async function listContracts({
 
   const rawRows = (data ?? []) as unknown as (ContractRow & {
     partners: { name: string } | { name: string }[] | null;
+    companies: { name: string } | { name: string }[] | null;
   })[];
-  const partnerIds = [
-    ...new Set(
-      rawRows.map((row) => row.partner_id).filter((id): id is string => Boolean(id)),
-    ),
-  ];
-  const [fileCounts, companiesByPartner] = await Promise.all([
-    countFilesByContract(rawRows.map((row) => row.id)),
-    companiesForPartners(partnerIds),
-  ]);
+  const fileCounts = await countFilesByContract(rawRows.map((row) => row.id));
   const total = count ?? rawRows.length;
 
   return ok({
-    rows: rawRows.map(({ partners, ...row }) => {
+    rows: rawRows.map(({ partners, companies: companiesEmbed, ...row }) => {
       // A many-to-one embed arrives as an object; the generated types cannot
       // tell it apart from a to-many embed, so both shapes are accepted.
-      const embedded = Array.isArray(partners) ? (partners[0] ?? null) : partners;
+      const embeddedPartner = Array.isArray(partners)
+        ? (partners[0] ?? null)
+        : partners;
+      const embeddedCompany = Array.isArray(companiesEmbed)
+        ? (companiesEmbed[0] ?? null)
+        : companiesEmbed;
 
       return {
         ...row,
         file_count: fileCounts.get(row.id) ?? 0,
-        partner_name: embedded?.name ?? null,
-        companies: row.partner_id ? (companiesByPartner.get(row.partner_id) ?? []) : [],
+        partner_name: embeddedPartner?.name ?? null,
+        // Round 37 — the company shown on the contract is the company the
+        // contract is signed for (`contracts.company_id`), not the partner's
+        // full company set. Pre-round-33 contracts (company_id IS NULL) get an
+        // empty array, which the UI renders as no badge — same as today, just
+        // for the right reason now.
+        companies: embeddedCompany?.name ? [embeddedCompany.name] : [],
       };
     }),
     total,

@@ -247,10 +247,14 @@ test.describe("contract lifecycle", () => {
       { partner_id: partnerId, company_id: "00000000-0000-4000-8000-000000000002" },
     ]);
 
+    // Round 37 — the company badge on a contract is `contracts.company_id`, not
+    // the partner's full company set. Pin the contract to HR VN here so the
+    // list shows a single, predictable badge.
     await admin.from("contracts").insert({
       organization_id: ORG_A,
       contract_number: contractNumber,
       partner_id: partnerId,
+      company_id: "00000000-0000-4000-8000-000000000002",
     });
 
     await login(page);
@@ -259,12 +263,13 @@ test.describe("contract lifecycle", () => {
     const row = page.getByRole("row").filter({ hasText: contractNumber });
     await expect(row).toBeVisible({ timeout: 30_000 });
 
-    // Round 35 — CompanyBadges gộp 2 công ty thành 1 badge, sắp xếp theo
-    // alphabet ổn định → "HR VN / HRP" thay vì 2 badge riêng. Vẫn khẳng
-    // định cả HRP + HR VN đều xuất hiện, nhưng qua 1 dòng, không phải 2.
+    // Round 37 — the company badge on a contract is `contracts.company_id`,
+    // so even though the partner links to HRP and HR VN, the row only shows
+    // HR VN (the company the contract was created for). Round 35's "HR VN /
+    // HRP" gộp no longer applies here.
     await expect(row.getByTestId("partner-company-badge")).toHaveCount(1);
     await expect(
-      row.getByTestId("partner-company-badge").filter({ hasText: /HR VN\s*\/\s*HRP/ }),
+      row.getByTestId("partner-company-badge").filter({ hasText: /^HR VN$/ }),
     ).toBeVisible();
   });
 });

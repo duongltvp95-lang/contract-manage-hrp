@@ -58,6 +58,9 @@ test.describe("dashboard partner + company (round 15)", () => {
       organization_id: ORG_A,
       contract_number: contractNumber,
       partner_id: partnerId,
+      // Round 37 — the company on a contract is `contracts.company_id`. Pin
+      // this contract to HR VN so the dashboard shows one predictable badge.
+      company_id: ORG_A_HR_VN,
       expiry_date: format(addDays(new Date(), 30), "yyyy-MM-dd"),
     });
 
@@ -74,11 +77,12 @@ test.describe("dashboard partner + company (round 15)", () => {
     await expect(row).toContainText(partnerName);
     await expect(row.locator("td").nth(1)).not.toContainText("—");
 
-    // Company cell (3rd td) shows one merged badge sorted by name
-    // "HR VN / HRP" (round 35, sort alphabet ổn định).
+    // Company cell (3rd td) shows the single company the contract is signed
+    // for (round 37). The partner links to HRP and HR VN, but the contract
+    // was created with companyId=HR VN, so only HR VN is shown.
     await expect(row.getByTestId("partner-company-badge")).toHaveCount(1);
     await expect(
-      row.getByTestId("partner-company-badge").filter({ hasText: /HR VN\s*\/\s*HRP/ }),
+      row.getByTestId("partner-company-badge").filter({ hasText: /^HR VN$/ }),
     ).toBeVisible();
     await expect(row.locator("td").nth(2)).not.toContainText("—");
   });

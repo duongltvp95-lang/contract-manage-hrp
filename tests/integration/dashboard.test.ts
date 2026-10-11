@@ -114,8 +114,9 @@ suite("dashboard partner + company (round 15)", () => {
 
     const linkedRow = (recent.data ?? []).find((row) => row.id === linkedContractId);
     expect(linkedRow?.partnerName).toBe(partnerName);
-    expect(linkedRow?.companies).toEqual(expect.arrayContaining(["HRP", "HR VN"]));
-    expect(linkedRow?.companies).toHaveLength(2);
+    // Round 37 — the company on a contract is `contracts.company_id`, not the
+    // partner's full company set. The contract was created with companyId=HRP.
+    expect(linkedRow?.companies).toEqual(["HRP"]);
 
     const unlinkedRow = (recent.data ?? []).find((row) => row.id === unlinkedContractId);
     expect(unlinkedRow?.partnerName).toBeNull();
@@ -133,7 +134,8 @@ suite("dashboard partner + company (round 15)", () => {
 
     const linkedRow = (expiring.data ?? []).find((row) => row.id === linkedContractId);
     expect(linkedRow?.partnerName).toBe(partnerName);
-    expect(linkedRow?.companies).toEqual(expect.arrayContaining(["HRP", "HR VN"]));
+    // Round 37 — see contracts-list-companies.test.ts for the rationale.
+    expect(linkedRow?.companies).toEqual(["HRP"]);
 
     // The unlinked, non-expiring contract is not in the window.
     expect((expiring.data ?? []).some((row) => row.id === unlinkedContractId)).toBe(false);

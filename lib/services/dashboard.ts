@@ -6,7 +6,6 @@ import { resolveExpiryPreset } from "@/lib/contracts-query";
 import { createClient } from "@/lib/supabase/server";
 
 import { CONTRACT_COLUMNS, type ContractRow } from "./contracts";
-import { companiesForPartners } from "./partners";
 import { dbError, ok, type ServiceResult } from "./types";
 
 /**
@@ -36,6 +35,10 @@ export type ContractMetrics = {
  */
 export type DashboardContractRow = ContractRow & {
   partnerName: string | null;
+  /**
+   * Round 37 — the company the contract is signed for (`contracts.company_id`),
+   * not the partner's full company set. 0 or 1 element.
+   */
   companies: string[];
 };
 
@@ -145,9 +148,14 @@ export async function getExpiringContracts(
 }
 
 /**
- * Resolves each contract's partner name + company names with two sub-queries
- * (partners for names, the partner_companies junction for companies), keyed by
- * the distinct partner ids — RLS applies once per row, not once per contract.
+ * Resolves each contract's partner name + the company the contract is signed
+ * for (`contracts.company_id`).
+ *
+ * Round 37 — the old implementation read `partner_companies` and returned every
+ * company the partner is linked to. For a partner that works with more than one
+ * company (e.g. DONGYANG after round 35), that made every contract look like
+ * it was signed for every company, which is wrong. The list and the dashboards
+ * now show the company the contract is actually signed for instead.
  */
 async function attachPartnerInfo(rows: ContractRow[]): Promise<DashboardContractRow[]> {
   if (rows.length === 0) return [];
@@ -157,10 +165,16 @@ async function attachPartnerInfo(rows: ContractRow[]): Promise<DashboardContract
       rows.map((row) => row.partner_id).filter((id): id is string => Boolean(id)),
     ),
   ];
+  const companyIds = [
+    ...new Set(
+      rows.map((row) => row.company_id).filter((id): id is string => Boolean(id)),
+    ),
+  ];
+
+  const supabase = await createClient();
 
   const nameByPartner = new Map<string, string>();
   if (partnerIds.length > 0) {
-    const supabase = await createClient();
     const { data } = await supabase
       .from("partners")
       .select("id, name")
@@ -170,12 +184,24 @@ async function attachPartnerInfo(rows: ContractRow[]): Promise<DashboardContract
     }
   }
 
-  const companiesByPartner = await companiesForPartners(partnerIds);
+  const nameByCompany = new Map<string, string>();
+  if (companyIds.length > 0) {
+    const { data } = await supabase
+      .from("companies")
+      .select("id, name")
+      .in("id", companyIds);
+    for (const row of (data ?? []) as { id: string; name: string }[]) {
+      nameByCompany.set(row.id, row.name);
+    }
+  }
 
   return rows.map((row) => ({
     ...row,
     partnerName: row.partner_id ? (nameByPartner.get(row.partner_id) ?? null) : null,
-    companies: row.partner_id ? (companiesByPartner.get(row.partner_id) ?? []) : [],
+    // Round 37 — one element at most, [] when the contract has no company.
+    companies: row.company_id && nameByCompany.get(row.company_id)
+      ? [nameByCompany.get(row.company_id) as string]
+      : [],
   }));
 }
 
