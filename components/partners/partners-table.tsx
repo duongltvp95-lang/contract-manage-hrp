@@ -454,8 +454,20 @@ export function PartnersTable({
                     }))}
                     selected={filters.contractCount === "all" ? [] : [filters.contractCount]}
                     onChange={(v) => {
-                      const next = (v[0] ?? "all") as PartnerFilters["contractCount"];
-                      setColumnFilter("contractCount", next);
+                      // ColumnFilterPopover's `toggle` always appends to the
+                      // current selection, so a single-select switch (e.g.
+                      // nonzero -> zero) briefly hands us ["nonzero", "zero"].
+                      // We can't trust v[0] (it would re-pick the old value);
+                      // read the previous filter and pick the candidate that
+                      // differs from it, falling back to "all" when nothing
+                      // is selected.
+                      setFilters((previous) => {
+                        const current = previous.contractCount;
+                        const candidates = v.filter((value) => value !== current);
+                        const next = (candidates[0] ??
+                          (v.length === 0 ? "all" : current)) as PartnerFilters["contractCount"];
+                        return { ...previous, contractCount: next };
+                      });
                     }}
                     mode="static"
                     testIdPrefix="partner-filter-contract-count"
