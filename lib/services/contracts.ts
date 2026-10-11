@@ -284,8 +284,9 @@ export type ContractListResult = {
 /**
  * Counts files per contract for one page of rows.
  *
- * Done as a single extra query rather than a PostgREST embedded count so the
- * shape stays explicit and RLS applies exactly once per row.
+ * Giai đoạn 2: Tối ưu đếm số file bằng DB aggregate RPC (security invoker),
+ * gom nhóm và tính toán trực tiếp trong Postgres để giảm tải bộ nhớ Node.js.
+ * Có fallback an toàn sang truy vấn truyền thống nếu RPC chưa sẵn sàng.
  */
 async function countFilesByContract(
   contractIds: string[],
@@ -294,6 +295,19 @@ async function countFilesByContract(
   if (contractIds.length === 0) return counts;
 
   const supabase = await createClient();
+
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    "count_contract_files",
+    { contract_ids: contractIds },
+  );
+
+  if (!rpcError && rpcData) {
+    for (const row of rpcData as { contract_id: string; file_count: number | string }[]) {
+      counts.set(row.contract_id, Number(row.file_count) || 0);
+    }
+    return counts;
+  }
+
   const { data } = await supabase
     .from("contract_files")
     .select("contract_id")
