@@ -527,6 +527,88 @@ export async function seedPartner(
 }
 
 /**
+ * Round 35 — gộp 2 bản ghi `partners` cùng MST trong test context.
+ *
+ * Tương đương logic trong
+ * `supabase/migrations/20261011_partner_merge_dongyang.sql` nhưng dùng
+ * admin client + upsert, KHÔNG chạy trên production:
+ *   1. Chuyển `contracts.partner_id` từ `dropId` sang `keepId`
+ *      (giữ nguyên `company_id` trên từng hợp đồng).
+ *   2. Chuyển các `partner_companies` của `dropId` sang `keepId`,
+ *      upsert bỏ qua trùng `(partner_id, company_id)`.
+ *   3. Xoá `partner_companies` cũ + bản ghi `partners` dư.
+ *
+ * Quy ước: helper này KHÔNG nhận tax_code làm điều kiện, người gọi tự
+ * chịu trách nhiệm chọn đúng cặp `keepId`/`dropId` (cùng MST).
+ * Trong test thật, dùng MST giả (vd `9999999999`) để không chạm vào dữ
+ * liệu thật của Owner (rule §6).
+ */
+export async function mergePartnersByTaxCode(
+  admin: SupabaseClient,
+  keepId: string,
+  dropId: string,
+): Promise<void> {
+  if (keepId === dropId) {
+    throw new Error("mergePartnersByTaxCode: keepId trùng dropId");
+  }
+
+  // 1. Chuyển hợp đồng: partner_id cũ → keepId, company_id giữ nguyên.
+  const { error: contractsError } = await admin
+    .from("contracts")
+    .update({ partner_id: keepId })
+    .eq("partner_id", dropId);
+  if (contractsError) {
+    throw new Error(
+      `mergePartnersByTaxCode: chuyển contracts thất bại — ${contractsError.message}`,
+    );
+  }
+
+  // 2. Chuyển liên kết công ty, upsert tránh trùng (partner_id, company_id).
+  const { data: links, error: linksError } = await admin
+    .from("partner_companies")
+    .select("company_id")
+    .eq("partner_id", dropId);
+  if (linksError) {
+    throw new Error(
+      `mergePartnersByTaxCode: đọc partner_companies thất bại — ${linksError.message}`,
+    );
+  }
+  for (const link of links ?? []) {
+    const { error: upsertError } = await admin
+      .from("partner_companies")
+      .upsert(
+        { partner_id: keepId, company_id: link.company_id },
+        { onConflict: "partner_id,company_id", ignoreDuplicates: true },
+      );
+    if (upsertError) {
+      throw new Error(
+        `mergePartnersByTaxCode: upsert link thất bại — ${upsertError.message}`,
+      );
+    }
+  }
+
+  // 3. Xoá liên kết cũ + bản ghi dư.
+  const { error: deleteLinksError } = await admin
+    .from("partner_companies")
+    .delete()
+    .eq("partner_id", dropId);
+  if (deleteLinksError) {
+    throw new Error(
+      `mergePartnersByTaxCode: xoá partner_companies thất bại — ${deleteLinksError.message}`,
+    );
+  }
+  const { error: deletePartnerError } = await admin
+    .from("partners")
+    .delete()
+    .eq("id", dropId);
+  if (deletePartnerError) {
+    throw new Error(
+      `mergePartnersByTaxCode: xoá partners thất bại — ${deletePartnerError.message}`,
+    );
+  }
+}
+
+/**
  * Creates contracts directly, for the cases where the point is what the *list*
  * does with many rows rather than how a row is created.
  */

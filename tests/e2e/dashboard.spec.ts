@@ -74,13 +74,11 @@ test.describe("dashboard partner + company (round 15)", () => {
     await expect(row).toContainText(partnerName);
     await expect(row.locator("td").nth(1)).not.toContainText("—");
 
-    // Company cell (3rd td) shows two badges.
-    await expect(row.getByTestId("partner-company-badge")).toHaveCount(2);
+    // Company cell (3rd td) shows one merged badge sorted by name
+    // "HR VN / HRP" (round 35, sort alphabet ổn định).
+    await expect(row.getByTestId("partner-company-badge")).toHaveCount(1);
     await expect(
-      row.getByTestId("partner-company-badge").filter({ hasText: "HRP" }),
-    ).toBeVisible();
-    await expect(
-      row.getByTestId("partner-company-badge").filter({ hasText: "HR VN" }),
+      row.getByTestId("partner-company-badge").filter({ hasText: /HR VN\s*\/\s*HRP/ }),
     ).toBeVisible();
     await expect(row.locator("td").nth(2)).not.toContainText("—");
   });
