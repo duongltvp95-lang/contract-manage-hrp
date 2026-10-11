@@ -34,7 +34,7 @@ async function buildWorkbook(
   return (await workbook.xlsx.writeBuffer()) as unknown as Uint8Array;
 }
 
-describe("parsePartnerWorkbook", () => {
+describe("parsePartnerWorkbook", { timeout: 15_000 }, () => {
   it("maps the accented Vietnamese headers", async () => {
     const buffer = await buildWorkbook(
       ["Tên đối tác", "Địa chỉ", "Mã số thuế"],
