@@ -12,6 +12,7 @@ import {
   pickDate,
   runId,
   seedPartner,
+  selectCompany,
   selectPartner,
   sweep,
   gotoAndSettle,
@@ -72,6 +73,8 @@ test.describe("contract lifecycle", () => {
     // A new contract must name a partner (feature round 2); the free-text field
     // is gone from the create form.
     await selectPartner(page, partnerA.name);
+    // Round 33: and its company.
+    await selectCompany(page);
     await page.fill('input[name="durationText"]', "12 tháng");
 
     await clickSafe(page, "#expiryDate");

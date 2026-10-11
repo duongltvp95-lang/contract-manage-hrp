@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 
@@ -19,6 +19,7 @@ import {
   createContractAction,
   updateContractAction,
 } from "@/app/(app)/contracts/actions";
+import { listCompaniesAction } from "@/app/(app)/partners/actions";
 import { DateField } from "@/components/contracts/date-field";
 import {
   PartnerCombobox,
@@ -44,9 +45,16 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { isLegacyPartnerText } from "@/lib/partner-display";
 import type { ContractRow } from "@/lib/services/contracts";
-import type { PartnerRow } from "@/lib/services/partners";
+import type { Company, PartnerRow } from "@/lib/services/partners";
 import { putFileWithProgress, type PendingFile } from "@/lib/upload";
 
 /**
@@ -71,6 +79,14 @@ import { putFileWithProgress, type PendingFile } from "@/lib/upload";
  * `UpdateContractSchema` is the same schema as `CreateContractSchema`
  * (`UpdateContractSchema = CreateContractSchema` in packages/schemas), so one
  * resolver covers both modes.
+ *
+ * Round 33 adds the "Công ty" `<Select>` directly BELOW the partner combobox:
+ * the round 32 badge inside the combobox had to wait for a server round trip and
+ * read as a lagging control, so the company is now a field the user picks. The
+ * company list is fetched ONCE when the form mounts (not per keystroke, not per
+ * partner change) and is deliberately NOT refetched when the partner changes —
+ * the owner decision is that the user chooses, the app never infers it from the
+ * partner's own many-to-many company links.
  */
 
 type Phase = "idle" | "saving" | "uploading" | "done" | "failed";
@@ -82,6 +98,7 @@ const EMPTY_VALUES: CreateContractInput = {
   expiryDate: "",
   partnerText: "",
   partnerId: "",
+  companyId: "",
   notes: "",
 };
 
@@ -95,6 +112,7 @@ export type EditableContract = Pick<
   | "expiry_date"
   | "partner_text"
   | "partner_id"
+  | "company_id"
   | "notes"
 > & {
   /** Resolved by `getContract`; used only to tell a legacy row from a linked one. */
@@ -111,6 +129,9 @@ function toFormValues(contract: EditableContract | null | undefined): CreateCont
     expiryDate: contract.expiry_date ?? "",
     partnerText: contract.partner_text ?? "",
     partnerId: contract.partner_id ?? "",
+    // Round 33 — a contract created before round 33 has no company; `?? ""`
+    // keeps the Select on its placeholder instead of crashing on null.
+    companyId: contract.company_id ?? "",
     notes: contract.notes ?? "",
   };
 }
@@ -184,6 +205,42 @@ export function ContractForm({
     contract?.partner_id && contract?.partner_name
       ? { id: contract.partner_id, name: contract.partner_name }
       : null;
+
+  /**
+   * Round 33 — the organization's companies, fetched ONCE when the form mounts.
+   *
+   * Deliberately NOT re-fetched when the partner changes: the owner decision is
+   * that the user picks the company, so there is nothing to re-resolve. The list
+   * is the two seeded rows, so one fetch for the whole form is enough.
+   *
+   * A failed load surfaces with a retry button (the round 27 pattern), instead of
+   * silently disabling submit — otherwise a create would be blocked with no
+   * visible reason.
+   */
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companiesError, setCompaniesError] = useState<string | null>(null);
+  const [companiesRetry, setCompaniesRetry] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    listCompaniesAction()
+      .then((result) => {
+        if (!active) return;
+        if (!result.ok) {
+          setCompaniesError(result.message || "Không tải được danh sách công ty");
+          return;
+        }
+        setCompaniesError(null);
+        setCompanies(result.data);
+      })
+      .catch(() => {
+        if (!active) return;
+        setCompaniesError("Không tải được danh sách công ty. Vui lòng thử lại.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [companiesRetry]);
 
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -408,6 +465,79 @@ export function ContractForm({
                 đồng giữ nguyên nội dung cũ.
               </FormDescription>
             ) : null}
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+
+      {/* Round 33 — company the contract is signed for. Placed directly BELOW
+          the partner combobox, replacing the round 32 badge that used to sit
+          inside it (and only appeared after a server round trip). */}
+      <FormField
+        control={form.control}
+        name="companyId"
+        rules={{
+          validate: (value) => {
+            // Only a NEW contract must name its company (owner decision,
+            // round 33). Editing a contract created before round 33 keeps its
+            // empty company and must stay saveable.
+            if (isEdit) return true;
+            return value && value.length > 0 ? true : "Vui lòng chọn công ty";
+          },
+        }}
+        render={({ field }) => (
+          <FormItem>
+            <FormLabel>Công ty</FormLabel>
+            {companiesError ? (
+              <Alert variant="destructive" data-testid="contract-companies-error">
+                <AlertTitle>Không tải được danh sách công ty</AlertTitle>
+                <AlertDescription className="flex items-center gap-2">
+                  <span>{companiesError}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setCompaniesError(null);
+                      setCompaniesRetry((n) => n + 1);
+                    }}
+                    data-testid="contract-companies-retry"
+                  >
+                    Thử lại
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Select
+                value={field.value ?? ""}
+                onValueChange={field.onChange}
+                disabled={busy || companies.length === 0}
+              >
+                <FormControl>
+                  <SelectTrigger
+                    id="companyId"
+                    data-testid="contract-company-select"
+                    aria-invalid={
+                      form.formState.errors.companyId ? true : undefined
+                    }
+                  >
+                    <SelectValue placeholder="Chọn công ty" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  {companies.map((company) => (
+                    <SelectItem key={company.id} value={company.id}>
+                      {company.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <FormDescription>
+              {isEdit
+                ? "Công ty ký hợp đồng. Hợp đồng cũ chưa có công ty vẫn sửa được."
+                : "Chọn công ty ký hợp đồng."}
+            </FormDescription>
             <FormMessage />
           </FormItem>
         )}

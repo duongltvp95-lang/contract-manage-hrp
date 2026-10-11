@@ -396,6 +396,31 @@ export async function selectPartner(page: Page, name: string): Promise<void> {
   await option.click();
 }
 
+/**
+ * Picks a company in the contract form's "Công ty" `<Select>` (round 33).
+ *
+ * Round 33 made the company MANDATORY when creating a contract (owner
+ * decision), so every test that saves through the form has to choose one — the
+ * helper lives next to `selectPartner` so those tests stay a one-liner.
+ *
+ * The trigger is a shadcn Select, so the option is found by its ROLE (Radix
+ * renders each entry as `role="option"` with the label as text); `companyName`
+ * defaults to HRP, the first seeded company.
+ */
+export async function selectCompany(
+  page: Page,
+  companyName = "HRP",
+): Promise<void> {
+  const trigger = page.getByTestId("contract-company-select");
+
+  await trigger.waitFor({ state: "visible", timeout: 30_000 });
+  await trigger.click();
+
+  const option = page.getByRole("option", { name: companyName, exact: true });
+  await option.waitFor({ state: "visible", timeout: 15_000 });
+  await option.click();
+}
+
 // ---------------------------------------------------------------------------
 // Data helpers
 // ---------------------------------------------------------------------------

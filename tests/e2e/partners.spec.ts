@@ -13,6 +13,7 @@ import {
   pickDate,
   runId,
   seedPartner,
+  selectCompany,
   selectPartner,
   sweep,
 } from "./helpers";
@@ -119,6 +120,8 @@ test.describe("partner flow", () => {
 
     // The partner field is a searchable combobox fed by the directory.
     await selectPartner(page, partnerName);
+    // Round 33: a new contract must also name its company.
+    await selectCompany(page);
     await expect(page.getByTestId("partner-combobox")).toContainText(partnerName);
 
     await clickSafe(page, "#expiryDate");

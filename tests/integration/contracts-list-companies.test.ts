@@ -74,6 +74,8 @@ suite("contracts list companies (round 18)", () => {
     const linked = await probe(orgB, "create_contract", {
       contractNumber: `${TEST_PREFIX}HD liên kết công ty ${stamp}`,
       partnerId,
+      // Round 33 — a new contract must name its company.
+      companyId: ORG_B_HRP,
     });
     expect(linked.ok).toBe(true);
     linkedContractId = (linked.data as { id: string }).id;

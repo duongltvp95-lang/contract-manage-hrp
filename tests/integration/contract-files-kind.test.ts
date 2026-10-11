@@ -106,6 +106,8 @@ suite("contract_files.kind (round 16)", () => {
     const created = await probe(orgB, "create_contract", {
       contractNumber: `${TEST_PREFIX}HD-kind-${stamp}`,
       partnerId,
+      // Round 33 — a new contract must name its company.
+      companyId: "22222222-0000-4000-8000-000000000001",
     });
     expect(created.ok).toBe(true);
     contractId = (created.data as { id: string }).id;

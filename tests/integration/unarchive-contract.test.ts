@@ -76,6 +76,8 @@ async function makeContract(
   const created = await probe(session, "create_contract", {
     contractNumber: `${TEST_PREFIX}${label} ${stamp}`,
     partnerId,
+    // Round 33 — a new contract must name its company.
+    companyId: ORG_B_HRP,
   });
   expect(created.ok).toBe(true);
   return { contractId: (created.data as { id: string }).id };

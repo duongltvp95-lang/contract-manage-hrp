@@ -144,6 +144,40 @@ export async function listCompanies({
 }
 
 /**
+ * One company of the caller's organization (round 33).
+ *
+ * The single-id variant of `listCompanies`, used to validate the company a
+ * contract is signed for. Deliberately NOT implemented as
+ * `listCompanies(...).then(find)` — that would read the whole (tiny) list on
+ * every create and every update when one indexed lookup answers the question.
+ * Same answer as `getPartner`: a company of another organization reads as "not
+ * found", so nothing about the other tenant leaks.
+ */
+export async function getCompany(
+  id: string,
+  { organizationId }: PartnerContext,
+): Promise<ServiceResult<Company>> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select("id, name")
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (error) {
+    return dbError("getCompany", error);
+  }
+
+  if (!data) {
+    return err("not_found", "Không tìm thấy công ty");
+  }
+
+  return ok(data as Company);
+}
+
+/**
  * The company names linked to one partner, alphabetically.
  *
  * Round 32 — split into two layers:

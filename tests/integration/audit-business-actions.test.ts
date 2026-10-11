@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 
 import { hasLiveBackend } from "../setup/env";
-import { BASE_URL, ORG_A, ORG_B, TEST_PREFIX } from "./config";
+import { BASE_URL, ORG_A, ORG_A_HRP, ORG_B, TEST_PREFIX } from "./config";
 import {
   adminClient,
   bucketName,
@@ -162,6 +162,8 @@ suite("audit — business actions (round 8)", () => {
     const created = await probe(orgA, "create_contract", {
       contractNumber: `${TEST_PREFIX}HD-${stamp}`,
       partnerId: seededPartner.id,
+      // Round 33 — a new contract must name its company.
+      companyId: ORG_A_HRP,
       notes: "ghi chú",
     });
     expect(created.body.ok).toBe(true);
@@ -271,6 +273,8 @@ suite("audit — business actions (round 8)", () => {
     const created = await probe(orgA, "create_contract", {
       contractNumber: `${TEST_PREFIX}HD-TẢI-${stamp}`,
       partnerId: seededPartner.id,
+      // Round 33 — a new contract must name its company.
+      companyId: ORG_A_HRP,
     });
     const contractId = (created.body.data as { id: string }).id;
 

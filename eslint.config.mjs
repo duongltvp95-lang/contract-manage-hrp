@@ -36,6 +36,11 @@ const eslintConfig = [
       // generated bundles, not source, and must not be linted.
       ".next-test/**",
       ".next-e2e/**",
+      // Same thing, another name: an integration/dev server pointed at
+      // NEXT_DIST_DIR=.next-int. Already listed in .gitignore; listing it here
+      // too is what keeps `eslint .` from reporting ~11k problems inside
+      // generated `.next-int/dev/**` bundles.
+      ".next-int/**",
       "node_modules/**",
       "next-env.d.ts",
       ".pnpm-store/**",

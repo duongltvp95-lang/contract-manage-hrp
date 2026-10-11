@@ -14,6 +14,7 @@ import {
   R2_REQUEST,
   runId,
   seedPartner,
+  selectCompany,
   selectPartner,
   sweep,
   writeArtifact,
@@ -65,6 +66,8 @@ test.describe("upload", () => {
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
     await selectPartner(page, partner.name);
+    // Round 33: a new contract must also name its company.
+    await selectCompany(page);
     await page.setInputFiles('[data-testid="document-dropzone-input"]', pdfPath);
 
     await expect(page.locator("body")).toContainText(`e2e-${stamp}.pdf`);
@@ -101,6 +104,8 @@ test.describe("upload", () => {
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
     await selectPartner(page, partner.name);
+    // Round 33: a new contract must also name its company.
+    await selectCompany(page);
 
     // No notes field on the create form (round 16).
     await expect(page.locator('textarea[name="notes"]')).toHaveCount(0);
@@ -139,6 +144,8 @@ test.describe("upload", () => {
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
     await selectPartner(page, partner.name);
+    // Round 33: a new contract must also name its company.
+    await selectCompany(page);
     await page.setInputFiles('[data-testid="document-dropzone-input"]', [pngPath, jpgPath]);
 
     const queue = page.locator("body");
@@ -187,6 +194,8 @@ test.describe("upload", () => {
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', `${TEST_PREFIX}UPLOAD-PROGRESS-${stamp}`);
     await selectPartner(page, partner.name);
+    // Round 33: a new contract must also name its company.
+    await selectCompany(page);
     await page.setInputFiles('[data-testid="document-dropzone-input"]', pdfPath);
 
     await clickSafe(page, '[data-testid="contract-form-submit"]');
@@ -215,6 +224,8 @@ test.describe("upload", () => {
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
     await selectPartner(page, partner.name);
+    // Round 33: a new contract must also name its company.
+    await selectCompany(page);
     await page.setInputFiles('[data-testid="document-dropzone-input"]', pdfPath);
 
     await clickSafe(page, '[data-testid="contract-form-submit"]');

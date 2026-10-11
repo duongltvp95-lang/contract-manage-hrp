@@ -15,7 +15,7 @@ import { deleteObject } from "@/lib/r2/objects";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { recordCurrentUserAudit } from "./audit-logs";
-import { companiesForPartners, getPartner } from "./partners";
+import { companiesForPartners, getCompany, getPartner } from "./partners";
 import { dbError, err, ok, type ServiceErr, type ServiceResult } from "./types";
 
 /**
@@ -35,6 +35,8 @@ export type ContractRow = {
   expiry_date: string | null;
   partner_text: string | null;
   partner_id: string | null;
+  /** Round 33 — company the contract is signed for; null on pre-round-33 rows. */
+  company_id: string | null;
   notes: string | null;
   archived_at: string | null;
   created_by: string | null;
@@ -43,7 +45,7 @@ export type ContractRow = {
 };
 
 export const CONTRACT_COLUMNS =
-  "id, organization_id, contract_number, signed_date, duration_text, expiry_date, partner_text, partner_id, notes, archived_at, created_by, created_at, updated_at";
+  "id, organization_id, contract_number, signed_date, duration_text, expiry_date, partner_text, partner_id, company_id, notes, archived_at, created_by, created_at, updated_at";
 
 /**
  * A contract plus the resolved partner name (feature round 2).
@@ -123,6 +125,32 @@ export async function createContract(
     partnerName = partner.data.name;
   }
 
+  /**
+   * A new contract must name its company (round 33, owner decision).
+   *
+   * Same reasoning as the partner above, and enforced in the same place: the
+   * form asks for it, but this is the layer an API caller, an import script or a
+   * future client cannot bypass. `updateContract` deliberately does NOT require
+   * it — every contract created before round 33 has `company_id IS NULL`, and
+   * re-saving one must not force a company onto it.
+   */
+  if (!values.companyId) {
+    return err("validation", "Vui lòng chọn công ty cho hợp đồng");
+  }
+
+  /**
+   * A chosen company must belong to the caller's organization — the same IDOR
+   * guard as the partner above. RLS checks the *contract's* organization, not
+   * the organization that owns the referenced company, so without this an
+   * explicit check a crafted request could attach another tenant's company to
+   * this contract.
+   */
+  const companyId = values.companyId;
+  const company = await getCompany(companyId, { organizationId });
+  if (!company.ok) {
+    return err("validation", "Công ty được chọn không thuộc tổ chức của bạn");
+  }
+
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -137,6 +165,7 @@ export async function createContract(
       expiry_date: emptyToNull(values.expiryDate),
       partner_text: emptyToNull(values.partnerText),
       partner_id: partnerId,
+      company_id: companyId,
       notes: emptyToNull(values.notes),
     })
     .select(CONTRACT_COLUMNS)
@@ -152,7 +181,11 @@ export async function createContract(
     action: "create_contract",
     targetKind: "contract",
     targetId: created.id,
-    metadata: { contractNumber: created.contract_number ?? null, partnerName },
+    metadata: {
+      contractNumber: created.contract_number ?? null,
+      partnerName,
+      companyName: company.data.name,
+    },
   });
 
   return ok(created);
@@ -520,6 +553,32 @@ export async function updateContract(
     patch.partner_id = partnerId;
   }
 
+  /**
+   * The company link, only when the caller sent the key (round 33).
+   *
+   * `""` clears the link (a pre-round-33 contract keeps staying editable), a
+   * uuid sets it — and, as in `createContract`, the company must belong to the
+   * caller's organization, or this would attach another tenant's company to a
+   * contract.
+   *
+   * NOT required here: the owner decision is "bắt buộc khi tạo, không bắt buộc
+   * khi sửa", so an edit that leaves the field empty is legal.
+   */
+  if ("companyId" in raw) {
+    const companyId = values.companyId ? values.companyId : null;
+
+    if (companyId) {
+      const company = await getCompany(companyId, {
+        organizationId: context.organizationId,
+      });
+      if (!company.ok) {
+        return err("validation", "Công ty được chọn không thuộc tổ chức của bạn");
+      }
+    }
+
+    patch.company_id = companyId;
+  }
+
   if (Object.keys(patch).length === 0) {
     return err("validation", "Không có thay đổi nào để lưu");
   }
@@ -551,6 +610,7 @@ export async function updateContract(
     expiry_date: "expiryDate",
     partner_text: "partnerText",
     partner_id: "partnerId",
+    company_id: "companyId",
     notes: "notes",
   };
   const changed = Object.keys(patch).map((key) => FIELD_LABELS[key] ?? key);

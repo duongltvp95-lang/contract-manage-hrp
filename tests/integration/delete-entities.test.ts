@@ -118,6 +118,8 @@ suite("delete contract/partner (round 19)", () => {
     const created = await probe(privileged, "create_contract", {
       contractNumber: `${TEST_PREFIX}HD xoá ${stamp}`,
       partnerId,
+      // Round 33 — a new contract must name its company.
+      companyId: ORG_B_HRP,
     });
     expect(created.ok).toBe(true);
     const contractId = (created.data as { id: string }).id;
@@ -211,6 +213,8 @@ suite("delete contract/partner (round 19)", () => {
     const created = await probe(privileged, "create_contract", {
       contractNumber: `${TEST_PREFIX}HD chặn xoá ${stamp}`,
       partnerId,
+      // Round 33 — a new contract must name its company.
+      companyId: ORG_B_HRP,
     });
     expect(created.ok).toBe(true);
 

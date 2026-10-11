@@ -42,6 +42,8 @@ export type ContractDetailData = {
   partner_id: string | null;
   /** Resolved through the partner link; null for a contract with free text only. */
   partner_name?: string | null;
+  /** Round 33 — the company the contract is signed for; null pre-round-33. */
+  company_id: string | null;
   notes: string | null;
   archived_at: string | null;
   created_at: string;

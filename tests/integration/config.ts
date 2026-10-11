@@ -15,5 +15,15 @@ export const ORG_A = "11111111-1111-1111-1111-111111111111";
 /** A second tenant, created and destroyed by the suite. */
 export const ORG_B = "22222222-2222-2222-2222-222222222222";
 
+/**
+ * The seeded HRP company of `ORG_A` (round 10 seed).
+ *
+ * Round 33 made `companyId` MANDATORY when a contract is created through the
+ * service (`createContract`), so every integration test that builds a contract
+ * through the probe route has to pass one. The id is fixed by the round 10
+ * migration, exactly like `ORG_A` / `ORG_B`, so no test has to look it up.
+ */
+export const ORG_A_HRP = "00000000-0000-4000-8000-000000000001";
+
 /** Marks every row this suite creates, so cleanup can never miss one. */
 export const TEST_PREFIX = "W1TEST-";

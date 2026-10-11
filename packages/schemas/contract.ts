@@ -58,6 +58,30 @@ const optionalPartnerId = z
     "Đối tác được chọn không hợp lệ",
   );
 
+/**
+ * An optional company link (round 33).
+ *
+ * Exactly the same convention as `optionalPartnerId`: `""` is accepted and means
+ * "not chosen" (the service normalises it to SQL NULL), and a non-empty value
+ * must be a UUID so a crafted payload cannot smuggle a filter fragment into a
+ * PostgREST query.
+ *
+ * There is deliberately NO "required" rule here. The owner decision is that the
+ * company is mandatory when CREATING a contract but optional when editing an old
+ * one — and those are two different rules at two different layers. Encoding
+ * "required on create" here would also break editing: `UpdateContractSchema` is
+ * the same object, so a contract created before round 33 (whose `companyId` is
+ * `""`) could never be saved again. `createContract` is the layer that enforces
+ * it, because that is the layer an API caller cannot bypass.
+ */
+const optionalCompanyId = z
+  .string()
+  .optional()
+  .refine(
+    (value) => !value || z.guid().safeParse(value).success,
+    "Công ty được chọn không hợp lệ",
+  );
+
 /** Plan section 45 — the fields of the Add Contract form. */
 export const CreateContractSchema = z.object({
   contractNumber: optionalText(100, "Số hợp đồng"),
@@ -66,6 +90,8 @@ export const CreateContractSchema = z.object({
   expiryDate: optionalDate("Ngày hết hạn"),
   partnerText: optionalText(300, "Đối tác"),
   partnerId: optionalPartnerId,
+  /** Round 33 — company this contract is signed for (HRP / HR VN). */
+  companyId: optionalCompanyId,
   notes: optionalText(5000, "Ghi chú"),
 });
 

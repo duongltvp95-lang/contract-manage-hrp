@@ -8,6 +8,7 @@ import {
   hasLiveBackend,
   login,
   runId,
+  selectCompany,
   selectPartner,
   sweep,
 } from "./helpers";
@@ -191,6 +192,8 @@ test.describe("business action labels (round 8, part 2)", () => {
     await gotoAndSettle(page, "/contracts/new");
     await page.fill('input[name="contractNumber"]', contractNumber);
     await selectPartner(page, partnerName);
+    // Round 33: a new contract must also name its company.
+    await selectCompany(page);
     await clickSafe(page, '[data-testid="contract-form-submit"]');
     await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 60_000 });
 

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { hasLiveBackend } from "../setup/env";
-import { BASE_URL, ORG_A, TEST_PREFIX } from "./config";
+import { BASE_URL, ORG_A, ORG_A_HRP, TEST_PREFIX } from "./config";
 import {
   adminClient,
   createSecondTenant,
@@ -833,6 +833,8 @@ suite("user delete — administrators only (feature round 4, part 1)", () => {
           expiryDate: "2027-01-01",
           partnerText: "",
           partnerId,
+          // Round 33 — a new contract must name its company.
+          companyId: ORG_A_HRP,
           notes: "round 4 delete-with-contracts test",
         }),
       },

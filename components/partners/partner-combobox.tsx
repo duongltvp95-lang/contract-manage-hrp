@@ -3,8 +3,7 @@
 import { ChevronsUpDown, Loader2, Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { partnerCompaniesAction, searchPartnersAction } from "@/app/(app)/partners/actions";
-import { CompanyBadges } from "@/components/partners/partner-badges";
+import { searchPartnersAction } from "@/app/(app)/partners/actions";
 import { PartnerNameSheet } from "@/components/partners/partner-name-sheet";
 import { PartnerOptionRow } from "@/components/partners/partner-option-row";
 import { Button } from "@/components/ui/button";
@@ -22,7 +21,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * Searchable partner picker — feature round 2, part 2; quick search round 6;
- * company badges round 32.
+ * company badges round 32 (REMOVED in round 33).
  *
  * Round 2 built the picker from the shadcn primitives the project already
  * uses (`Popover`, `Button`, lucide icons) and filtered the whole directory in
@@ -34,12 +33,14 @@ import { cn } from "@/lib/utils";
  * The local `filterPartners` still runs on every keystroke, so the first page
  * answers instantly while the server query is in flight.
  *
- * Round 32 adds the linked-company badge. The companies for each option are
- * loaded lazily through `partnerCompaniesAction` when the popover opens (or
- * when the user types) — there is no upfront batch fetch. The result lives in
- * a small per-combobox map so the same id is only fetched once, and the option
- * row + the trigger both read from that map. If the caller already supplied
- * `companies` on the option, that wins (no network).
+ * Round 32 added the linked-company badge and paid for it: every rendered row
+ * asked the server which companies it belonged to (`partnerCompaniesAction`),
+ * and the trigger ALSO asked for the selected partner — so the badge on the
+ * closed combobox only appeared after a round trip, which the user saw as the
+ * control "lagging" after they picked a partner. Round 33 removes all of it:
+ * the company is now an explicit `<Select>` field directly below this one in
+ * the contract form, where the user chooses it rather than being told. Nothing
+ * in the picker touches the network except the debounced search.
  *
  * Creating a partner happens inline ("+ Thêm đối tác"), and the new row is
  * selected immediately. There is no "clear" affordance: a new contract must
@@ -51,13 +52,6 @@ export type PartnerOption = {
   id: string;
   name: string;
   tax_code?: string | null;
-  /**
-   * Round 32 — preloaded company names for this partner. Optional: if the
-   * caller already knows them (e.g. the directory row), the combobox skips the
-   * lazy fetch. When absent the combobox fetches them on demand through
-   * `partnerCompaniesAction`.
-   */
-  companies?: string[];
 };
 
 export function PartnerCombobox({
@@ -76,7 +70,7 @@ export function PartnerCombobox({
   /** First alphabetical page of the directory, read on the server. */
   partners: PartnerOption[];
   /** The partner already linked when editing, even if outside `partners`. */
-  selectedPartner?: { id: string; name: string; tax_code?: string | null; companies?: string[] } | null;
+  selectedPartner?: { id: string; name: string; tax_code?: string | null } | null;
   /** Called with a partner created from inside the combobox. */
   onPartnerCreated: (partner: PartnerRow) => void;
   disabled?: boolean;
@@ -96,25 +90,6 @@ export function PartnerCombobox({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const requestSeq = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Round 32 — companies keyed by partner id. Starts seeded from any option
-  // that already carries `companies`, so the directory page renders badges
-  // without a network round-trip. Unknown ids are filled in by the effect
-  // below.
-  const [companiesByPartner, setCompaniesByPartner] = useState<Record<string, string[]>>(
-    () => {
-      const seeded: Record<string, string[]> = {};
-      for (const option of partners) {
-        if (Array.isArray(option.companies) && option.companies.length > 0) {
-          seeded[option.id] = option.companies;
-        }
-      }
-      if (selectedPartner && Array.isArray(selectedPartner.companies) && selectedPartner.companies.length > 0) {
-        seeded[selectedPartner.id] = selectedPartner.companies;
-      }
-      return seeded;
-    },
-  );
 
   // Cancel any in-flight debounced search when the combobox unmounts.
   useEffect(() => {
@@ -153,38 +128,6 @@ export function PartnerCombobox({
     [selected, visible],
   );
 
-  // Round 32 — fetch companies for the SELECTED option (so the trigger can
-  // show its badge). Options inside the popover handle their own fetch (see
-  // `PartnerOptionRow`); the trigger needs the data even before the popover
-  // opens. Preloaded data wins; otherwise we hit the server once.
-  //
-  // The map `companiesByPartner` is the single source of truth: if it is
-  // already filled in (including the empty `[]` we write on failure), we
-  // skip. React 19 strict mode runs the effect twice on mount, but the second
-  // tick sees the just-set state and skips, so there is no duplicate request.
-  useEffect(() => {
-    if (!selected) return;
-    if (Array.isArray(selected.companies) && selected.companies.length > 0) return;
-    if (companiesByPartner[selected.id] !== undefined) return;
-
-    const idAtStart = selected.id;
-    let cancelled = false;
-    void partnerCompaniesAction(idAtStart)
-      .then((result) => {
-        if (cancelled) return;
-        const names = result.ok && result.data ? result.data : [];
-        setCompaniesByPartner((current) => ({ ...current, [idAtStart]: names }));
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setCompaniesByPartner((current) => ({ ...current, [idAtStart]: [] }));
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selected, companiesByPartner]);
-
   const capped = Boolean(needle) && (results?.length ?? 0) >= PARTNER_SEARCH_LIMIT;
 
   // Debounced server search, driven from the keystroke handler. The local
@@ -213,19 +156,6 @@ export function PartnerCombobox({
       setResults(outcome.ok ? (outcome.data ?? []) : []);
     }, 250);
   }
-
-  // Round 32 — resolve the badge list for an option, preferring preloaded data.
-  function companiesFor(option: PartnerOption): string[] | undefined {
-    if (Array.isArray(option.companies) && option.companies.length > 0) {
-      return option.companies;
-    }
-    return companiesByPartner[option.id];
-  }
-
-  // Round 32 — same for the trigger's currently-selected option.
-  const selectedCompanies: string[] | undefined = selected
-    ? companiesFor(selected)
-    : undefined;
 
   return (
     <>
@@ -256,9 +186,6 @@ export function PartnerCombobox({
           >
             <span className="flex min-w-0 flex-1 items-center gap-2">
               <span className="truncate">{selected ? selected.name : placeholder}</span>
-              {selected && selectedCompanies && selectedCompanies.length > 0 ? (
-                <CompanyBadges companies={selectedCompanies} />
-              ) : null}
             </span>
             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
           </Button>
@@ -304,10 +231,6 @@ export function PartnerCombobox({
                   key={partner.id}
                   option={partner}
                   isSelected={partner.id === value}
-                  companies={companiesFor(partner)}
-                  onCompaniesLoaded={(id, names) => {
-                    setCompaniesByPartner((current) => ({ ...current, [id]: names }));
-                  }}
                   onSelect={() => {
                     onChange(partner.id);
                     setPicked(partner);

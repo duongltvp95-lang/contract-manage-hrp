@@ -84,6 +84,8 @@ suite("dashboard partner + company (round 15)", () => {
     const linked = await probe(orgB, "create_contract", {
       contractNumber: `${TEST_PREFIX}HD liên kết ${stamp}`,
       partnerId,
+      // Round 33 — a new contract must name its company.
+      companyId: ORG_B_HRP,
       expiryDate: expiry,
     });
     expect(linked.ok).toBe(true);
