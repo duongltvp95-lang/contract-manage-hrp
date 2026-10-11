@@ -28,13 +28,25 @@ export function PartnersExportMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem asChild data-testid="partners-export-item-all">
-          <a href="/api/partners/export">Xuất tất cả</a>
+          <a href="/api/partners/export" title="Xuất toàn bộ danh bạ đối tác ra file Excel">
+            Xuất tất cả
+          </a>
         </DropdownMenuItem>
         <DropdownMenuItem asChild data-testid="partners-export-item-active">
-          <a href="/api/partners/export">Xuất đang hợp tác</a>
+          <a
+            href="/api/partners/export?status=active"
+            title="Chỉ xuất danh sách đối tác đang hợp tác"
+          >
+            Xuất đang hợp tác
+          </a>
         </DropdownMenuItem>
         <DropdownMenuItem asChild data-testid="partners-export-item-stopped">
-          <a href="/api/partners/export">Xuất đã dừng hợp tác</a>
+          <a
+            href="/api/partners/export?status=stopped"
+            title="Chỉ xuất danh sách đối tác đã dừng hợp tác"
+          >
+            Xuất đã dừng hợp tác
+          </a>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

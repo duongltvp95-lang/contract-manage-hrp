@@ -15,7 +15,7 @@ import { listPartners, type PartnerWithCount } from "@/lib/services/partners";
  * `listPartners` re-applies the organization scoping — the export is always
  * the caller's own directory.
  */
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json(
@@ -23,6 +23,10 @@ export async function GET(_request: NextRequest) {
       { status: 401 },
     );
   }
+
+  const rawStatus = request.nextUrl.searchParams.get("status");
+  const status =
+    rawStatus === "active" || rawStatus === "stopped" ? rawStatus : undefined;
 
   const list = await listPartners({ organizationId: user.organizationId });
   if (!list.ok) {
@@ -32,10 +36,22 @@ export async function GET(_request: NextRequest) {
     );
   }
 
-  const body = await formatXlsx(list.data);
+  const rows = status
+    ? list.data.filter((row) => row.status === status)
+    : list.data;
+
+  const body = await formatXlsx(rows);
 
   const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-  const filename = `doi-tac-${today}.xlsx`;
+  const suffix =
+    status === "active"
+      ? "dang-hop-tac"
+      : status === "stopped"
+        ? "da-dung-hop-tac"
+        : null;
+  const filename = suffix
+    ? `doi-tac-${suffix}-${today}.xlsx`
+    : `doi-tac-${today}.xlsx`;
 
   return new NextResponse(Buffer.from(body), {
     status: 200,
