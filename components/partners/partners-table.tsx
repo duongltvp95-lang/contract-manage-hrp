@@ -72,7 +72,6 @@ export function PartnersTable({
 
   const {
     filters,
-    setFilters,
     sortConfig,
     setSort,
     clearSort,
@@ -84,6 +83,7 @@ export function PartnersTable({
     regionOptions,
     statusOptions,
     companyOptions,
+    contractCountOptions,
     setColumnFilter,
     clearAllFilters,
   } = usePartnerTableFilters(rows);
@@ -263,21 +263,10 @@ export function PartnersTable({
                     Số hợp đồng
                   </span>
                   <ColumnFilterPopover
-                    label="Số hợp đồng"
-                    options={CONTRACT_COUNT_OPTIONS.map((opt) => ({
-                      value: opt.value,
-                      label: opt.label,
-                    }))}
-                    selected={filters.contractCount === "all" ? [] : [filters.contractCount]}
-                    onChange={(v) => {
-                      setFilters((previous) => {
-                        const current = previous.contractCount;
-                        const candidates = v.filter((value) => value !== current);
-                        const next = (candidates[0] ??
-                          (v.length === 0 ? "all" : current)) as PartnerFilters["contractCount"];
-                        return { ...previous, contractCount: next };
-                      });
-                    }}
+                    label={COLUMN_LABELS.contractCount}
+                    options={contractCountOptions}
+                    selected={filters.contractCount}
+                    onChange={(v) => setColumnFilter("contractCount", v)}
                     mode="static"
                     testIdPrefix="partner-filter-contract-count"
                     sortDirection={sortConfig.field === "contractCount" ? sortConfig.direction : null}

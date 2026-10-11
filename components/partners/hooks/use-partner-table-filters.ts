@@ -15,7 +15,7 @@ export type PartnerFilters = {
   region: string[];
   status: string[];
   company: string[];
-  contractCount: "all" | "zero" | "nonzero";
+  contractCount: string[];
 };
 
 export const EMPTY_FILTERS: PartnerFilters = {
@@ -25,17 +25,18 @@ export const EMPTY_FILTERS: PartnerFilters = {
   region: [],
   status: [],
   company: [],
-  contractCount: "all",
+  contractCount: [],
 };
 
 /** Human-readable label for a column, used in chips. */
-export const COLUMN_LABELS: Record<keyof Omit<PartnerFilters, "contractCount">, string> = {
+export const COLUMN_LABELS: Record<keyof PartnerFilters, string> = {
   name: "Tên đối tác",
   shortName: "Tên viết tắt",
   taxCode: "Mã số thuế",
   region: "Khu vực",
   status: "Trạng thái",
   company: "Công ty",
+  contractCount: "Số hợp đồng",
 };
 
 export const BLANK_VALUE = "__BLANK__";
@@ -53,11 +54,44 @@ export type SortConfig = {
   direction: "asc" | "desc";
 };
 
-export const CONTRACT_COUNT_OPTIONS: Array<{ value: "all" | "zero" | "nonzero"; label: string }> = [
-  { value: "all", label: "Tất cả" },
+export const CONTRACT_COUNT_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "zero", label: "0 hợp đồng" },
   { value: "nonzero", label: "Có hợp đồng" },
 ];
+
+/** Tạo danh sách options số hợp đồng có đếm số lượng (count) và giá trị cụ thể. */
+export function buildContractCountOptions(rows: PartnerWithCount[]): FilterOption[] {
+  let zeroCount = 0;
+  let nonzeroCount = 0;
+  const specificCounts = new Map<number, number>();
+
+  for (const row of rows) {
+    const c = row.contract_count ?? 0;
+    if (c === 0) {
+      zeroCount += 1;
+    } else {
+      nonzeroCount += 1;
+      specificCounts.set(c, (specificCounts.get(c) ?? 0) + 1);
+    }
+  }
+
+  const options: FilterOption[] = [
+    { value: "zero", label: "0 hợp đồng", count: zeroCount },
+    { value: "nonzero", label: "Có hợp đồng", count: nonzeroCount },
+  ];
+
+  // Sắp xếp các con số cụ thể tăng dần
+  const sortedSpecific = Array.from(specificCounts.entries()).sort(([a], [b]) => a - b);
+  for (const [num, count] of sortedSpecific) {
+    options.push({
+      value: String(num),
+      label: `${num} hợp đồng`,
+      count,
+    });
+  }
+
+  return options;
+}
 
 /** Counts each distinct value in `values` and returns options sorted A→Z (vi). */
 export function uniqueOptions(
@@ -146,6 +180,10 @@ export function usePartnerTableFilters(rows: PartnerWithCount[]) {
     () => uniqueOptionsFlattened(rows.map((row) => row.companies)),
     [rows],
   );
+  const contractCountOptions = useMemo<FilterOption[]>(
+    () => buildContractCountOptions(rows),
+    [rows],
+  );
 
   const filteredRows = useMemo(() => {
     const filtered = rows.filter((row) => {
@@ -172,8 +210,14 @@ export function usePartnerTableFilters(rows: PartnerWithCount[]) {
         const overlap = row.companies.some((c) => filters.company.includes(c));
         if (!overlap) return false;
       }
-      if (filters.contractCount === "zero" && row.contract_count !== 0) return false;
-      if (filters.contractCount === "nonzero" && row.contract_count <= 0) return false;
+      if (filters.contractCount.length > 0) {
+        const matches = filters.contractCount.some((filterVal) => {
+          if (filterVal === "zero") return row.contract_count === 0;
+          if (filterVal === "nonzero") return row.contract_count > 0;
+          return String(row.contract_count) === filterVal;
+        });
+        if (!matches) return false;
+      }
       return true;
     });
 
@@ -216,7 +260,7 @@ export function usePartnerTableFilters(rows: PartnerWithCount[]) {
     filters.region.length > 0 ||
     filters.status.length > 0 ||
     filters.company.length > 0 ||
-    filters.contractCount !== "all";
+    filters.contractCount.length > 0;
 
   const setColumnFilter = <K extends keyof PartnerFilters>(key: K, value: PartnerFilters[K]) => {
     setFilters((previous) => ({ ...previous, [key]: value }));
@@ -251,6 +295,7 @@ export function usePartnerTableFilters(rows: PartnerWithCount[]) {
     regionOptions,
     statusOptions,
     companyOptions,
+    contractCountOptions,
     setColumnFilter,
     clearAllFilters,
   };
