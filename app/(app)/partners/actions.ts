@@ -13,6 +13,7 @@ import {
 } from "@/lib/partner-import";
 import {
   companiesForOnePartner,
+  companyRowsForOnePartner,
   createPartner,
   deletePartner,
   deletePartners,
@@ -98,6 +99,34 @@ export async function partnerCompaniesAction(
   }
 
   const result = await companiesForOnePartner(id, {
+    organizationId: access.user.organizationId,
+  });
+
+  return fromService(result);
+}
+
+/**
+ * Round 33+ — công ty liên kết của 1 đối tác dạng `{id, name}[]` (form hợp
+ * đồng cần `id` để gửi xuống server; combobox chỉ cần tên nên dùng
+ * `partnerCompaniesAction` ở trên).
+ *
+ * Cùng pattern bảo mật với `partnerCompaniesAction`: partner không thuộc
+ * `organizationId` trả `[]`, lỗi DB được nuốt (`companyRowsForOnePartner` đã
+ * trả về `[]` qua `console.error`).
+ */
+export async function partnerCompanyRowsAction(
+  id: unknown,
+): Promise<ActionResult<Company[]>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  if (typeof id !== "string" || id.length === 0) {
+    return validationFailure("Thiếu thông tin đối tác", [
+      { path: "id", message: "Không xác định được đối tác" },
+    ]);
+  }
+
+  const result = await companyRowsForOnePartner(id, {
     organizationId: access.user.organizationId,
   });
 

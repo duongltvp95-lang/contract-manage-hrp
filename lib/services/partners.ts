@@ -256,6 +256,78 @@ export async function companiesForOnePartner(
   }
 }
 
+/**
+ * Round 33+ — công ty liên kết của 1 đối tác, trả về `{id, name}[]` thay vì
+ * chỉ tên.
+ *
+ * Hàm `companiesForOnePartner` ở trên đã trả `string[]` cho combobox (round 32
+ * chỉ cần tên). Form hợp đồng ở round 33+ cần cả `id` để truyền xuống
+ * `createContract` / `updateContract`, vì server `getCompany(companyId, …)`
+ * tra cứu theo ID — gửi tên sẽ hỏng lúc lưu. Cùng một câu truy vấn, chỉ đổi
+ * select từ `companies(name)` sang `companies(id, name)`.
+ *
+ * Khi partner không thuộc `organizationId` → `{ ok: true, data: [] }` (giống
+ * `companiesForOnePartner` — không lộ sự tồn tại của partner ở tổ chức khác).
+ * Lỗi DB cũng được nuốt tương tự vì đây là hàm lazy từ UI, không nằm trên
+ * đường chính của mutation.
+ */
+export async function companyRowsForOnePartner(
+  partnerId: unknown,
+  { organizationId }: PartnerContext,
+): Promise<ServiceResult<Company[]>> {
+  if (typeof partnerId !== "string" || partnerId.length === 0) {
+    return ok([]);
+  }
+
+  try {
+    const supabase = await createClient();
+
+    // Guard tường minh: nếu partner không thuộc org này, trả [] ngay,
+    // không truy vấn `partner_companies` (tránh lộ sự tồn tại qua lỗi RLS).
+    const { data: partnerRow, error: partnerError } = await supabase
+      .from("partners")
+      .select("id")
+      .eq("id", partnerId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+
+    if (partnerError) {
+      console.error("[service:companyRowsForOnePartner] partner lookup", partnerError);
+      return ok([]);
+    }
+
+    if (!partnerRow) {
+      return ok([]);
+    }
+
+    const { data, error } = await supabase
+      .from("partner_companies")
+      .select("companies(id, name)")
+      .eq("partner_id", partnerId);
+
+    if (error) {
+      console.error("[service:companyRowsForOnePartner] junction", error);
+      return ok([]);
+    }
+
+    const rows: Company[] = [];
+    for (const row of (data ?? []) as {
+      companies: { id: string; name: string } | { id: string; name: string }[] | null;
+    }[]) {
+      const embedded = Array.isArray(row.companies) ? row.companies[0] : row.companies;
+      if (embedded?.id && embedded?.name) {
+        rows.push({ id: embedded.id, name: embedded.name });
+      }
+    }
+
+    rows.sort((a, b) => a.name.localeCompare(b.name, "vi"));
+    return ok(rows);
+  } catch (error) {
+    console.error("[service:companyRowsForOnePartner] unexpected", error);
+    return ok([]);
+  }
+}
+
 /** Bulk company names per partner, one query for a whole page of partners. */
 export async function companiesForPartners(
   partnerIds: string[],

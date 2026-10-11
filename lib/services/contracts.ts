@@ -54,7 +54,11 @@ export const CONTRACT_COLUMNS =
  * includes every contract created before the partners table existed. Callers
  * fall back to `partner_text` in that case; `partner_text` is never removed.
  */
-export type ContractDetail = ContractRow & { partner_name: string | null };
+export type ContractDetail = ContractRow & {
+  partner_name: string | null;
+  /** Round 33+ — tên công ty ký hợp đồng; null khi `company_id IS NULL`. */
+  company_name: string | null;
+};
 
 /**
  * How many matching partner ids may be folded into the search filter.
@@ -207,7 +211,7 @@ export async function getContract(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select(`${CONTRACT_COLUMNS}, partners(name)`)
+    .select(`${CONTRACT_COLUMNS}, partners(name), companies(name)`)
     .eq("id", id)
     .eq("organization_id", organizationId)
     .maybeSingle();
@@ -228,14 +232,19 @@ export async function getContract(
   // the code is correct whichever the client hands over.
   const row = data as unknown as ContractRow & {
     partners: { name: string } | { name: string }[] | null;
+    companies: { name: string } | { name: string }[] | null;
   };
 
-  const { partners, ...contract } = row;
-  const embedded = Array.isArray(partners) ? (partners[0] ?? null) : partners;
+  const { partners, companies: companiesEmbed, ...rest } = row;
+  const embeddedPartner = Array.isArray(partners) ? (partners[0] ?? null) : partners;
+  const embeddedCompany = Array.isArray(companiesEmbed)
+    ? (companiesEmbed[0] ?? null)
+    : companiesEmbed;
 
   return ok({
-    ...contract,
-    partner_name: embedded?.name ?? null,
+    ...rest,
+    partner_name: embeddedPartner?.name ?? null,
+    company_name: embeddedCompany?.name ?? null,
   });
 }
 

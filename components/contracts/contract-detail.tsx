@@ -44,6 +44,8 @@ export type ContractDetailData = {
   partner_name?: string | null;
   /** Round 33 — the company the contract is signed for; null pre-round-33. */
   company_id: string | null;
+  /** Round 33+ — tên công ty (do server `getContract` resolve qua embed). */
+  company_name?: string | null;
   notes: string | null;
   archived_at: string | null;
   created_at: string;

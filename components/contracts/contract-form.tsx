@@ -19,7 +19,7 @@ import {
   createContractAction,
   updateContractAction,
 } from "@/app/(app)/contracts/actions";
-import { listCompaniesAction } from "@/app/(app)/partners/actions";
+import { partnerCompanyRowsAction } from "@/app/(app)/partners/actions";
 import { DateField } from "@/components/contracts/date-field";
 import {
   PartnerCombobox,
@@ -82,11 +82,25 @@ import { putFileWithProgress, type PendingFile } from "@/lib/upload";
  *
  * Round 33 adds the "Công ty" `<Select>` directly BELOW the partner combobox:
  * the round 32 badge inside the combobox had to wait for a server round trip and
- * read as a lagging control, so the company is now a field the user picks. The
- * company list is fetched ONCE when the form mounts (not per keystroke, not per
- * partner change) and is deliberately NOT refetched when the partner changes —
- * the owner decision is that the user chooses, the app never infers it from the
- * partner's own many-to-many company links.
+ * read as a lagging control, so the company is now a field the user picks.
+ *
+ * Round 33+ — danh sách công ty phụ thuộc vào đối tác đang chọn:
+ *   - Đổi đối tác → tải lại công ty của đối tác mới qua
+ *     `partnerCompanyRowsAction(partnerId)` (trả về `{id, name}[]`).
+ *   - Chưa chọn đối tác / đối tác chưa gán công ty → Select bị disable và hiện
+ *     gợi ý tiếng Việt cho người dùng.
+ *   - Chọn đối tác không có công ty là hành vi MONG ĐỢI khi tạo mới (Owner
+ *     chốt ở round 33+): hợp đồng mới không thể lưu nếu thiếu công ty, đây
+ *     là ràng buộc nghiệp vụ chứ không phải bug.
+ *   - Công ty BẮT BUỘC khi tạo mới (`createContract` ở server kiểm tra và trả
+ *     lỗi nếu rỗng), nhưng KHÔNG bắt buộc khi sửa hợp đồng cũ (round 33 đã
+ *     duyệt quy tắc này).
+ *   - Trường hợp chỉnh sửa: hợp đồng tạo trước round 33 có `company_id = null`
+ *     (hiển thị rỗng, vẫn lưu được); hợp đồng đã gán công ty mà công ty đó
+ *     không thuộc đối tác hiện tại vẫn phải hiển thị đúng giá trị đã chọn —
+ *     cách làm giống `selectedPartner`: ép một dòng "ảo" chỉ mang id và tên
+ *     (gọi qua action danh sách công ty của đối tác, không phải toàn bộ
+ *     công ty của tổ chức) để Select hiển thị nhãn đúng.
  */
 
 type Phase = "idle" | "saving" | "uploading" | "done" | "failed";
@@ -117,6 +131,10 @@ export type EditableContract = Pick<
 > & {
   /** Resolved by `getContract`; used only to tell a legacy row from a linked one. */
   partner_name?: string | null;
+  /** Resolved by `getContract`; tên công ty (round 33+) — dùng khi công ty
+   *  không nằm trong danh sách công ty của đối tác đang chọn (giống cách
+   *  `selectedPartner` giữ đối tác nằm ngoài trang đầu của combobox). */
+  company_name?: string | null;
 };
 
 function toFormValues(contract: EditableContract | null | undefined): CreateContractInput {
@@ -207,40 +225,102 @@ export function ContractForm({
       : null;
 
   /**
-   * Round 33 — the organization's companies, fetched ONCE when the form mounts.
+   * Round 33+ — công ty của đối tác đang chọn, tải lại mỗi khi `partnerId` đổi
+   * (qua `useWatch` ở dưới + `useEffect`).
    *
-   * Deliberately NOT re-fetched when the partner changes: the owner decision is
-   * that the user picks the company, so there is nothing to re-resolve. The list
-   * is the two seeded rows, so one fetch for the whole form is enough.
+   * Owner quyết định "ui_only": server không siết ràng buộc — đối tác chưa có
+   * công ty → danh sách rỗng, Select disable, gợi ý cho người dùng. Hợp đồng
+   * tạo mới BẮT BUỘC có công ty (`createContract` chặn ở service), nên người
+   * dùng không thể lưu với đối tác chưa gán công ty — đây là hành vi mong đợi.
    *
-   * A failed load surfaces with a retry button (the round 27 pattern), instead of
-   * silently disabling submit — otherwise a create would be blocked with no
-   * visible reason.
+   * Khi đổi đối tác: danh sách công ty cũ KHÔNG được giữ lại. Nếu công ty đang
+   * chọn không thuộc danh sách mới → reset `companyId` về "" để form không giữ
+   * trạng thái không hợp lệ. Trường hợp sửa hợp đồng cũ có `company_id` không
+   * thuộc đối tác hiện tại được xử lý riêng bằng cách nối thêm công ty đó vào
+   * danh sách hiển thị (xem `useEffect` bên dưới).
+   *
+   * Khi tải lỗi: hiện nút "Thử lại" (mẫu round 27) thay vì disable submit —
+   * nếu không người dùng tạo mới sẽ bị chặn mà không thấy lý do.
    */
-  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companyRows, setCompanyRows] = useState<Company[]>([]);
   const [companiesError, setCompaniesError] = useState<string | null>(null);
   const [companiesRetry, setCompaniesRetry] = useState(0);
 
+  // `useWatch` thay vì `form.watch()`: cái sau trả về function không memoizable
+  // và React Compiler không tối ưu quanh nó được (mẫu có sẵn ở `signedDate` /
+  // `expiryDate` ngay phía dưới).
+  const partnerId = useWatch({ control: form.control, name: "partnerId" });
+
+  /**
+   * Đối tác mà `companyRows` đang phản ánh. Dùng để (a) suy ra trạng thái
+   * đang tải mà không cần `setState` trong effect, và (b) loại bỏ dữ liệu của
+   * đối tác cũ ngay khi người dùng đổi đối tác — danh sách công ty của đối tác
+   * trước KHÔNG được giữ lại.
+   */
+  const [rowsPartnerId, setRowsPartnerId] = useState<string | null>(null);
+
+  // Đối tác đổi nhưng dữ liệu cũ chưa được tải xong → đang tải.
+  const companiesLoading = Boolean(partnerId) && rowsPartnerId !== partnerId;
+
   useEffect(() => {
+    // Chưa chọn đối tác → không gọi server. Tránh query vô ích cho đối tác "".
+    if (!partnerId) return;
+
     let active = true;
-    listCompaniesAction()
+    partnerCompanyRowsAction(partnerId)
       .then((result) => {
         if (!active) return;
+        setRowsPartnerId(partnerId);
+
         if (!result.ok) {
+          setCompanyRows([]);
           setCompaniesError(result.message || "Không tải được danh sách công ty");
           return;
         }
         setCompaniesError(null);
-        setCompanies(result.data);
+        let next = result.data;
+
+        // Hợp đồng cũ có `company_id` không thuộc đối tác hiện tại: ghép thêm
+        // một dòng {id, name} để Select hiển thị đúng nhãn, giống cách
+        // `selectedPartner` xử lý đối tác nằm ngoài trang đầu của combobox.
+        // Tên công ty đã có sẵn từ `EditableContract` (server trả về qua
+        // `getContract`); nếu thiếu tên thì chèn placeholder "" để Select vẫn
+        // hiện được id đang chọn thay vì rỗng.
+        if (isEdit && contract?.company_id) {
+          const currentId = contract.company_id;
+          const stillPresent = next.some((row) => row.id === currentId);
+          if (!stillPresent) {
+            next = [
+              ...next,
+              { id: currentId, name: contract.company_name ?? "" },
+            ];
+          }
+        }
+
+        setCompanyRows(next);
+
+        // Nếu công ty đang chọn không còn thuộc danh sách mới → reset về ""
+        // để form không giữ trạng thái không hợp lệ. Chỉ áp dụng khi KHÔNG
+        // phải edit hợp đồng cũ có id nằm ngoài danh sách (vì trường hợp đó
+        // đã được xử lý ở nhánh `stillPresent === false` ở trên).
+        const currentCompanyId = form.getValues("companyId");
+        if (
+          currentCompanyId &&
+          !next.some((row) => row.id === currentCompanyId)
+        ) {
+          form.setValue("companyId", "", { shouldDirty: false, shouldValidate: false });
+        }
       })
       .catch(() => {
         if (!active) return;
+        setRowsPartnerId(partnerId);
+        setCompanyRows([]);
         setCompaniesError("Không tải được danh sách công ty. Vui lòng thử lại.");
       });
     return () => {
       active = false;
     };
-  }, [companiesRetry]);
+  }, [partnerId, companiesRetry, isEdit, form, contract?.company_id, contract?.company_name]);
 
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -470,77 +550,112 @@ export function ContractForm({
         )}
       />
 
-      {/* Round 33 — company the contract is signed for. Placed directly BELOW
-          the partner combobox, replacing the round 32 badge that used to sit
-          inside it (and only appeared after a server round trip). */}
+      {/* Round 33+ — công ty ký hợp đồng. Đặt NGAY DƯỚI ô "Đối tác", thay cho
+          badge round 32 nằm trong combobox. Danh sách công ty phụ thuộc vào
+          đối tác đang chọn (xem `useEffect` ở trên). */}
       <FormField
         control={form.control}
         name="companyId"
         rules={{
           validate: (value) => {
-            // Only a NEW contract must name its company (owner decision,
-            // round 33). Editing a contract created before round 33 keeps its
-            // empty company and must stay saveable.
+            // Hợp đồng MỚI bắt buộc chọn công ty (quyết định Owner round 33+).
+            // Hợp đồng CŨ (tạo trước round 33, `company_id IS NULL`) vẫn sửa
+            // được, không bị ép phải có công ty.
             if (isEdit) return true;
             return value && value.length > 0 ? true : "Vui lòng chọn công ty";
           },
         }}
-        render={({ field }) => (
-          <FormItem>
-            <FormLabel>Công ty</FormLabel>
-            {companiesError ? (
-              <Alert variant="destructive" data-testid="contract-companies-error">
-                <AlertTitle>Không tải được danh sách công ty</AlertTitle>
-                <AlertDescription className="flex items-center gap-2">
-                  <span>{companiesError}</span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setCompaniesError(null);
-                      setCompaniesRetry((n) => n + 1);
-                    }}
-                    data-testid="contract-companies-retry"
+        render={({ field }) => {
+          const noPartnerChosen = !partnerId;
+          const partnerHasNoCompany =
+            !companiesError &&
+            !noPartnerChosen &&
+            !companiesLoading &&
+            companyRows.length === 0;
+          // Loading: Select hiển thị nhưng disabled để khỏi cho user bấm vào
+          // danh sách rỗng khi server chưa trả lời.
+          const selectDisabled =
+            busy || noPartnerChosen || companiesLoading || partnerHasNoCompany;
+
+          return (
+            <FormItem>
+              <FormLabel>Công ty</FormLabel>
+              {companiesError ? (
+                <Alert
+                  variant="destructive"
+                  data-testid="contract-companies-error"
+                >
+                  <AlertTitle>Không tải được danh sách công ty</AlertTitle>
+                  <AlertDescription className="flex items-center gap-2">
+                    <span>{companiesError}</span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setCompaniesError(null);
+                        setCompaniesRetry((n) => n + 1);
+                      }}
+                      data-testid="contract-companies-retry"
+                    >
+                      Thử lại
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <>
+                  <Select
+                    value={field.value ?? ""}
+                    onValueChange={field.onChange}
+                    disabled={selectDisabled}
                   >
-                    Thử lại
-                  </Button>
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <Select
-                value={field.value ?? ""}
-                onValueChange={field.onChange}
-                disabled={busy || companies.length === 0}
-              >
-                <FormControl>
-                  <SelectTrigger
-                    id="companyId"
-                    data-testid="contract-company-select"
-                    aria-invalid={
-                      form.formState.errors.companyId ? true : undefined
-                    }
-                  >
-                    <SelectValue placeholder="Chọn công ty" />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  {companies.map((company) => (
-                    <SelectItem key={company.id} value={company.id}>
-                      {company.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            <FormDescription>
-              {isEdit
-                ? "Công ty ký hợp đồng. Hợp đồng cũ chưa có công ty vẫn sửa được."
-                : "Chọn công ty ký hợp đồng."}
-            </FormDescription>
-            <FormMessage />
-          </FormItem>
-        )}
+                    <FormControl>
+                      <SelectTrigger
+                        id="companyId"
+                        data-testid="contract-company-select"
+                        aria-invalid={
+                          form.formState.errors.companyId ? true : undefined
+                        }
+                      >
+                        <SelectValue placeholder="Chọn công ty" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {/* Chỉ hiện dữ liệu của đối tác HIỆN TẠI. Trong lúc
+                          chờ server, `companyRows` còn là dữ liệu đối tác cũ —
+                          không được render ra để tránh hiện nhầm công ty. */}
+                      {(companiesLoading ? [] : companyRows).map((company) => (
+                        <SelectItem key={company.id} value={company.id}>
+                          {company.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {noPartnerChosen ? (
+                    <FormDescription data-testid="contract-companies-hint">
+                      Hãy chọn đối tác trước để xem công ty được liên kết.
+                    </FormDescription>
+                  ) : companiesLoading ? (
+                    <FormDescription data-testid="contract-companies-loading">
+                      Đang tải danh sách công ty…
+                    </FormDescription>
+                  ) : partnerHasNoCompany ? (
+                    <FormDescription data-testid="contract-companies-hint">
+                      Đối tác này chưa được gán công ty. Hãy gán công ty cho
+                      đối tác ở trang Đối tác.
+                    </FormDescription>
+                  ) : null}
+                </>
+              )}
+              <FormDescription>
+                {isEdit
+                  ? "Công ty ký hợp đồng. Hợp đồng cũ chưa có công ty vẫn sửa được."
+                  : "Chọn công ty ký hợp đồng."}
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          );
+        }}
       />
 
       <FormField

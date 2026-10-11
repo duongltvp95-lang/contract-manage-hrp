@@ -32,6 +32,12 @@ export const TEST_PREFIX = "E2ETEST-";
 export const HRP_COMPANY_ID = "00000000-0000-4000-8000-000000000001";
 
 /**
+ * Round 33+ — HR VN company UUID, dùng trong test lọc công ty theo đối tác
+ * (xem `partner-combobox-companies.spec.ts`).
+ */
+export const HR_VN_COMPANY_ID = "00000000-0000-4000-8000-000000000002";
+
+/**
  * The account the suite signs in as.
  *
  * No fallback values, deliberately: an earlier revision defaulted the password
@@ -466,6 +472,25 @@ export type SeededPartner = {
   name: string;
   cleanup: () => Promise<void>;
 };
+
+/**
+ * Links a partner to a company in the junction table — round 33+ tests for
+ * "company list filters by partner" need to seed both sides explicitly.
+ */
+export async function seedPartnerCompanyLink(
+  admin: SupabaseClient,
+  partnerId: string,
+  companyId: string,
+): Promise<void> {
+  const { error } = await admin
+    .from("partner_companies")
+    .insert({ partner_id: partnerId, company_id: companyId });
+  if (error) {
+    throw new Error(
+      `could not link partner ${partnerId} to company ${companyId}: ${error.message}`,
+    );
+  }
+}
 
 /**
  * Creates one partner in `organizationId` (feature round 2).
