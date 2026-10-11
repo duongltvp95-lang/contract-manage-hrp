@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   ORG_A,
+  HRP_COMPANY_ID,
   TEST_PREFIX,
   adminClient,
   buildJpeg,
@@ -14,6 +15,7 @@ import {
   R2_REQUEST,
   runId,
   seedPartner,
+  seedPartnerCompanyLink,
   selectCompany,
   selectPartner,
   sweep,
@@ -50,6 +52,10 @@ test.describe("upload", () => {
       organizationId: ORG_A,
       name: `${TEST_PREFIX}Đối tác tải tệp ${stamp}`,
     });
+    // Round 33+: Select "Công ty" chỉ hiện công ty của đối tác đang chọn, nên
+    // partner fixture phải có ít nhất một liên kết công ty — nếu không,
+    // `selectCompany` sẽ gặp một Select bị disable.
+    await seedPartnerCompanyLink(admin, partner.id, HRP_COMPANY_ID);
   });
 
   test.afterAll(async () => {

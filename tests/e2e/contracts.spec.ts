@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   ORG_A,
+  HRP_COMPANY_ID,
   TEST_PREFIX,
   adminClient,
   clickSafe,
@@ -12,6 +13,7 @@ import {
   pickDate,
   runId,
   seedPartner,
+  seedPartnerCompanyLink,
   selectCompany,
   selectPartner,
   sweep,
@@ -52,6 +54,11 @@ test.describe("contract lifecycle", () => {
       organizationId: ORG_A,
       name: `${TEST_PREFIX}Đối tác đổi sang ${stamp}`,
     });
+    // Round 33+: Select "Công ty" chỉ hiện công ty của đối tác đang chọn. Hai
+    // partner này phải có liên kết công ty, nếu không `selectCompany` sẽ gặp
+    // một Select bị disable.
+    await seedPartnerCompanyLink(admin, partnerA.id, HRP_COMPANY_ID);
+    await seedPartnerCompanyLink(admin, partnerB.id, HRP_COMPANY_ID);
   });
 
   test.afterAll(async () => {
@@ -252,13 +259,12 @@ test.describe("contract lifecycle", () => {
     const row = page.getByRole("row").filter({ hasText: contractNumber });
     await expect(row).toBeVisible({ timeout: 30_000 });
 
-    // Two company badges (HRP + HR VN), no em-dash.
-    await expect(row.getByTestId("partner-company-badge")).toHaveCount(2);
+    // Round 35 — CompanyBadges gộp 2 công ty thành 1 badge, sắp xếp theo
+    // alphabet ổn định → "HR VN / HRP" thay vì 2 badge riêng. Vẫn khẳng
+    // định cả HRP + HR VN đều xuất hiện, nhưng qua 1 dòng, không phải 2.
+    await expect(row.getByTestId("partner-company-badge")).toHaveCount(1);
     await expect(
-      row.getByTestId("partner-company-badge").filter({ hasText: "HRP" }),
-    ).toBeVisible();
-    await expect(
-      row.getByTestId("partner-company-badge").filter({ hasText: "HR VN" }),
+      row.getByTestId("partner-company-badge").filter({ hasText: /HR VN\s*\/\s*HRP/ }),
     ).toBeVisible();
   });
 });
