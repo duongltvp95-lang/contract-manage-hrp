@@ -1,229 +1,121 @@
 # BÀN GIAO VỊ TRÍ T2 — DỰ ÁN CONTRACT MANAGER
 
-> Tài liệu dành cho T2 mới tiếp quản. Đọc hết trước khi nhận việc đầu tiên.
+> Tài liệu dành cho **T2 mới (AI Coder / Pair Programmer)** tiếp quản. Đọc hết trước khi nhận việc đầu tiên.
 >
-> Tiếp quản: 2026-10-05 (sau đợt xác minh 48/48 trên production).
-> Cập nhật: 2026-10-06 — bổ sung **Round 3** (audit logs + admin user actions).
-> File này **không** chứa mật khẩu / PAT / service_role / R2 secret.
+> **Lần cập nhật:** 2026-10-11 (Snapshot sau Round 37, commit `034a108`)
+> **Người viết:** T1 (Owner/điều phối)
+> **Trạng thái:** Wave 1 + Round 2 → 37 **ĐÃ MERGE & DEPLOY**. Working tree **sạch hoàn toàn, KHÔNG có task nào dở**.
+> 
+> File này **không** chứa mật khẩu / PAT / `service_role` / R2 secret. Mọi bí mật nằm trong `.env.local`.
 
 ---
 
-## 0. Round 3 đang dở — đọc trước khi làm việc khác
+## 0. TỔNG QUAN HIỆN TRẠNG CHO T2 MỚI TIẾP QUẢN
 
-Trên working tree hiện có **code round 3 đã viết nhưng CHƯA được verify, CHƯA được commit, CHƯA được push**. Đây là phần việc T2 phải xử lý xong trước khi nhận task mới.
+Khi nhận việc, bạn đang tiếp quản một hệ thống đã hoàn thiện tính năng cốt lõi và đang chạy production ổn định:
 
-**Scope round 3** (Owner đã duyệt ngày 2026-10-06):
+| Hạng mục | Trạng thái thực tế |
+|---|---|
+| **App** | Contract Manager — quản lý hợp đồng và danh bạ đối tác cho **HRP / HR VN**. |
+| **Production chính** | `https://cm.hrpartner.vn` (DNS CNAME → Vercel) |
+| **Production phụ** | `https://contract-manage-hrp.vercel.app` (Vercel auto-deploy từ `main`) |
+| **Trạng thái Git** | Nhánh `main` sạch hoàn toàn, đồng bộ với remote. |
+| **Dữ liệu thật** | **144 đối tác** (123 đang hợp tác, 21 đã dừng), **0 hợp đồng** (đã dọn dẹp sạch), **1.118+ dòng audit log**. |
+| **Tài khoản thật** | Owner `duongltvp95@gmail.com` (Admin), user nội bộ `duongamo10300@gmail.com` (User). |
+| **Bộ kiểm thử** | 272 Unit tests (100% pass), 27 Integration test files, 18 E2E spec files. |
 
-1. **Audit logs**: bảng `audit_logs` (migration `20261006090000_create_audit_logs.sql`), service `lib/services/audit-logs.ts`, schema `packages/schemas/audit-log.ts`, trang `/admin/logs` với bảng + form lọc + export CSV. Ghi 4 action: `create_user`, `update_user_role`, `set_active_user`, `export_logs`. **App cố ý không có action xoá user** (round 3 đã drop `delete-user-dialog`, `DeleteUserSchema`, `deleteUser` service, `delete_user` audit action) — đây là quyết định nghiệp vụ, không phải thiếu sót.
-2. **Admin user actions hoàn chỉnh**: `users-table.tsx` thêm nút Edit Role/Activate, dialog `edit-user-dialog.tsx`, `user-row-actions.tsx`. Service `lib/services/users.ts` có `createUser`, `updateUserRole`, `setUserActive`. Sidebar đã có link Users, link Logs mới.
-4. **Test mới**: `tests/e2e/admin-logs.spec.ts`, `tests/integration/users.test.ts` (đã viết), `tests/unit/audit-logs.test.ts` (đã viết).
-
-**Quyết định của T1 (Owner) — không tự ý đổi:**
-
-- Một PR gộp round 3 (không tách).
-- Áp migration trên **cả local lẫn remote Supabase** (cùng đợt với commit — đợt trước quên push migration là phải fix nóng).
-- T2 **được** sửa những gì cần để pass test, nhưng phải báo rõ lệch trong report.
-
-**File KHÔNG ĐƯỢC COMMIT (xoá trước khi `git add`):**
-
-- `queries/*.cjs` — 6 file diagnostic cũ (check-login, check-owner, probe-change, probe-password, recreate-owner, restore-owner, set-owner-password). Đã dùng để khôi phục tài khoản Owner ngày 2026-10-05, hết việc → xoá.
-- `scripts/_cleanup-3c.cjs`, `scripts/_verify-3c.cjs` — script chạy một lần khi viết round 3, hết việc → xoá.
-- `AGENTS.md`, `CLAUDE.md` — T1 chưa duyệt nội dung. **DỪNG LẠI hỏi T1** trước khi add.
-
-**File MỚI cần xem trước khi review:**
-
-- `tests/integration/fixtures/users-actions-probe.route.ts` — fixture phục vụ `users.test.ts`. Đọc để chắc nó wire đúng với service role.
-
-Quy tắc làm việc bắt buộc nằm ở `.cursor/rules/agent-working-rules.mdc`
-(`alwaysApply: true`) — đọc file đó trước. Tóm tắt: **tiếng Việt**, **không in
-credential**, **REUSE FIRST**, **không tự đổi quyết định Owner**, **báo cáo 5 mục**.
+### Các phân hệ cốt lõi đã hoàn thành:
+1. **Quản lý Hợp đồng**: CRUD, vòng đời trạng thái (Đang hoạt động / Đã hết hạn / Đã lưu trữ), liên kết công ty (`contracts.company_id` ở Round 37), tải tệp PDF/Ảnh trực tiếp lên Cloudflare R2 qua presigned URL, trình xem tệp 65/35 (`react-pdf`).
+2. **Danh bạ Đối tác**: Quản lý thông tin, liên kết công ty N-N (`partner_companies` với HRP/HR VN), chống trùng 5 khoá khi import Excel (`MST → Viết tắt → Tên → Địa chỉ → Khu vực`), kiểm tra trùng MST theo công ty trên form tay, bộ lọc cột kiểu Excel trực tiếp trên header bảng (Round 37 popover multi-select).
+3. **Phân quyền & Xoá dữ liệu**:
+   - Xoá hợp đồng & đối tác: Chỉ dành cho **admin đặc quyền** (`DELETE_ADMIN_EMAILS`, mặc định Owner). Xoá hợp đồng bắt buộc xoá tệp R2 trước (fail R2 = huỷ toàn bộ); xoá đối tác bị chặn khi còn hợp đồng.
+   - Xoá người dùng: Admin only, áp dụng cơ chế **tombstone** (`profiles.is_tombstone = true`) để bảo toàn khoá ngoại tham chiếu từ `audit_logs.actor_id`.
+4. **Nhật ký Hệ thống (Audit Logs)**: Ghi 13 loại hành động nghiệp vụ với câu mô tả tiếng Việt chi tiết; hỗ trợ xuất file Excel/Text.
+5. **Theme cá nhân hoá**: 3 bộ màu (accent, background, sidebar) lưu tại `profiles`, áp dụng qua `data-*` attribute trên root layout, không gây giật màn hình (no FOUC).
 
 ---
 
-## 1. Tài khoản test BẮT BUỘC phải tồn tại
+## 1. TÀI KHOẢN TEST BẮT BUỘC PHẢI TỒN TẠI
 
-Cả `pnpm test:integration` và `pnpm test:e2e` đăng nhập vào **Supabase + R2
-thật**. Không có tài khoản thì suite **fail**, không phải skip — vì cờ
-`hasLiveBackend` chỉ kiểm tra biến môi trường có *đặt* hay không, chứ không kiểm
-tra tài khoản có *tồn tại* hay không:
-
-```44:53:tests/e2e/helpers.ts
-export const hasLiveBackend = Boolean(
-  process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY &&
-    process.env.SUPABASE_SERVICE_ROLE_KEY &&
-    ADMIN_EMAIL &&
-    ADMIN_PASSWORD,
-);
-```
-
-### Tài khoản đang dùng
+Cả `vitest` (integration) và `playwright` (e2e) đều kiểm thử trên **Supabase + R2 thật** (không mock).
+Tài khoản test bắt buộc:
 
 | Thuộc tính | Giá trị |
 |---|---|
-| Email | `e2e.wave2@hrpartner.vn` |
-| Mật khẩu | 28 ký tự, **lưu trong `.env.local`**, không ghi ở đây |
-| `email_confirmed_at` | phải khác null (auto-confirm) |
+| **Email** | `e2e.wave2@hrpartner.vn` |
+| **Mật khẩu** | Lưu trong `.env.local` (`TEST_ADMIN_PASSWORD`), **không in ra ngoài** |
+| `email_confirmed_at` | Khác null (đã xác thực) |
 | `profiles.role` | `admin` |
 | `profiles.organization_id` | `11111111-1111-1111-1111-111111111111` (ORG_A) |
 | `profiles.is_active` | `true` |
 
-Cả ba điều kiện cuối là **bắt buộc**: thiếu `role='admin'` thì spec `settings`
-và `security` không thấy mục quản lý người dùng; thiếu `email_confirmed_at` thì
-đăng nhập bị từ chối (public sign-up đã tắt).
+> ⚠️ **TUYỆT ĐỐI KHÔNG XOÁ** tài khoản `e2e.wave2@hrpartner.vn`. Nếu tài khoản này mất, toàn bộ suite e2e/integration sẽ fail ở bước đăng nhập.
 
-### Trước mỗi lần chạy suite
-
-Sau khi `pnpm test:e2e`, **kiểm tra lại tài khoản còn tồn tại**:
-
-```
-GET {SUPABASE_URL}/auth/v1/admin/users?page=1&per_page=200
-Header: apikey + Authorization: Bearer {SUPABASE_SERVICE_ROLE_KEY}
-```
-
-Nếu không thấy `e2e.wave2@hrpartner.vn` → chạy lại script ở mục 2, **đừng sửa
-`.env.local` trỏ sang tài khoản khác**.
-
-### Vì sao phải có quy trình này
-
-Đợt trước, tài khoản test của Wave 1 bị xoá khỏi Supabase auth giữa lúc chạy
-suite và lúc kiểm tra lại — **không phải do code trong repo** (mọi đường dẫn
-cleanup đều lọc theo prefix `E2ETEST-` / `W1TEST-` / `e2e.user.*`). Hệ quả: lần
-chạy kế tiếp fail ở bước login với thông điệp `Invalid login credentials`, dễ
-tưởng là lỗi app. Vì vậy bắt buộc coi "tài khoản test tồn tại" là **tiền đề kiểm
-chứng**, không phải hậu kiểm.
+### Cách khôi phục nếu lỡ bị xoá:
+Sử dụng script service-role:
+1. `auth.admin.createUser({ email: 'e2e.wave2@hrpartner.vn', password, email_confirm: true })`
+2. `profiles.update({ role: 'admin', organization_id: ORG_A, is_active: true })`
+3. Xác minh đăng nhập bằng `POST {SUPABASE_URL}/auth/v1/token?grant_type=password`.
 
 ---
 
-## 2. Khi phải tạo lại tài khoản test
+## 2. TUYỆT ĐỐI KHÔNG ĐỤNG DỮ LIỆU THẬT CỦA OWNER
 
-Dùng **service role** (`.env.local` đã có `SUPABASE_SERVICE_ROLE_KEY`):
-
-1. `auth.admin.createUser({ email, password, email_confirm: true })`
-2. Trigger `on_auth_user_created` tự tạo `profiles` với `role='user'` — phải
-   **nâng lên `admin`**:
-   `profiles.update({ role: 'admin', organization_id: ORG_A, is_active: true })`
-3. Ghi `TEST_ADMIN_EMAIL` / `TEST_ADMIN_PASSWORD` vào `.env.local`
-4. Kiểm tra đăng nhập thật: `POST {SUPABASE_URL}/auth/v1/token?grant_type=password`
-
-Cơ chế này giống hệt `lib/services/users.ts` (`createUser`) — reuse theo quy tắc
-3, đừng tự phát minh cách khác. Chi tiết migration:
-
-```53:71:supabase/migrations/20261003090200_create_profiles.sql
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  insert into public.profiles (id, organization_id, full_name, role, is_active)
-  values (
-    new.id,
-    public.default_organization_id(),
-    nullif(new.raw_user_meta_data ->> 'full_name', ''),
-    'user',
-    true
-  )
-  on conflict (id) do nothing;
-
-  return new;
-end;
-$$;
-```
-
-**Không** tạo trực tiếp bằng SQL `insert into auth.users` — Supabase cấm, và bypass
-mất luôn trigger.
+- Tài khoản `duongltvp95@gmail.com` (Khương Văn Đường) là tài khoản thật của Owner.
+- Tuyệt đối **không dùng** tài khoản Owner cho test E2E.
+- Dữ liệu của Owner (144 đối tác thật, cấu hình theme cá nhân) **không được xoá hoặc sửa đổi**.
+- Khi chạy kiểm thử, mọi bản ghi tạo mới **bắt buộc dùng tiền tố** `E2ETEST-` hoặc `W1TEST-`. Suite kiểm thử có helper `sweep()` tự động dọn các bản ghi có tiền tố này sau mỗi lần chạy.
 
 ---
 
-## 3. Không dùng tài khoản thật của Owner để test
+## 3. MÔI TRƯỜNG VẬN HÀNH & GOTCHA TRÊN MÁY CỦA OWNER
 
-Tài khoản `duongltvp95@gmail.com` (Khương Văn Đường) là tài khoản **thật**.
+Để không mất thời gian cấu hình, T2 cần lưu ý các đặc thù môi trường Windows của Owner:
 
-Lý do không được trỏ `TEST_ADMIN_EMAIL` vào nó:
+### 3.1 Đường dẫn thực thi (Runtime paths)
+Node.js và pnpm không nằm trong biến môi trường PATH mặc định của hệ điều hành:
+- **Node.js**: `C:\Users\Admin\AppData\Local\Programs\aicoworker\app\nodejs\node.exe` (v22)
+- **pnpm**: `C:\Users\Admin\AppData\Roaming\dsh-desktop\harness\.desktop-bin\pnpm.cmd`
+- **Cách thiết lập PATH trước khi chạy lệnh PowerShell**:
+  ```powershell
+  $env:PATH = "C:\Users\Admin\AppData\Local\Programs\aicoworker\app\nodejs;C:\Users\Admin\AppData\Roaming\dsh-desktop\harness\.desktop-bin;" + $env:PATH;
+  ```
 
-- Mỗi lần chạy suite sẽ **tạo và xoá** user, đối tác, hợp đồng dưới tài khoản
-  Owner — rủi ro thao tác nhầm chạm dữ liệu thật.
-- `settings.spec.ts` tạo user mới; `security.spec.ts` tạo tenant thứ hai. Cả hai
-  đều ghi vào tài khoản đang đăng nhập.
-- Trái với nguyên tắc "tách biệt test / prod" mà dự án chốt từ đầu.
-
-Dữ liệu của Owner **không được xoá** dưới bất kỳ hình thức nào.
-
----
-
-## 4. Dữ liệu thật và dọn dẹp
-
-Suite chạy trên backend thật nên **phải dọn về 0 sau mỗi lần chạy**:
-
-| Kiểm tra | Kỳ vọng |
-|---|---|
-| `contracts` khớp `E2ETEST-%` / `W1TEST-%` | 0 |
-| `partners` khớp `E2ETEST-%` / `W1TEST-%` | 0 |
-| object R2 dưới tiền tố `contracts/` | 0 |
-| `profiles` không có auth user (mồ côi) | 0 |
-| user `e2e.user.*` do `settings.spec` tạo | 0 |
-
-Suite có `sweep()` trong `tests/e2e/helpers.ts` và `sweepTestRows()` trong
-`tests/integration/helpers.ts`, nhưng **vẫn phải kiểm tra lại bằng truy vấn
-trực tiếp** trước khi báo cáo "xong". Xem mục 6.
-
-### App cố ý không có chức năng xoá đối tác / hợp đồng
-
-Xoá đối tác / hợp đồng là **quyết định nghiệp vụ đã chốt**, không phải
-thiếu sót. Khi cần dọn dữ liệu thì dùng service role hoặc Supabase Dashboard.
-
-Xoá **user** đã có từ **round 4** (admin only, có confirmEmail, chặn
-self-delete và last-admin). Xem `lib/services/users.ts` (`deleteUser`) và
-helper `ensureTombstoneProfile` trong cùng file — tombstone được **tự tạo lúc
-runtime** qua `service.auth.admin.createUser` (id không thể resolve sẵn), nên
-cột đánh dấu trong `profiles` phải là **cờ `is_tombstone`** (migration
-`20261006130000_profiles_is_tombstone.sql`, round 5) chứ không phải so sánh
-id. `listUsers` lọc `is_tombstone = false` nên UI Quản lý người dùng không
-hiện dòng giả; cờ này tách biệt với `is_active=false` (user thật bị
-deactivate vẫn hiện trên UI với badge ngược, round 3). Khi xoá một actor đã
-từng ghi audit log, `actor_id` của các row cũ được re-point sang tombstone
-(cùng `organization_id`) để tránh FK `on delete restrict` trên
-`audit_logs.actor_id`.
-
-> **Round 5.1 (Owner duyệt 2026-10-06):** script `scripts/apply-round5-prod.mjs`
-> đã chuẩn bị xong (dùng `public.exec_sql` + `service.from("profiles").update()`).
-> Tại thời điểm commit round 5.1, function `public.exec_sql` **chưa tồn tại trên
-> Supabase remote** — Owner cần dán nội dung
-> `supabase/migrations/20261006140000_create_exec_sql.sql` vào SQL Editor trước,
-> rồi mới chạy `node scripts/apply-round5-prod.mjs`. Sau khi script pass, row
-> tombstone production (`81c03089-de31-4799-9361-ead99bc525f3`) đã được backfill
-> `is_tombstone=true`. **Code production vẫn chưa lọc** cho đến khi T1 push
-> `c3fbda6` (round 5 code) + redeploy Vercel.
+### 3.2 Lỗi Windows ACL Deny trên `.next*` (Quan trọng)
+Thư mục `.next`, `.next-test`, `.next-e2e` trên máy Owner từng bị dính ACL `Everyone Deny DeleteSubdirectoriesAndFiles`.
+- Khiến `next dev` và `next build` mặc định bị lỗi `EPERM` khi rename/unlink file manifest.
+- **Cách vòng cho build**: Dùng `$env:NEXT_DIST_DIR = ".next-verify"; pnpm next build` (thư mục mới không kế thừa deny).
+- **Lưu ý**: Sau khi Owner chạy gỡ deny bằng `icacls`, toàn bộ lệnh test dev sẽ hoạt động bình thường.
 
 ---
 
-## 5. App chạy ở đâu
+## 4. QUY TRÌNH LÀM VIỆC (RULE BẮT BUỘC)
 
-- Production: `https://contract-manage-hrp.vercel.app`
-- Local: `http://localhost:3000` (port 3000 là bắt buộc — CORS của bucket R2 chỉ
-  cho phép origin này, xem `playwright.config.ts`)
-- Repo: `https://github.com/duongltvp95-lang/contract-manage-hrp`, branch `main`
+Tuân thủ nghiêm ngặt file quy tắc `.cursor/rules/agent-working-rules.mdc`:
 
-Chạy e2e trên production:
-
-```powershell
-$env:E2E_BASE_URL="https://contract-manage-hrp.vercel.app"
-pnpm test:e2e
-```
+1. **Ngôn ngữ 100% Tiếng Việt**: Mọi giải thích, trao đổi, commit message và tài liệu phải dùng tiếng Việt chuẩn (thuật ngữ kỹ thuật giữ nguyên).
+2. **Không rò rỉ Credential**: Không bao giờ in ra chat hoặc log các khoá bí mật (`SUPABASE_SERVICE_ROLE_KEY`, `R2_SECRET_ACCESS_KEY`, mật khẩu).
+3. **REUSE FIRST**: Ưu tiên tái sử dụng code có sẵn trong repo -> shadcn/ui -> thư viện ngoài -> mới tự viết.
+4. **Không tự ý đổi quyết định Owner**: Báo cáo rõ ràng nếu phát hiện lỗi hoặc đề xuất giải pháp.
+5. **Báo cáo 5 mục bắt buộc sau mỗi task**:
+   * (1) Đã làm (kèm danh sách file/commit)
+   * (2) Kết quả kiểm chứng THẬT (lệnh đã chạy, kết quả pass/fail cụ thể)
+   * (3) Lệch so với prompt (nếu có, kèm lý do)
+   * (4) Tự động commit/push? (**Chưa** - luôn chờ Owner duyệt)
+   * (5) Vấn đề còn lại & rủi ro
 
 ---
 
-## 6. Quy trình báo cáo (5 mục bắt buộc)
+## 5. BACKLOG CÁC NHIỆM VỤ TIẾP THEO (ROUND 33+)
 
-1. **Đã làm** — theo từng bước, kèm file/commit hash.
-2. **Kết quả kiểm chứng** — lệnh đã chạy + kết quả thật. Không nói "đã xong"
-   mà không có bằng chứng (số test pass/mấy, build pass/fail, dữ liệu về 0 chưa).
-3. **Lệch so với prompt** — làm khác chỉ dẫn thì nói rõ và giải thích lý do.
-4. **Tự động commit/push?** — luôn hỏi T1 trước. **Không push khi chưa được duyệt.**
-5. **Vấn đề còn lại / rủi ro** — kể cả thứ mình không kiểm được.
+Dựa trên bản review toàn diện ngày 2026-10-11 (`docs/REVIEW-2026-10-11.md`), các hạng mục nợ kỹ thuật và cải tiến được sắp xếp theo thứ tự ưu tiên:
 
-Về credential: khi xác nhận biến đã set, chỉ in **tên biến + SET/EMPTY/độ dài**,
-không in giá trị. Phát hiện credential bị lộ → **báo T1/Owner ngay**, không tự
-xoay vòng xử lý.
+| Ưu tiên | Nhiệm vụ | Phạm vi & Mục tiêu |
+|---|---|---|
+| **Cao** | **Refactor `partners-table.tsx`** | Tách file bảng lớn (~640 dòng) thành các Custom Hooks (`usePartnerTableFilters`, `usePartnerSelection`) và sub-components con, giữ nguyên 100% hành vi và testid. |
+| **Cao** | **Refactor `contract-form.tsx`** | Tách form lớn (~780 dòng) thành các sub-components (Upload section, Company selector), giảm độ phức tạp state. |
+| **Trung bình** | **DB RPC Aggregation** | Chuyển việc đếm số tệp và số hợp đồng từ kéo dữ liệu về JS memory sang PostgreSQL Function an toàn với `security invoker = true`. |
+| **Trung bình** | **Pagination cho Đối tác** | Chuẩn bị hạ tầng phân trang server-side cho danh bạ đối tác khi dữ liệu mở rộng. |
+| **Thấp** | **Error Catalog** | Chuẩn hoá bảng mã lỗi và câu thông báo tiếng Việt tập trung tại `lib/errors/catalog.ts`. |
+| **Thấp** | **Tuning Vitest Timeout** | Tăng `testTimeout: 15000` cho `tests/unit/partner-import.test.ts` để tránh lỗi timeout do ExcelJS khởi động nguội. |
+| **UX** | **Tinh chỉnh nút Xuất Excel** | Bổ sung tooltip hoặc hợp nhất 3 nút xuất đối tác trong dropdown thành 1 nút trực quan. |

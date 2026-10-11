@@ -60,9 +60,10 @@ Mỗi lần giao việc, T2 gửi report gồm:
   Sau khi chạy, dữ liệu test phải được dọn về 0 (suite có `sweep()` tự làm —
   nhưng vẫn phải **kiểm tra lại** và xác nhận trong report).
 - Không xoá dữ liệu/tài khoản của Owner (`duongltvp95@gmail.com`).
-- App **cố ý không có** chức năng xoá user/đối tác/hợp đồng — đây là quyết
-  định nghiệp vụ, không phải thiếu sót. Khi cần dọn dữ liệu test thì dùng
-  service role hoặc Supabase Dashboard, không sửa app để thêm nút xoá.
+- Về chức năng xoá:
+  - App cố ý **không có** chức năng xoá tự do ngoài các luồng UI/Service đã được chốt và bảo vệ nghiêm ngặt.
+  - Xoá hợp đồng / đối tác: Chỉ dành cho **admin đặc quyền** (email nằm trong `DELETE_ADMIN_EMAILS`, mặc định là email Owner). Xoá hợp đồng bắt buộc xoá tệp trên R2 trước (fail R2 = huỷ toàn bộ); xoá đối tác bị chặn tuyệt đối nếu còn hợp đồng liên kết.
+  - Xoá người dùng (user): Chỉ dành cho admin, có hộp thoại xác nhận email, chặn self-delete và last-admin; áp dụng cơ chế **tombstone** (`profiles.is_tombstone = true`) để bảo toàn toàn vẹn khoá ngoại `audit_logs.actor_id`.
 - Script dọn dẹp/diagnostic (dạng `scripts/verify-*.mjs`, `scripts/check-*.mjs`)
   được phép tạo tạm thời khi cần verify, nhưng **không commit lên repo**. Sau khi
   chạy xong, xoá file và xác nhận `git status` sạch trước khi commit thay đổi
