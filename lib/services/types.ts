@@ -1,3 +1,5 @@
+import { STATIC_ERROR_CATALOG } from "@/lib/errors/catalog";
+
 /**
  * Result shape shared by the service layer.
  *
@@ -21,6 +23,7 @@ export type ServiceOk<T> = { ok: true; data: T };
 export type ServiceErr = {
   ok: false;
   code: ServiceErrorCode;
+  appCode?: string;
   message: string;
   issues?: ServiceIssue[];
 };
@@ -35,8 +38,9 @@ export function err(
   code: ServiceErrorCode,
   message: string,
   issues?: ServiceIssue[],
+  appCode?: string,
 ): ServiceErr {
-  return { ok: false, code, message, issues };
+  return { ok: false, code, appCode, message, issues };
 }
 
 /** Maps a service failure onto an HTTP status for route handlers. */
@@ -66,7 +70,21 @@ export function statusForCode(code: ServiceErrorCode): number {
 export function dbError(scope: string, error: unknown): ServiceErr {
   console.error(`[service:${scope}]`, error);
   return err(
-    "db_error",
-    "Không xử lý được yêu cầu. Vui lòng thử lại sau ít phút.",
+    STATIC_ERROR_CATALOG.DB_ERROR.code,
+    STATIC_ERROR_CATALOG.DB_ERROR.message,
+    undefined,
+    "DB_ERROR",
   );
 }
+
+export {
+  catalogErr,
+  dynamicCatalogErr,
+  getErrorMessage,
+  STATIC_ERROR_CATALOG,
+  DYNAMIC_ERROR_BUILDERS,
+  type AppErrorCode,
+  type StaticAppErrorCode,
+  type DynamicAppErrorCode,
+} from "@/lib/errors/catalog";
+
