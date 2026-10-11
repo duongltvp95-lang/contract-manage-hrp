@@ -38,6 +38,21 @@ export const COLUMN_LABELS: Record<keyof Omit<PartnerFilters, "contractCount">, 
   company: "Công ty",
 };
 
+export const BLANK_VALUE = "__BLANK__";
+
+export type SortField =
+  | "name"
+  | "shortName"
+  | "taxCode"
+  | "region"
+  | "status"
+  | "contractCount";
+
+export type SortConfig = {
+  field: SortField | null;
+  direction: "asc" | "desc";
+};
+
 export const CONTRACT_COUNT_OPTIONS: Array<{ value: "all" | "zero" | "nonzero"; label: string }> = [
   { value: "all", label: "Tất cả" },
   { value: "zero", label: "0 hợp đồng" },
@@ -47,16 +62,31 @@ export const CONTRACT_COUNT_OPTIONS: Array<{ value: "all" | "zero" | "nonzero"; 
 /** Counts each distinct value in `values` and returns options sorted A→Z (vi). */
 export function uniqueOptions(
   values: Array<string | null | undefined>,
-): Array<{ value: string; count: number }> {
+  includeBlanks = false,
+): Array<{ value: string; label?: string; count: number }> {
   const map = new Map<string, number>();
+  let blankCount = 0;
   for (const v of values) {
-    if (v == null || v === "") continue;
+    if (v == null || v === "") {
+      blankCount += 1;
+      continue;
+    }
     const k = String(v);
     map.set(k, (map.get(k) ?? 0) + 1);
   }
-  return Array.from(map.entries())
+  const result: Array<{ value: string; label?: string; count: number }> = Array.from(map.entries())
     .map(([value, count]) => ({ value, count }))
     .sort((a, b) => a.value.localeCompare(b.value, "vi"));
+
+  if (includeBlanks && blankCount > 0) {
+    result.push({
+      value: BLANK_VALUE,
+      label: "(Trống / Chưa có)",
+      count: blankCount,
+    });
+  }
+
+  return result;
 }
 
 /** Same as uniqueOptions but takes the pre-flattened union of arrays. */
@@ -75,26 +105,30 @@ export function uniqueOptionsFlattened(
 
 /**
  * Custom hook to manage all column filters, derived option lists,
- * and filtered rows for the partners directory.
+ * sorting, and filtered rows for the partners directory.
  */
 export function usePartnerTableFilters(rows: PartnerWithCount[]) {
   const [filters, setFilters] = useState<PartnerFilters>(EMPTY_FILTERS);
+  const [sortConfig, setSortConfig] = useState<SortConfig>({
+    field: null,
+    direction: "asc",
+  });
 
-  // Option lists derived from the rows
+  // Option lists derived from the rows (with Blanks support for nullable fields)
   const nameOptions = useMemo<FilterOption[]>(
     () => uniqueOptions(rows.map((row) => row.name)),
     [rows],
   );
   const abbrOptions = useMemo<FilterOption[]>(
-    () => uniqueOptions(rows.map((row) => row.abbreviation)),
+    () => uniqueOptions(rows.map((row) => row.abbreviation), true),
     [rows],
   );
   const taxCodeOptions = useMemo<FilterOption[]>(
-    () => uniqueOptions(rows.map((row) => row.tax_code)),
+    () => uniqueOptions(rows.map((row) => row.tax_code), true),
     [rows],
   );
   const regionOptions = useMemo<FilterOption[]>(
-    () => uniqueOptions(rows.map((row) => row.region)),
+    () => uniqueOptions(rows.map((row) => row.region), true),
     [rows],
   );
   const statusOptions = useMemo<FilterOption[]>(() => {
@@ -114,16 +148,22 @@ export function usePartnerTableFilters(rows: PartnerWithCount[]) {
   );
 
   const filteredRows = useMemo(() => {
-    return rows.filter((row) => {
+    const filtered = rows.filter((row) => {
       if (filters.name.length > 0 && !filters.name.includes(row.name)) return false;
-      if (filters.shortName.length > 0 && !filters.shortName.includes(row.abbreviation ?? "")) {
-        return false;
+      if (filters.shortName.length > 0) {
+        const hasBlank = filters.shortName.includes(BLANK_VALUE) && (!row.abbreviation || row.abbreviation === "");
+        const hasMatch = filters.shortName.includes(row.abbreviation ?? "");
+        if (!hasBlank && !hasMatch) return false;
       }
-      if (filters.taxCode.length > 0 && !filters.taxCode.includes(row.tax_code ?? "")) {
-        return false;
+      if (filters.taxCode.length > 0) {
+        const hasBlank = filters.taxCode.includes(BLANK_VALUE) && (!row.tax_code || row.tax_code === "");
+        const hasMatch = filters.taxCode.includes(row.tax_code ?? "");
+        if (!hasBlank && !hasMatch) return false;
       }
-      if (filters.region.length > 0 && !filters.region.includes(row.region ?? "")) {
-        return false;
+      if (filters.region.length > 0) {
+        const hasBlank = filters.region.includes(BLANK_VALUE) && (!row.region || row.region === "");
+        const hasMatch = filters.region.includes(row.region ?? "");
+        if (!hasBlank && !hasMatch) return false;
       }
       if (filters.status.length > 0 && !filters.status.includes(row.status)) {
         return false;
@@ -136,7 +176,38 @@ export function usePartnerTableFilters(rows: PartnerWithCount[]) {
       if (filters.contractCount === "nonzero" && row.contract_count <= 0) return false;
       return true;
     });
-  }, [rows, filters]);
+
+    if (sortConfig.field) {
+      const sorted = [...filtered];
+      sorted.sort((a, b) => {
+        let cmp = 0;
+        switch (sortConfig.field) {
+          case "name":
+            cmp = a.name.localeCompare(b.name, "vi");
+            break;
+          case "shortName":
+            cmp = (a.abbreviation ?? "").localeCompare(b.abbreviation ?? "", "vi");
+            break;
+          case "taxCode":
+            cmp = (a.tax_code ?? "").localeCompare(b.tax_code ?? "", "vi");
+            break;
+          case "region":
+            cmp = (a.region ?? "").localeCompare(b.region ?? "", "vi");
+            break;
+          case "status":
+            cmp = a.status.localeCompare(b.status);
+            break;
+          case "contractCount":
+            cmp = a.contract_count - b.contract_count;
+            break;
+        }
+        return sortConfig.direction === "asc" ? cmp : -cmp;
+      });
+      return sorted;
+    }
+
+    return filtered;
+  }, [rows, filters, sortConfig]);
 
   const hasFilters =
     filters.name.length > 0 ||
@@ -155,9 +226,23 @@ export function usePartnerTableFilters(rows: PartnerWithCount[]) {
     setFilters(EMPTY_FILTERS);
   };
 
+  const setSort = (field: SortField, direction?: "asc" | "desc") => {
+    setSortConfig((prev) => {
+      const nextDir = direction ?? (prev.field === field && prev.direction === "asc" ? "desc" : "asc");
+      return { field, direction: nextDir };
+    });
+  };
+
+  const clearSort = () => {
+    setSortConfig({ field: null, direction: "asc" });
+  };
+
   return {
     filters,
     setFilters,
+    sortConfig,
+    setSort,
+    clearSort,
     filteredRows,
     hasFilters,
     nameOptions,

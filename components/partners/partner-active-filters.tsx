@@ -3,6 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  BLANK_VALUE,
   COLUMN_LABELS,
   CONTRACT_COUNT_OPTIONS,
   type PartnerFilters,
@@ -29,8 +30,9 @@ export function PartnerActiveFilters({
         const values = filters[key] as string[];
         if (values.length === 0) return null;
         const label = COLUMN_LABELS[key];
-        const visible = values.slice(0, 3);
-        const more = values.length - visible.length;
+        const displayValues = values.map((v) => (v === BLANK_VALUE ? "(Trống)" : v));
+        const visible = displayValues.slice(0, 3);
+        const more = displayValues.length - visible.length;
         const summary = visible.join(", ") + (more > 0 ? `, +${more} khác` : "");
         return (
           <Badge

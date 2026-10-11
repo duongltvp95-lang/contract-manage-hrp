@@ -73,6 +73,9 @@ export function PartnersTable({
   const {
     filters,
     setFilters,
+    sortConfig,
+    setSort,
+    clearSort,
     filteredRows,
     hasFilters,
     nameOptions,
@@ -96,6 +99,7 @@ export function PartnersTable({
 
   const handleClearAll = () => {
     clearAllFilters();
+    clearSort();
     clearSelection();
   };
 
@@ -153,6 +157,9 @@ export function PartnersTable({
                     mode="search"
                     placeholder="Lọc theo tên"
                     testIdPrefix="partner-filter-name"
+                    sortDirection={sortConfig.field === "name" ? sortConfig.direction : null}
+                    onSort={(dir) => setSort("name", dir)}
+                    onClearSort={clearSort}
                   />
                 </div>
               </TableHead>
@@ -169,6 +176,9 @@ export function PartnersTable({
                     mode="search"
                     placeholder="Lọc viết tắt"
                     testIdPrefix="partner-filter-abbr"
+                    sortDirection={sortConfig.field === "shortName" ? sortConfig.direction : null}
+                    onSort={(dir) => setSort("shortName", dir)}
+                    onClearSort={clearSort}
                   />
                 </div>
               </TableHead>
@@ -185,6 +195,9 @@ export function PartnersTable({
                     mode="search"
                     placeholder="Lọc MST"
                     testIdPrefix="partner-filter-tax-code"
+                    sortDirection={sortConfig.field === "taxCode" ? sortConfig.direction : null}
+                    onSort={(dir) => setSort("taxCode", dir)}
+                    onClearSort={clearSort}
                   />
                 </div>
               </TableHead>
@@ -201,6 +214,9 @@ export function PartnersTable({
                     mode="search"
                     placeholder="Lọc khu vực"
                     testIdPrefix="partner-filter-region"
+                    sortDirection={sortConfig.field === "region" ? sortConfig.direction : null}
+                    onSort={(dir) => setSort("region", dir)}
+                    onClearSort={clearSort}
                   />
                 </div>
               </TableHead>
@@ -216,6 +232,9 @@ export function PartnersTable({
                     onChange={(v) => setColumnFilter("status", v)}
                     mode="static"
                     testIdPrefix="partner-filter-status"
+                    sortDirection={sortConfig.field === "status" ? sortConfig.direction : null}
+                    onSort={(dir) => setSort("status", dir)}
+                    onClearSort={clearSort}
                   />
                 </div>
               </TableHead>
@@ -261,6 +280,9 @@ export function PartnersTable({
                     }}
                     mode="static"
                     testIdPrefix="partner-filter-contract-count"
+                    sortDirection={sortConfig.field === "contractCount" ? sortConfig.direction : null}
+                    onSort={(dir) => setSort("contractCount", dir)}
+                    onClearSort={clearSort}
                   />
                 </div>
               </TableHead>
