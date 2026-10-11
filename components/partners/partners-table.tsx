@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, Plus } from "lucide-react";
+import { Building2, Plus, Search } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -53,6 +53,15 @@ import type { PartnerWithCount } from "@/lib/services/partners";
  *   xl    : + Số hợp đồng (đủ 8 cột — giữ hành vi hiện tại)
  * Filter input trong header ẩn cùng breakpoint với cột tương ứng (vì filter
  * nằm bên trong <th> ẩn, không cần class riêng).
+ *
+ * Round 36 — filter visual refresh (Owner chọn "filter nằm luôn ở các trường"):
+ *   - Tiêu đề cột chuyển sang dạng uppercase tracking-wide + muted để phân
+ *     biệt rõ với input bên dưới.
+ *   - Input filter bỏ max-w-* cứng (h-7 max-w-44/32/36); nay w-full theo
+ *     chiều rộng cột, h-8, pl-7 cho icon Search bên trái.
+ *   - Cột không có filter (MST, Trạng thái, Số hợp đồng, Thao tác) vẫn
+ *     hiển thị tiêu đề cùng style để thẳng hàng.
+ *   - data-testid giữ nguyên 100% — không vỡ test e2e cũ.
  */
 export function PartnersTable({
   rows,
@@ -161,50 +170,78 @@ export function PartnersTable({
                 </TableHead>
               )}
               <TableHead>
-                Tên đối tác
-                <Input
-                  value={nameFilter}
-                  onChange={(event) => setNameFilter(event.target.value)}
-                  placeholder="Lọc theo tên"
-                  aria-label="Lọc theo tên đối tác"
-                  className="mt-1 h-7 max-w-44 text-xs font-normal"
-                  data-testid="partner-filter-name"
-                />
+                <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Tên đối tác
+                </span>
+                <div className="relative mt-1.5">
+                  <Search
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                  />
+                  <Input
+                    value={nameFilter}
+                    onChange={(event) => setNameFilter(event.target.value)}
+                    placeholder="Lọc theo tên"
+                    aria-label="Lọc theo tên đối tác"
+                    className="h-8 w-full pl-7 text-sm"
+                    data-testid="partner-filter-name"
+                  />
+                </div>
               </TableHead>
               <TableHead className="hidden sm:table-cell" data-testid="partner-head-abbr">
-                Tên viết tắt
-                <Input
-                  value={abbrFilter}
-                  onChange={(event) => setAbbrFilter(event.target.value)}
-                  placeholder="Lọc viết tắt"
-                  aria-label="Lọc theo tên viết tắt"
-                  className="mt-1 h-7 max-w-32 text-xs font-normal"
-                  data-testid="partner-filter-abbr"
-                />
+                <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Tên viết tắt
+                </span>
+                <div className="relative mt-1.5">
+                  <Search
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                  />
+                  <Input
+                    value={abbrFilter}
+                    onChange={(event) => setAbbrFilter(event.target.value)}
+                    placeholder="Lọc viết tắt"
+                    aria-label="Lọc theo tên viết tắt"
+                    className="h-8 w-full pl-7 text-sm"
+                    data-testid="partner-filter-abbr"
+                  />
+                </div>
               </TableHead>
               <TableHead className="hidden sm:table-cell" data-testid="partner-head-tax-code">
                 Mã số thuế
               </TableHead>
               <TableHead className="hidden md:table-cell" data-testid="partner-head-region">
-                Khu vực
-                <Input
-                  value={regionFilter}
-                  onChange={(event) => setRegionFilter(event.target.value)}
-                  placeholder="Lọc khu vực"
-                  aria-label="Lọc theo khu vực"
-                  className="mt-1 h-7 max-w-36 text-xs font-normal"
-                  data-testid="partner-filter-region"
-                />
+                <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Khu vực
+                </span>
+                <div className="relative mt-1.5">
+                  <Search
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                  />
+                  <Input
+                    value={regionFilter}
+                    onChange={(event) => setRegionFilter(event.target.value)}
+                    placeholder="Lọc khu vực"
+                    aria-label="Lọc theo khu vực"
+                    className="h-8 w-full pl-7 text-sm"
+                    data-testid="partner-filter-region"
+                  />
+                </div>
               </TableHead>
-              <TableHead data-testid="partner-head-status">Trạng thái</TableHead>
+              <TableHead data-testid="partner-head-status">
+                Trạng thái
+              </TableHead>
               <TableHead className="hidden lg:table-cell" data-testid="partner-head-company">
-                Công ty
+                <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Công ty
+                </span>
                 <Select
                   value={companyFilter}
                   onValueChange={setCompanyFilter}
                 >
                   <SelectTrigger
-                    className="mt-1 h-7 w-full min-w-28 max-w-36 text-xs font-normal"
+                    className="mt-1.5 h-8 w-full text-sm"
                     aria-label="Lọc theo công ty"
                     data-testid="partner-filter-company"
                   >
@@ -223,7 +260,9 @@ export function PartnersTable({
               <TableHead className="hidden text-center xl:table-cell" data-testid="partner-head-contract-count">
                 Số hợp đồng
               </TableHead>
-              <TableHead className="text-right" data-testid="partner-head-actions">Thao tác</TableHead>
+              <TableHead className="text-right" data-testid="partner-head-actions">
+                Thao tác
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
