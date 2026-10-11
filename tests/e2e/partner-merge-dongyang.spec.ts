@@ -194,24 +194,30 @@ test("sau gộp: filter 'Công ty' vẫn lọc đúng cho dòng gộp (round 35)
   await login(page);
   await gotoAndSettle(page, "/partners");
 
-  const companyFilter = page.getByTestId("partner-filter-company");
+  const companyFilter = page.getByTestId("partner-filter-company-trigger");
   await expect(companyFilter).toBeVisible();
 
   // Filter HRP → dòng gộp vẫn xuất hiện (vì gắn cả 2 công ty)
-  await clickSafe(page, '[data-testid="partner-filter-company"]');
+  await clickSafe(page, '[data-testid="partner-filter-company-trigger"]');
   await page.getByTestId("partner-filter-company-option-HRP").click();
+  // Radix Popover mặc định KHÔNG close on select option, nên phải đóng
+  // bằng tay trước khi click trigger mở lần kế tiếp — nếu không, lần
+  // click trigger sau sẽ ĐÓNG popover thay vì mở, và option bên trong
+  // bị "not stable / detached" khi Playwright cố click.
+  await page.keyboard.press("Escape");
   await expect(page.locator(`[data-partner-tax-code="${tax}"]`)).toHaveCount(1);
 
   // Filter HR VN → dòng gộp vẫn xuất hiện
-  await clickSafe(page, '[data-testid="partner-filter-company"]');
+  await clickSafe(page, '[data-testid="partner-filter-company-trigger"]');
   await page.getByTestId("partner-filter-company-option-HR VN").click();
+  await page.keyboard.press("Escape");
   await expect(page.locator(`[data-partner-tax-code="${tax}"]`)).toHaveCount(1);
 
   // Mở filter lần 3, tìm option có tên khác HRP/HR VN (công ty không liên
   // kết tới dòng gộp) → 0 dòng. Trong seed chỉ có HRP + HR VN nên bước
   // này sẽ KHÔNG assert nếu không tìm thấy option khác (DB hiện chỉ có
   // 2 công ty).
-  await clickSafe(page, '[data-testid="partner-filter-company"]');
+  await clickSafe(page, '[data-testid="partner-filter-company-trigger"]');
   const options = await page
     .locator('[data-testid^="partner-filter-company-option-"]')
     .allInnerTexts();
@@ -222,6 +228,7 @@ test("sau gộp: filter 'Công ty' vẫn lọc đúng cho dòng gộp (round 35)
     await page
       .getByTestId(`partner-filter-company-option-${otherCompany}`)
       .click();
+    await page.keyboard.press("Escape");
     await expect(page.locator(`[data-partner-tax-code="${tax}"]`)).toHaveCount(0);
   }
 });

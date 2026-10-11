@@ -163,9 +163,16 @@ test.describe("partners column filters (round 37)", () => {
     await expect(rowWith(nameB)).toBeVisible();
     await expect(rowWith(nameC)).toBeVisible();
 
-    // A filter that matches nothing shows the empty message.
+    // A combined filter that matches nothing shows the empty message. The
+    // name popover only renders unique names from the data — there is no
+    // sentinel "không tồn tại" option — so we layer two real filters whose
+    // AND result is empty: nameA is Miền Bắc, nameB is Miền Nam, so picking
+    // nameA + region "Miền Nam" returns 0 rows.
     await openPopover(page, "partner-filter-name");
-    await checkOption(page, "partner-filter-name", "không tồn tại");
+    await checkOption(page, "partner-filter-name", nameA);
+    await closePopover(page);
+    await openPopover(page, "partner-filter-region");
+    await checkOption(page, "partner-filter-region", "Miền Nam");
     await closePopover(page);
     await expect(page.getByTestId("partners-filter-empty")).toBeVisible();
     await expect(page.getByTestId("partners-filter-empty")).toContainText(
