@@ -266,7 +266,19 @@ export function PartnersTable({
                     label={COLUMN_LABELS.contractCount}
                     options={contractCountOptions}
                     selected={filters.contractCount}
-                    onChange={(v) => setColumnFilter("contractCount", v)}
+                    onChange={(v) => {
+                      const current = filters.contractCount;
+                      const added = v.find((val) => !current.includes(val));
+                      let next = v;
+                      if (added === "zero") {
+                        next = ["zero"];
+                      } else if (added === "nonzero") {
+                        next = ["nonzero"];
+                      } else if (added != null) {
+                        next = v.filter((val) => val !== "zero" && val !== "nonzero");
+                      }
+                      setColumnFilter("contractCount", next);
+                    }}
                     mode="static"
                     testIdPrefix="partner-filter-contract-count"
                     sortDirection={sortConfig.field === "contractCount" ? sortConfig.direction : null}
