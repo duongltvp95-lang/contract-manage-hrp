@@ -385,28 +385,53 @@ export async function listPartners({
 }): Promise<ServiceResult<PartnerWithCount[]>> {
   const supabase = await createClient();
 
-  const query = supabase
-    .from("partners")
-    .select(PARTNER_COLUMNS)
-    .eq("organization_id", organizationId);
+  // Task 3: Sử dụng RPC get_partners_summary tổng hợp trực tiếp tại DB
+  // (1 query duy nhất thay cho 3 round-trips kéo dữ liệu về JS).
+  // Có fallback an toàn sang truy vấn truyền thống nếu RPC chưa sẵn sàng.
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    "get_partners_summary",
+    { org_id: organizationId },
+  );
 
-  const { data, error } = await query.order("name", { ascending: true });
+  let withCounts: PartnerWithCount[];
 
-  if (error) {
-    return dbError("listPartners", error);
+  if (!rpcError && rpcData) {
+    withCounts = (
+      rpcData as Array<
+        PartnerRow & {
+          contract_count: number | string;
+          companies: string[] | null;
+        }
+      >
+    ).map((row) => ({
+      ...row,
+      contract_count: Number(row.contract_count) || 0,
+      companies: (row.companies ?? []).sort(),
+    }));
+  } else {
+    const query = supabase
+      .from("partners")
+      .select(PARTNER_COLUMNS)
+      .eq("organization_id", organizationId);
+
+    const { data, error } = await query.order("name", { ascending: true });
+
+    if (error) {
+      return dbError("listPartners", error);
+    }
+
+    const rows = (data ?? []) as PartnerRow[];
+    const [counts, companyMap] = await Promise.all([
+      countContractsByPartner(rows.map((row) => row.id), organizationId),
+      companiesForPartners(rows.map((row) => row.id)),
+    ]);
+
+    withCounts = rows.map((row) => ({
+      ...row,
+      contract_count: counts.get(row.id) ?? 0,
+      companies: (companyMap.get(row.id) ?? []).sort(),
+    }));
   }
-
-  const rows = (data ?? []) as PartnerRow[];
-  const [counts, companyMap] = await Promise.all([
-    countContractsByPartner(rows.map((row) => row.id), organizationId),
-    companiesForPartners(rows.map((row) => row.id)),
-  ]);
-
-  const withCounts = rows.map((row) => ({
-    ...row,
-    contract_count: counts.get(row.id) ?? 0,
-    companies: (companyMap.get(row.id) ?? []).sort(),
-  }));
 
   // Round 28 — the count-based filter runs AFTER the counts are computed
   // (JS filter; the list has no pagination).
