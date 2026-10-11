@@ -199,12 +199,12 @@ test("sau gộp: filter 'Công ty' vẫn lọc đúng cho dòng gộp (round 35)
 
   // Filter HRP → dòng gộp vẫn xuất hiện (vì gắn cả 2 công ty)
   await clickSafe(page, '[data-testid="partner-filter-company"]');
-  await page.getByRole("option", { name: /^HRP$/ }).click();
+  await page.getByTestId("partner-filter-company-option-HRP").click();
   await expect(page.locator(`[data-partner-tax-code="${tax}"]`)).toHaveCount(1);
 
   // Filter HR VN → dòng gộp vẫn xuất hiện
   await clickSafe(page, '[data-testid="partner-filter-company"]');
-  await page.getByRole("option", { name: /^HR VN$/ }).click();
+  await page.getByTestId("partner-filter-company-option-HR VN").click();
   await expect(page.locator(`[data-partner-tax-code="${tax}"]`)).toHaveCount(1);
 
   // Mở filter lần 3, tìm option có tên khác HRP/HR VN (công ty không liên
@@ -212,13 +212,15 @@ test("sau gộp: filter 'Công ty' vẫn lọc đúng cho dòng gộp (round 35)
   // này sẽ KHÔNG assert nếu không tìm thấy option khác (DB hiện chỉ có
   // 2 công ty).
   await clickSafe(page, '[data-testid="partner-filter-company"]');
-  const options = await page.getByRole("option").allInnerTexts();
+  const options = await page
+    .locator('[data-testid^="partner-filter-company-option-"]')
+    .allInnerTexts();
   const otherCompany = options
     .map((t) => t.trim())
     .find((t) => t && t !== "HRP" && t !== "HR VN" && t !== "Tất cả");
   if (otherCompany) {
     await page
-      .getByRole("option", { name: new RegExp(`^${otherCompany}$`) })
+      .getByTestId(`partner-filter-company-option-${otherCompany}`)
       .click();
     await expect(page.locator(`[data-partner-tax-code="${tax}"]`)).toHaveCount(0);
   }

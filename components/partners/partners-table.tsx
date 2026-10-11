@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, Plus, Search } from "lucide-react";
+import { Building2, Plus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -8,19 +8,15 @@ import { useMemo, useState } from "react";
 import { AddPartnerButton, RenamePartnerButton } from "@/components/partners/partner-name-sheet";
 import { CompanyBadges, PartnerStatusBadge } from "@/components/partners/partner-badges";
 import { BulkDeletePartnersButton } from "@/components/partners/bulk-delete-partners-button";
+import {
+  ColumnFilterPopover,
+  type FilterOption,
+} from "@/components/partners/column-filter-popover";
 import { DeletePartnerButton } from "@/components/partners/delete-partner-button";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -29,7 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { foldText } from "@/lib/partner-display";
+import { PARTNER_STATUSES, PARTNER_STATUS_LABELS } from "@schemas/partner";
 import type { PartnerWithCount } from "@/lib/services/partners";
 
 /**
@@ -42,8 +38,8 @@ import type { PartnerWithCount } from "@/lib/services/partners";
  *
  * Round 30 — client-side column filters (name / abbreviation / region contain,
  * folded; company select). The filters AND together and run on the rows the
- * server already narrowed (status tab + contract-count filter). The bulk
- * select-all operates on the FILTERED list.
+ * server already narrowed (status tab). The bulk select-all operates on the
+ * FILTERED list.
  *
  * Round 31 — responsive columns (T1 chốt breakpoints — không tự đổi):
  *   < sm  : Tên, Trạng thái, Thao tác (3 cột)
@@ -51,18 +47,82 @@ import type { PartnerWithCount } from "@/lib/services/partners";
  *   md    : + Khu vực (6 cột)
  *   lg    : + Công ty (7 cột)
  *   xl    : + Số hợp đồng (đủ 8 cột — giữ hành vi hiện tại)
- * Filter input trong header ẩn cùng breakpoint với cột tương ứng (vì filter
- * nằm bên trong <th> ẩn, không cần class riêng).
+ * Header filter trigger ẩn cùng breakpoint với cột tương ứng (vì trigger nằm
+ * bên trong <th> ẩn, không cần class riêng).
  *
- * Round 36 — filter visual refresh (Owner chọn "filter nằm luôn ở các trường"):
- *   - Tiêu đề cột chuyển sang dạng uppercase tracking-wide + muted để phân
- *     biệt rõ với input bên dưới.
- *   - Input filter bỏ max-w-* cứng (h-7 max-w-44/32/36); nay w-full theo
- *     chiều rộng cột, h-8, pl-7 cho icon Search bên trái.
- *   - Cột không có filter (MST, Trạng thái, Số hợp đồng, Thao tác) vẫn
- *     hiển thị tiêu đề cùng style để thẳng hàng.
- *   - data-testid giữ nguyên 100% — không vỡ test e2e cũ.
+ * Round 37 — Excel-style column filter popovers (7 cột: tên, viết tắt, MST,
+ * khu vực, trạng thái, công ty, số hợp đồng). Mỗi header có icon
+ * `ListFilter` + badge count; mở popover có search + multi-select checkbox +
+ * "Chọn tất cả" / "Bỏ chọn"; click ngoài là áp dụng. AND giữa cột, OR trong
+ * cùng cột. Chip strip trên đầu bảng liệt kê filter đang áp dụng + nút
+ * "Xoá tất cả filter".
  */
+
+type PartnerFilters = {
+  name: string[];
+  shortName: string[];
+  taxCode: string[];
+  region: string[];
+  status: string[];
+  company: string[];
+  contractCount: "all" | "zero" | "nonzero";
+};
+
+const EMPTY_FILTERS: PartnerFilters = {
+  name: [],
+  shortName: [],
+  taxCode: [],
+  region: [],
+  status: [],
+  company: [],
+  contractCount: "all",
+};
+
+/** Counts each distinct value in `values` and returns options sorted A→Z (vi). */
+function uniqueOptions(
+  values: Array<string | null | undefined>,
+): Array<{ value: string; count: number }> {
+  const map = new Map<string, number>();
+  for (const v of values) {
+    if (v == null || v === "") continue;
+    const k = String(v);
+    map.set(k, (map.get(k) ?? 0) + 1);
+  }
+  return Array.from(map.entries())
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => a.value.localeCompare(b.value, "vi"));
+}
+
+/** Same as uniqueOptions but takes the pre-flattened union of arrays. */
+function uniqueOptionsFlattened(
+  values: Array<Array<string> | null | undefined>,
+): Array<{ value: string; count: number }> {
+  const flat: string[] = [];
+  for (const list of values) {
+    if (!list) continue;
+    for (const v of list) {
+      if (v != null && v !== "") flat.push(v);
+    }
+  }
+  return uniqueOptions(flat);
+}
+
+/** Human-readable label for a column, used in chips. */
+const COLUMN_LABELS: Record<keyof Omit<PartnerFilters, "contractCount">, string> = {
+  name: "Tên đối tác",
+  shortName: "Tên viết tắt",
+  taxCode: "Mã số thuế",
+  region: "Khu vực",
+  status: "Trạng thái",
+  company: "Công ty",
+};
+
+const CONTRACT_COUNT_OPTIONS: Array<{ value: "all" | "zero" | "nonzero"; label: string }> = [
+  { value: "all", label: "Tất cả" },
+  { value: "zero", label: "0 hợp đồng" },
+  { value: "nonzero", label: "Có hợp đồng" },
+];
+
 export function PartnersTable({
   rows,
   canDelete = false,
@@ -75,32 +135,70 @@ export function PartnersTable({
   // the tab changes, so a selection never survives a list change.
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
-  // Round 30 — the client-side column filters.
-  const [nameFilter, setNameFilter] = useState("");
-  const [abbrFilter, setAbbrFilter] = useState("");
-  const [regionFilter, setRegionFilter] = useState("");
-  const [companyFilter, setCompanyFilter] = useState("all");
+  // Round 37 — Excel-style filters (client-only, not synced to URL).
+  const [filters, setFilters] = useState<PartnerFilters>(EMPTY_FILTERS);
 
-  const companyOptions = useMemo(
-    () => [...new Set(rows.flatMap((row) => row.companies))].sort(),
+  // Option lists, derived from the rows the server already returned.
+  const nameOptions = useMemo<FilterOption[]>(
+    () => uniqueOptions(rows.map((row) => row.name)),
+    [rows],
+  );
+  const abbrOptions = useMemo<FilterOption[]>(
+    () => uniqueOptions(rows.map((row) => row.abbreviation)),
+    [rows],
+  );
+  const taxCodeOptions = useMemo<FilterOption[]>(
+    () => uniqueOptions(rows.map((row) => row.tax_code)),
+    [rows],
+  );
+  const regionOptions = useMemo<FilterOption[]>(
+    () => uniqueOptions(rows.map((row) => row.region)),
+    [rows],
+  );
+  // Status: enum-driven options with the count coming from the rows so the
+  // (12) / (4) figure is honest even after other filters narrow the list.
+  // The popover shows the Vietnamese label, but the filter compares against
+  // the schema enum token.
+  const statusOptions = useMemo<FilterOption[]>(() => {
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      counts.set(row.status, (counts.get(row.status) ?? 0) + 1);
+    }
+    return PARTNER_STATUSES.map((status) => ({
+      value: status,
+      label: PARTNER_STATUS_LABELS[status],
+      count: counts.get(status) ?? 0,
+    }));
+  }, [rows]);
+  const companyOptions = useMemo<FilterOption[]>(
+    () => uniqueOptionsFlattened(rows.map((row) => row.companies)),
     [rows],
   );
 
   const filteredRows = useMemo(() => {
-    const name = foldText(nameFilter);
-    const abbr = foldText(abbrFilter);
-    const region = foldText(regionFilter);
-
     return rows.filter((row) => {
-      if (name && !foldText(row.name).includes(name)) return false;
-      if (abbr && !foldText(row.abbreviation ?? "").includes(abbr)) return false;
-      if (region && !foldText(row.region ?? "").includes(region)) return false;
-      if (companyFilter !== "all" && !row.companies.includes(companyFilter)) {
+      if (filters.name.length > 0 && !filters.name.includes(row.name)) return false;
+      if (filters.shortName.length > 0 && !filters.shortName.includes(row.abbreviation ?? "")) {
         return false;
       }
+      if (filters.taxCode.length > 0 && !filters.taxCode.includes(row.tax_code ?? "")) {
+        return false;
+      }
+      if (filters.region.length > 0 && !filters.region.includes(row.region ?? "")) {
+        return false;
+      }
+      if (filters.status.length > 0 && !filters.status.includes(row.status)) {
+        return false;
+      }
+      if (filters.company.length > 0) {
+        const overlap = row.companies.some((c) => filters.company.includes(c));
+        if (!overlap) return false;
+      }
+      if (filters.contractCount === "zero" && row.contract_count !== 0) return false;
+      if (filters.contractCount === "nonzero" && row.contract_count <= 0) return false;
       return true;
     });
-  }, [rows, nameFilter, abbrFilter, regionFilter, companyFilter]);
+  }, [rows, filters]);
 
   const filteredIdSet = useMemo(
     () => new Set(filteredRows.map((row) => row.id)),
@@ -128,10 +226,22 @@ export function PartnersTable({
   };
 
   const hasFilters =
-    nameFilter !== "" ||
-    abbrFilter !== "" ||
-    regionFilter !== "" ||
-    companyFilter !== "all";
+    filters.name.length > 0 ||
+    filters.shortName.length > 0 ||
+    filters.taxCode.length > 0 ||
+    filters.region.length > 0 ||
+    filters.status.length > 0 ||
+    filters.company.length > 0 ||
+    filters.contractCount !== "all";
+
+  const setColumnFilter = <K extends keyof PartnerFilters>(key: K, value: PartnerFilters[K]) => {
+    setFilters((previous) => ({ ...previous, [key]: value }));
+  };
+
+  const clearAllFilters = () => {
+    setFilters(EMPTY_FILTERS);
+    setSelectedIds([]);
+  };
 
   if (rows.length === 0) {
     return (
@@ -155,6 +265,70 @@ export function PartnersTable({
           onDone={() => setSelectedIds([])}
         />
       )}
+      {hasFilters && (
+        <div
+          className="flex flex-wrap items-center gap-2"
+          data-testid="partners-active-filters"
+        >
+          {(Object.keys(COLUMN_LABELS) as Array<keyof typeof COLUMN_LABELS>).map((key) => {
+            const values = filters[key] as string[];
+            if (values.length === 0) return null;
+            const label = COLUMN_LABELS[key];
+            const visible = values.slice(0, 3);
+            const more = values.length - visible.length;
+            const summary = visible.join(", ") + (more > 0 ? `, +${more} khác` : "");
+            return (
+              <Badge
+                key={key}
+                variant="secondary"
+                className="gap-1"
+                data-testid={`partners-active-filter-${key}`}
+              >
+                <span className="text-xs">
+                  {label}: {summary}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Xoá filter ${label}`}
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={() => setColumnFilter(key, [])}
+                >
+                  ×
+                </button>
+              </Badge>
+            );
+          })}
+          {filters.contractCount !== "all" && (
+            <Badge
+              variant="secondary"
+              className="gap-1"
+              data-testid="partners-active-filter-contract-count"
+            >
+              <span className="text-xs">
+                Số hợp đồng:{" "}
+                {CONTRACT_COUNT_OPTIONS.find((opt) => opt.value === filters.contractCount)?.label}
+              </span>
+              <button
+                type="button"
+                aria-label="Xoá filter số hợp đồng"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => setColumnFilter("contractCount", "all")}
+              >
+                ×
+              </button>
+            </Badge>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={clearAllFilters}
+            data-testid="partners-clear-filters"
+          >
+            Xoá tất cả filter
+          </Button>
+        </div>
+      )}
       <div className="rounded-xl shadow-sm">
         <Table>
           <TableHeader>
@@ -170,98 +344,128 @@ export function PartnersTable({
                 </TableHead>
               )}
               <TableHead>
-                <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Tên đối tác
-                </span>
-                <div className="relative mt-1.5">
-                  <Search
-                    aria-hidden="true"
-                    className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-                  />
-                  <Input
-                    value={nameFilter}
-                    onChange={(event) => setNameFilter(event.target.value)}
+                <div className="flex items-center justify-between gap-1">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Tên đối tác
+                  </span>
+                  <ColumnFilterPopover
+                    label={COLUMN_LABELS.name}
+                    options={nameOptions}
+                    selected={filters.name}
+                    onChange={(v) => setColumnFilter("name", v)}
+                    mode="search"
                     placeholder="Lọc theo tên"
-                    aria-label="Lọc theo tên đối tác"
-                    className="h-8 w-full pl-7 text-sm"
-                    data-testid="partner-filter-name"
+                    testIdPrefix="partner-filter-name"
                   />
                 </div>
               </TableHead>
               <TableHead className="hidden sm:table-cell" data-testid="partner-head-abbr">
-                <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Tên viết tắt
-                </span>
-                <div className="relative mt-1.5">
-                  <Search
-                    aria-hidden="true"
-                    className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-                  />
-                  <Input
-                    value={abbrFilter}
-                    onChange={(event) => setAbbrFilter(event.target.value)}
+                <div className="flex items-center justify-between gap-1">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Tên viết tắt
+                  </span>
+                  <ColumnFilterPopover
+                    label={COLUMN_LABELS.shortName}
+                    options={abbrOptions}
+                    selected={filters.shortName}
+                    onChange={(v) => setColumnFilter("shortName", v)}
+                    mode="search"
                     placeholder="Lọc viết tắt"
-                    aria-label="Lọc theo tên viết tắt"
-                    className="h-8 w-full pl-7 text-sm"
-                    data-testid="partner-filter-abbr"
+                    testIdPrefix="partner-filter-abbr"
                   />
                 </div>
               </TableHead>
               <TableHead className="hidden sm:table-cell" data-testid="partner-head-tax-code">
-                Mã số thuế
+                <div className="flex items-center justify-between gap-1">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Mã số thuế
+                  </span>
+                  <ColumnFilterPopover
+                    label={COLUMN_LABELS.taxCode}
+                    options={taxCodeOptions}
+                    selected={filters.taxCode}
+                    onChange={(v) => setColumnFilter("taxCode", v)}
+                    mode="search"
+                    placeholder="Lọc MST"
+                    testIdPrefix="partner-filter-tax-code"
+                  />
+                </div>
               </TableHead>
               <TableHead className="hidden md:table-cell" data-testid="partner-head-region">
-                <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Khu vực
-                </span>
-                <div className="relative mt-1.5">
-                  <Search
-                    aria-hidden="true"
-                    className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-                  />
-                  <Input
-                    value={regionFilter}
-                    onChange={(event) => setRegionFilter(event.target.value)}
+                <div className="flex items-center justify-between gap-1">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Khu vực
+                  </span>
+                  <ColumnFilterPopover
+                    label={COLUMN_LABELS.region}
+                    options={regionOptions}
+                    selected={filters.region}
+                    onChange={(v) => setColumnFilter("region", v)}
+                    mode="search"
                     placeholder="Lọc khu vực"
-                    aria-label="Lọc theo khu vực"
-                    className="h-8 w-full pl-7 text-sm"
-                    data-testid="partner-filter-region"
+                    testIdPrefix="partner-filter-region"
                   />
                 </div>
               </TableHead>
               <TableHead data-testid="partner-head-status">
-                Trạng thái
+                <div className="flex items-center justify-between gap-1">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Trạng thái
+                  </span>
+                  <ColumnFilterPopover
+                    label={COLUMN_LABELS.status}
+                    options={statusOptions}
+                    selected={filters.status}
+                    onChange={(v) => setColumnFilter("status", v)}
+                    mode="static"
+                    testIdPrefix="partner-filter-status"
+                  />
+                </div>
               </TableHead>
               <TableHead className="hidden lg:table-cell" data-testid="partner-head-company">
-                <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Công ty
-                </span>
-                <Select
-                  value={companyFilter}
-                  onValueChange={setCompanyFilter}
-                >
-                  <SelectTrigger
-                    className="mt-1.5 h-8 w-full text-sm"
-                    aria-label="Lọc theo công ty"
-                    data-testid="partner-filter-company"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Tất cả</SelectItem>
-                    {companyOptions.map((company) => (
-                      <SelectItem key={company} value={company}>
-                        {company}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center justify-between gap-1">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Công ty
+                  </span>
+                  <ColumnFilterPopover
+                    label={COLUMN_LABELS.company}
+                    options={companyOptions}
+                    selected={filters.company}
+                    onChange={(v) => setColumnFilter("company", v)}
+                    mode="search"
+                    placeholder="Lọc công ty"
+                    testIdPrefix="partner-filter-company"
+                  />
+                </div>
               </TableHead>
-              <TableHead className="hidden text-center xl:table-cell" data-testid="partner-head-contract-count">
-                Số hợp đồng
+              <TableHead
+                className="hidden text-center xl:table-cell"
+                data-testid="partner-head-contract-count"
+              >
+                <div className="flex items-center justify-center gap-1">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Số hợp đồng
+                  </span>
+                  <ColumnFilterPopover
+                    label="Số hợp đồng"
+                    options={CONTRACT_COUNT_OPTIONS.map((opt) => ({
+                      value: opt.value,
+                      label: opt.label,
+                    }))}
+                    selected={filters.contractCount === "all" ? [] : [filters.contractCount]}
+                    onChange={(v) => {
+                      const next = (v[0] ?? "all") as PartnerFilters["contractCount"];
+                      setColumnFilter("contractCount", next);
+                    }}
+                    mode="static"
+                    testIdPrefix="partner-filter-contract-count"
+                  />
+                </div>
               </TableHead>
               <TableHead className="text-right" data-testid="partner-head-actions">
-                Thao tác
+                <span className="block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Thao tác
+                </span>
               </TableHead>
             </TableRow>
           </TableHeader>

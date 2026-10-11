@@ -3,7 +3,6 @@ import { Suspense } from "react";
 
 import { PartnerImportSheet } from "@/components/partners/partner-import-sheet";
 import { AddPartnerButton } from "@/components/partners/partner-name-sheet";
-import { PartnersContractsFilter } from "@/components/partners/partners-contracts-filter";
 import { PartnersExportMenu } from "@/components/partners/partners-export-menu";
 import { PartnersTable } from "@/components/partners/partners-table";
 import { PartnersTableSkeleton } from "@/components/partners/partners-table-skeleton";
@@ -14,18 +13,15 @@ import { listPartners } from "@/lib/services/partners";
 import { cn } from "@/lib/utils";
 
 /**
- * Partners list — feature round 2, part 2; round 20 adds status tabs,
- * round 28 adds the contract-count filter.
+ * Partners list — feature round 2, part 2; round 20 adds status tabs.
  *
- * A pure function of the session + `?status=` + `?contracts=`: require the
- * user, read the directory for that organization, render. Both filters live in
- * the URL like the contracts scope, so they are shareable and back/forward
- * works.
+ * Round 37: the contract-count filter moved into the table itself (Excel-style
+ * column filter popover), so the standalone `PartnersContractsFilter` on the
+ * toolbar and the `?contracts=` URL param are gone. The list is now a pure
+ * function of the session + `?status=`.
  */
 
 type RawSearchParams = Record<string, string | string[] | undefined>;
-
-type PartnerContractsFilter = "has" | "none" | undefined;
 
 async function PartnersContent({
   searchParams,
@@ -38,15 +34,10 @@ async function PartnersContent({
     params.status === "active" || params.status === "stopped"
       ? params.status
       : undefined;
-  const contracts: PartnerContractsFilter =
-    params.contracts === "has" || params.contracts === "none"
-      ? params.contracts
-      : undefined;
 
   const result = await listPartners({
     organizationId: me.organizationId,
     status,
-    contracts,
   });
 
   return (
@@ -54,13 +45,12 @@ async function PartnersContent({
       <PageHeader />
 
       <div className="flex flex-wrap items-center gap-3">
-        <PartnersTabs status={status} contracts={contracts} />
-        <PartnersContractsFilter contracts={contracts} status={status} />
+        <PartnersTabs status={status} />
       </div>
 
       {result.ok ? (
         <PartnersTable
-          key={`${status ?? "all"}-${contracts ?? "all"}`}
+          key={`${status ?? "all"}`}
           rows={result.data}
           canDelete={canDeleteEntities(me.email)}
         />
@@ -75,13 +65,11 @@ async function PartnersContent({
   );
 }
 
-/** Round 20 — all / active / stopped partner tabs; round 28 preserves ?contracts=. */
+/** Round 20 — all / active / stopped partner tabs. */
 function PartnersTabs({
   status,
-  contracts,
 }: {
   status: "active" | "stopped" | undefined;
-  contracts: PartnerContractsFilter;
 }) {
   const tabCls = (active: boolean) =>
     cn(
@@ -92,11 +80,7 @@ function PartnersTabs({
     );
 
   const hrefFor = (next: "active" | "stopped" | undefined) => {
-    const params = new URLSearchParams();
-    if (next) params.set("status", next);
-    if (contracts) params.set("contracts", contracts);
-    const query = params.toString();
-    return query ? `/partners?${query}` : "/partners";
+    return next ? `/partners?status=${next}` : "/partners";
   };
 
   return (

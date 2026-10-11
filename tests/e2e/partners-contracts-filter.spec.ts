@@ -4,7 +4,6 @@ import {
   ORG_A,
   TEST_PREFIX,
   adminClient,
-  clickSafe,
   gotoAndSettle,
   hasLiveBackend,
   login,
@@ -16,12 +15,18 @@ import {
 test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
 
 /**
- * Round 28 — the "Số hợp đồng" filter on the partners list.
+ * Round 28 / Round 37 — the "Số hợp đồng" filter on the partners list.
+ *
+ * Round 28 originally put this filter as a `Select` next to the status tabs and
+ * wrote straight into the URL. Round 37 folded it into the Excel-style
+ * column filter popover inside the table — single-select with three options
+ * (Tất cả / 0 hợp đồng / Có hợp đồng). The same coverage, but the
+ * interaction now lives inside the header.
  */
 
 const stamp = runId();
 
-test.describe("partners contract filter (round 28)", () => {
+test.describe("partners contract filter (round 37)", () => {
   test.beforeAll(async () => {
     await sweep(adminClient());
   });
@@ -58,23 +63,32 @@ test.describe("partners contract filter (round 28)", () => {
     await expect(rowWith(withContract.name)).toBeVisible({ timeout: 30_000 });
     await expect(rowWith(withoutContract.name)).toBeVisible();
 
-    // "Có hợp đồng" keeps only the partner with a contract.
-    await clickSafe(page, '[data-testid="partner-contracts-filter"]');
-    await page.getByTestId("partner-contracts-has").click();
-    await expect(page).toHaveURL(/contracts=has/);
+    // Open the "Số hợp đồng" popover and pick "Có hợp đồng".
+    await page
+      .getByTestId("partner-filter-contract-count-trigger")
+      .click();
+    await page
+      .getByTestId("partner-filter-contract-count-option-nonzero")
+      .click();
+    // Click outside to close the popover.
+    await page.keyboard.press("Escape");
     await expect(rowWith(withContract.name)).toBeVisible({ timeout: 30_000 });
     await expect(rowWith(withoutContract.name)).toHaveCount(0);
 
-    // "Chưa có hợp đồng" keeps only the partner without one.
-    await clickSafe(page, '[data-testid="partner-contracts-filter"]');
-    await page.getByTestId("partner-contracts-none").click();
-    await expect(page).toHaveURL(/contracts=none/);
+    // Switch to "0 hợp đồng" — the empty state appears, then the other
+    // partner is back when we pick the third option.
+    await page
+      .getByTestId("partner-filter-contract-count-trigger")
+      .click();
+    await page
+      .getByTestId("partner-filter-contract-count-option-zero")
+      .click();
+    await page.keyboard.press("Escape");
     await expect(rowWith(withoutContract.name)).toBeVisible({ timeout: 30_000 });
     await expect(rowWith(withContract.name)).toHaveCount(0);
 
-    // "Tất cả" brings both back.
-    await clickSafe(page, '[data-testid="partner-contracts-filter"]');
-    await page.getByTestId("partner-contracts-all").click();
+    // The "Xoá tất cả filter" button at the top brings both back.
+    await page.getByTestId("partners-clear-filters").click();
     await expect(rowWith(withContract.name)).toBeVisible({ timeout: 30_000 });
     await expect(rowWith(withoutContract.name)).toBeVisible();
 

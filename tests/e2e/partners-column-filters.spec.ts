@@ -4,7 +4,6 @@ import {
   ORG_A,
   TEST_PREFIX,
   adminClient,
-  clickSafe,
   gotoAndSettle,
   hasLiveBackend,
   login,
@@ -16,8 +15,13 @@ import {
 test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
 
 /**
- * Round 30 — the client-side column filters on the partners list + the removed
- * "Cập nhật lúc" column.
+ * Round 30 / Round 37 — the client-side column filters on the partners list.
+ *
+ * Round 30 used four text inputs (name / abbreviation / region / company).
+ * Round 37 swaps each input for an Excel-style column filter popover:
+ * search + multi-select checkboxes. The behaviour is otherwise the same —
+ * folded text match for the textual columns, exact match for company. AND
+ * between columns.
  */
 
 const HRP = "00000000-0000-4000-8000-000000000001";
@@ -25,7 +29,33 @@ const HR_VN = "00000000-0000-4000-8000-000000000002";
 
 const stamp = runId();
 
-test.describe("partners column filters (round 30)", () => {
+/**
+ * Open the popover for the given testid prefix, optionally type into its
+ * search box, optionally click a checkbox by option value, then close.
+ */
+async function openPopover(
+  page: import("@playwright/test").Page,
+  prefix: string,
+) {
+  await page.getByTestId(`${prefix}-trigger`).click();
+  await expect(page.getByTestId(`${prefix}-popover`)).toBeVisible();
+}
+
+async function checkOption(
+  page: import("@playwright/test").Page,
+  prefix: string,
+  value: string,
+) {
+  await page.getByTestId(`${prefix}-option-${value}`).click();
+}
+
+async function closePopover(
+  page: import("@playwright/test").Page,
+) {
+  await page.keyboard.press("Escape");
+}
+
+test.describe("partners column filters (round 37)", () => {
   test.beforeAll(async () => {
     await sweep(adminClient());
   });
@@ -79,41 +109,64 @@ test.describe("partners column filters (round 30)", () => {
     await expect(page.getByText("Cập nhật lúc")).toHaveCount(0);
 
     // Name filter — folded contains ("thiên quang" matches "Thiên Quang").
-    await page.getByTestId("partner-filter-name").fill("thiên quang");
+    // The popover is single-row per option, so we pick the exact name.
+    await openPopover(page, "partner-filter-name");
+    await checkOption(page, "partner-filter-name", nameA);
+    await closePopover(page);
     await expect(rowWith(nameA)).toBeVisible();
     await expect(rowWith(nameB)).toHaveCount(0);
     await expect(rowWith(nameC)).toHaveCount(0);
 
-    // Abbreviation filter — folded contains.
-    await page.getByTestId("partner-filter-name").fill("");
-    await page.getByTestId("partner-filter-abbr").fill("ckh");
+    // Clear via the chip strip's "×" on the name filter (no global clear here
+    // because we are about to layer another filter).
+    await page.getByTestId("partners-active-filter-name").getByRole("button").click();
+
+    // Abbreviation filter — exact match on the "ĐTQ" / "CKH" token.
+    await openPopover(page, "partner-filter-abbr");
+    await checkOption(page, "partner-filter-abbr", "CKH");
+    await closePopover(page);
     await expect(rowWith(nameB)).toBeVisible();
     await expect(rowWith(nameA)).toHaveCount(0);
     await expect(rowWith(nameC)).toHaveCount(0);
 
-    // Region filter — folded contains.
-    await page.getByTestId("partner-filter-abbr").fill("");
-    await page.getByTestId("partner-filter-region").fill("miền nam");
+    await page.getByTestId("partners-active-filter-shortName").getByRole("button").click();
+
+    // Region filter — exact match on "Miền Nam" / "Miền Bắc".
+    await openPopover(page, "partner-filter-region");
+    await checkOption(page, "partner-filter-region", "Miền Nam");
+    await closePopover(page);
     await expect(rowWith(nameB)).toBeVisible();
     await expect(rowWith(nameA)).toHaveCount(0);
     await expect(rowWith(nameC)).toHaveCount(0);
+
+    await page.getByTestId("partners-active-filter-region").getByRole("button").click();
 
     // Company filter — HRP keeps the two HRP partners.
-    await page.getByTestId("partner-filter-region").fill("");
-    await clickSafe(page, '[data-testid="partner-filter-company"]');
-    await page.getByRole("option", { name: "HRP" }).click();
+    await openPopover(page, "partner-filter-company");
+    await checkOption(page, "partner-filter-company", "HRP");
+    await closePopover(page);
     await expect(rowWith(nameA)).toBeVisible({ timeout: 15_000 });
     await expect(rowWith(nameC)).toBeVisible();
     await expect(rowWith(nameB)).toHaveCount(0);
 
     // Combined: HRP + region "Miền Bắc" → the two Miền Bắc/HRP partners.
-    await page.getByTestId("partner-filter-region").fill("miền bắc");
+    await openPopover(page, "partner-filter-region");
+    await checkOption(page, "partner-filter-region", "Miền Bắc");
+    await closePopover(page);
     await expect(rowWith(nameA)).toBeVisible();
     await expect(rowWith(nameC)).toBeVisible();
     await expect(rowWith(nameB)).toHaveCount(0);
 
+    // "Xoá tất cả filter" wipes everything and the empty state goes away.
+    await page.getByTestId("partners-clear-filters").click();
+    await expect(rowWith(nameA)).toBeVisible();
+    await expect(rowWith(nameB)).toBeVisible();
+    await expect(rowWith(nameC)).toBeVisible();
+
     // A filter that matches nothing shows the empty message.
-    await page.getByTestId("partner-filter-name").fill("không tồn tại");
+    await openPopover(page, "partner-filter-name");
+    await checkOption(page, "partner-filter-name", "không tồn tại");
+    await closePopover(page);
     await expect(page.getByTestId("partners-filter-empty")).toBeVisible();
     await expect(page.getByTestId("partners-filter-empty")).toContainText(
       "Không có đối tác nào khớp bộ lọc",
