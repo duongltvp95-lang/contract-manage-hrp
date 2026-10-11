@@ -1,5 +1,4 @@
 import { type NextRequest, NextResponse } from "next/server";
-
 import { PARTNER_STATUS_LABELS } from "@schemas/partner";
 
 import { getCurrentUser } from "@/lib/auth";
@@ -8,15 +7,15 @@ import { listPartners, type PartnerWithCount } from "@/lib/services/partners";
 /**
  * Partner export — round 23.
  *
- * One worksheet "Đối tác" with the whole directory (or one status scope via
- * `?status=active|stopped`). The same dynamic-exceljs pattern as the admin log
- * export keeps the library out of every bundle that does not build a workbook.
+ * One worksheet "Đối tác" with the whole directory. The same dynamic-exceljs
+ * pattern as the admin log export keeps the library out of every bundle that
+ * does not build a workbook.
  *
  * Authorization: any signed-in user of the organization (no admin role), and
  * `listPartners` re-applies the organization scoping — the export is always
  * the caller's own directory.
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json(
@@ -25,11 +24,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const rawStatus = request.nextUrl.searchParams.get("status");
-  const status =
-    rawStatus === "active" || rawStatus === "stopped" ? rawStatus : undefined;
-
-  const list = await listPartners({ organizationId: user.organizationId, status });
+  const list = await listPartners({ organizationId: user.organizationId });
   if (!list.ok) {
     return NextResponse.json(
       { error: list.message, code: list.code },
@@ -40,15 +35,7 @@ export async function GET(request: NextRequest) {
   const body = await formatXlsx(list.data);
 
   const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-  const suffix =
-    status === "active"
-      ? "dang-hop-tac"
-      : status === "stopped"
-        ? "da-dung-hop-tac"
-        : null;
-  const filename = suffix
-    ? `doi-tac-${suffix}-${today}.xlsx`
-    : `doi-tac-${today}.xlsx`;
+  const filename = `doi-tac-${today}.xlsx`;
 
   return new NextResponse(Buffer.from(body), {
     status: 200,

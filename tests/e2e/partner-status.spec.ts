@@ -237,20 +237,19 @@ test.describe("partner status + companies (round 10)", () => {
       timeout: 20_000,
     });
 
-    // The partner moved to the stopped tab with the grey badge.
-    await clickSafe(page, '[data-testid="partner-tab-stopped"]');
+    // The partner now carries the "Đã dừng hợp tác" badge — filter the table to
+    // confirm it is the only stopped partner in the list.
+    await clickSafe(page, '[data-testid="partner-filter-status-trigger"]');
+    await clickSafe(page, '[data-testid="partner-filter-status-option-stopped"]');
+    await page.keyboard.press("Escape");
     const stoppedRow = page.getByTestId("partner-row").filter({ hasText: editName });
     await expect(stoppedRow).toBeVisible({ timeout: 30_000 });
     await expect(stoppedRow.getByTestId("partner-status-stopped")).toBeVisible();
 
-    // A hard reload keeps it.
-    await gotoAndSettle(page, "/partners?status=stopped");
-    await expect(
-      page
-        .getByTestId("partner-row")
-        .filter({ hasText: editName })
-        .getByTestId("partner-status-stopped"),
-    ).toBeVisible({ timeout: 30_000 });
+    // Clear the filter so the next assertion can find the row again.
+    await clickSafe(page, '[data-testid="partner-filter-status-trigger"]');
+    await clickSafe(page, '[data-testid="partner-filter-status-clear"]');
+    await page.keyboard.press("Escape");
 
     // Stopped → active via the same form.
     await clickSafe(
@@ -269,8 +268,10 @@ test.describe("partner status + companies (round 10)", () => {
       timeout: 20_000,
     });
 
-    // Back on the active tab with the green badge.
-    await clickSafe(page, '[data-testid="partner-tab-active"]');
+    // Back on the active filter with the green badge.
+    await clickSafe(page, '[data-testid="partner-filter-status-trigger"]');
+    await clickSafe(page, '[data-testid="partner-filter-status-option-active"]');
+    await page.keyboard.press("Escape");
     await expect(
       page
         .getByTestId("partner-row")

@@ -169,22 +169,6 @@ suite("partner export (round 23)", () => {
     expect(rowB?.["Số hợp đồng"]).toBe("0");
   }, 120_000);
 
-  it("scopes by status and names the file accordingly", async () => {
-    const active = await fetchExport(orgA.cookie, "?status=active");
-    expect(active.status).toBe(200);
-    expect(active.filename).toMatch(/^doi-tac-dang-hop-tac-\d{8}\.xlsx$/);
-    const activeSheet = await readSheet(active.body!);
-    expect(activeSheet.rows.some((row) => row["Tên đối tác"] === partnerAName)).toBe(false);
-    expect(activeSheet.rows.some((row) => row["Tên đối tác"] === partnerBName)).toBe(true);
-
-    const stopped = await fetchExport(orgA.cookie, "?status=stopped");
-    expect(stopped.status).toBe(200);
-    expect(stopped.filename).toMatch(/^doi-tac-da-dung-hop-tac-\d{8}\.xlsx$/);
-    const stoppedSheet = await readSheet(stopped.body!);
-    expect(stoppedSheet.rows.some((row) => row["Tên đối tác"] === partnerAName)).toBe(true);
-    expect(stoppedSheet.rows.some((row) => row["Tên đối tác"] === partnerBName)).toBe(false);
-  }, 120_000);
-
   it("refuses anonymous callers and never leaks org A partners to org B", async () => {
     const anon = await fetchExport("");
     expect(anon.status).toBe(401);

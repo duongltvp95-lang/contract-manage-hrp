@@ -106,7 +106,7 @@ tests/{unit,integration,e2e}/
 - **R17**: UI refresh Stripe/Linear — nền slate, card `rounded-xl shadow-sm`, bảng hiện đại, metric cards pastel, badge pill, menu active theo accent.
 - **R18**: cột Công ty trong danh sách hợp đồng.
 - **R19**: **xoá hợp đồng/đối tác + bỏ lưu trữ + tab "Đã lưu trữ"** — chỉ admin đặc quyền (email trong `DELETE_ADMIN_EMAILS`, production mặc định = owner). Xoá hợp đồng xoá R2 trước (fail → huỷ toàn bộ); xoá đối tác bị chặn khi còn hợp đồng.
-- **R20**: tab Hợp đồng 3 loại (Đang hoạt động / Đã hết hạn / Đã lưu trữ) + tab Đối tác (Tất cả / Đang / Đã dừng hợp tác). Hợp đồng không có ngày hết hạn = "chưa hết hạn" (nằm tab hoạt động).
+- **R20**: tab Hợp đồng 3 loại (Đang hoạt động / Đã hết hạn / Đã lưu trữ). Hợp đồng không có ngày hết hạn = "chưa hết hạn" (nằm tab hoạt động). Trạng thái đối tác (đang / đã dừng) lọc qua cột Trạng thái trong bảng (Excel-style popover, round 37).
 - **R21**: trường **Khu vực** + **Tên viết tắt** cho đối tác (tìm kiếm khớp viết tắt; import có 2 cột).
 - **R22**: import đọc cột **Trạng thái hợp tác** (bỏ trống → mặc định Đang hợp tác; giá trị lạ → lỗi dòng).
 - **R23**: **Xuất Excel đối tác** (3 scope: tất cả / đang / đã dừng) + fix nghẽn fetch companies theo từng dòng (chỉ fetch khi mở sheet).
@@ -114,7 +114,7 @@ tests/{unit,integration,e2e}/
 - **R25**: import **chống trùng 5 khoá** theo thứ tự ưu tiên **MST → Tên viết tắt → Tên đối tác → Địa chỉ → Khu vực** → ghi đè (điền-thiếu + union công ty) **TRỪ khi khác công ty (không giao) → tạo mới**. Preview hiện "Thêm mới / Cập nhật \<tên\> / Lỗi". Chỉ áp dụng cho IMPORT — form tay giữ nguyên (xem R29).
 - **R26**: cột "Tên viết tắt" tách riêng trong bảng Đối tác.
 - **R27**: fix lỗi "không lưu được" — nếu tải danh sách công ty fail, form giờ **hiện Alert + nút Thử lại** (trước đây im lặng khoá nút Lưu). Đường lưu status đã xác minh chạy đúng + có e2e chống tái diễn.
-- **R28**: bộ lọc **Số hợp đồng** (Tất cả / Có / Chưa có) kết hợp tab trạng thái (`?contracts=`).
+- **R28**: bộ lọc **Số hợp đồng** (Tất cả / Có / Chưa có) — chuyển sang Excel-style column filter ở R30.
 - **R29**: form tay **check trùng MST theo công ty** (tách khỏi round 25 chỉ áp dụng import). MST trùng nhưng **khác công ty** → cho phép tạo/sửa. Cùng công ty → lỗi như cũ. Có integration + e2e (xem `tests/integration/partner-tax-code-company.test.ts` + bổ sung trong `tests/e2e/partners.spec.ts`).
 - **R30**: **bộ lọc trực tiếp trong header cột** Đối tác (Tên/Tên viết tắt/Khu vực = ô nhập khớp chứa bỏ dấu; Công ty = dropdown derive từ dữ liệu) — client-side, AND nhau, kết hợp filter server; **xoá cột "Cập nhật lúc"**.
 - **R31**: **responsive bảng Đối tác** — ẩn bớt cột trên màn hình hẹp (đi với R29 trong commit `a0e2cda`).

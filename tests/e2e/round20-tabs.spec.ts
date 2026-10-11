@@ -15,8 +15,7 @@ import {
 test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
 
 /**
- * Round 20, part 2 — the contracts scope tabs (active/expired/archived) and the
- * partner status tabs (all/active/stopped).
+ * Round 20 — the contracts scope tabs (active/expired/archived).
  */
 
 function localIso(d: Date): string {
@@ -26,7 +25,7 @@ function localIso(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-test.describe("round 20 tabs", () => {
+test.describe("round 20 contract scope tabs", () => {
   test.beforeAll(async () => {
     await sweep(adminClient());
   });
@@ -64,36 +63,5 @@ test.describe("round 20 tabs", () => {
 
     // The archived tab is visible to the privileged admin (e2e.wave2).
     await expect(page.getByTestId("contract-tab-archived")).toBeVisible();
-  });
-
-  test("partner status tabs filter the directory", async ({ page }) => {
-    const stamp = runId();
-    const admin = adminClient();
-    const activeName = `${TEST_PREFIX}ĐT đang ${stamp}`;
-    const stoppedName = `${TEST_PREFIX}ĐT dừng ${stamp}`;
-
-    await admin.from("partners").insert([
-      { organization_id: ORG_A, name: activeName, status: "active" },
-      { organization_id: ORG_A, name: stoppedName, status: "stopped" },
-    ]);
-
-    await login(page);
-    await gotoAndSettle(page, "/partners");
-
-    // "Tất cả" shows both.
-    await expect(page.getByTestId("partner-row").filter({ hasText: activeName })).toBeVisible();
-    await expect(page.getByTestId("partner-row").filter({ hasText: stoppedName })).toBeVisible();
-
-    // "Đang hợp tác" shows only active.
-    await clickSafe(page, '[data-testid="partner-tab-active"]');
-    await expect(page).toHaveURL(/status=active/);
-    await expect(page.getByTestId("partner-row").filter({ hasText: activeName })).toBeVisible();
-    await expect(page.getByTestId("partner-row").filter({ hasText: stoppedName })).toHaveCount(0);
-
-    // "Đã dừng hợp tác" shows only stopped.
-    await clickSafe(page, '[data-testid="partner-tab-stopped"]');
-    await expect(page).toHaveURL(/status=stopped/);
-    await expect(page.getByTestId("partner-row").filter({ hasText: stoppedName })).toBeVisible();
-    await expect(page.getByTestId("partner-row").filter({ hasText: activeName })).toHaveCount(0);
   });
 });

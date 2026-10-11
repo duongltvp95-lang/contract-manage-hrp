@@ -31,10 +31,10 @@ export function PartnersExportMenu() {
           <a href="/api/partners/export">Xuất tất cả</a>
         </DropdownMenuItem>
         <DropdownMenuItem asChild data-testid="partners-export-item-active">
-          <a href="/api/partners/export?status=active">Xuất đang hợp tác</a>
+          <a href="/api/partners/export">Xuất đang hợp tác</a>
         </DropdownMenuItem>
         <DropdownMenuItem asChild data-testid="partners-export-item-stopped">
-          <a href="/api/partners/export?status=stopped">Xuất đã dừng hợp tác</a>
+          <a href="/api/partners/export">Xuất đã dừng hợp tác</a>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

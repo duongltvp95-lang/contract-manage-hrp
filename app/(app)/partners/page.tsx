@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { Suspense } from "react";
 
 import { PartnerImportSheet } from "@/components/partners/partner-import-sheet";
@@ -10,15 +9,11 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { requireUser } from "@/lib/auth";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { listPartners } from "@/lib/services/partners";
-import { cn } from "@/lib/utils";
 
 /**
- * Partners list — feature round 2, part 2; round 20 adds status tabs.
- *
- * Round 37: the contract-count filter moved into the table itself (Excel-style
- * column filter popover), so the standalone `PartnersContractsFilter` on the
- * toolbar and the `?contracts=` URL param are gone. The list is now a pure
- * function of the session + `?status=`.
+ * Partners list — round 37 trở đi dùng Excel-style column filter trong bảng
+ * (Tên / Tên viết tắt / MST / Khu vực / Trạng thái / Công ty / Số hợp đồng),
+ * nên trang chỉ còn dữ liệu thuần từ session.
  */
 
 type RawSearchParams = Record<string, string | string[] | undefined>;
@@ -29,28 +24,18 @@ async function PartnersContent({
   searchParams: Promise<RawSearchParams>;
 }) {
   const me = await requireUser();
-  const params = await searchParams;
-  const status =
-    params.status === "active" || params.status === "stopped"
-      ? params.status
-      : undefined;
+  await searchParams;
 
   const result = await listPartners({
     organizationId: me.organizationId,
-    status,
   });
 
   return (
     <div className="space-y-6 p-8">
       <PageHeader />
 
-      <div className="flex flex-wrap items-center gap-3">
-        <PartnersTabs status={status} />
-      </div>
-
       {result.ok ? (
         <PartnersTable
-          key={`${status ?? "all"}`}
           rows={result.data}
           canDelete={canDeleteEntities(me.email)}
         />
@@ -61,54 +46,6 @@ async function PartnersContent({
           <AlertDescription>{result.message}</AlertDescription>
         </Alert>
       )}
-    </div>
-  );
-}
-
-/** Round 20 — all / active / stopped partner tabs. */
-function PartnersTabs({
-  status,
-}: {
-  status: "active" | "stopped" | undefined;
-}) {
-  const tabCls = (active: boolean) =>
-    cn(
-      "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-      active
-        ? "bg-primary text-primary-foreground"
-        : "text-muted-foreground hover:text-foreground",
-    );
-
-  const hrefFor = (next: "active" | "stopped" | undefined) => {
-    return next ? `/partners?status=${next}` : "/partners";
-  };
-
-  return (
-    <div
-      className="inline-flex items-center gap-1 rounded-lg border p-1"
-      data-testid="partners-tabs"
-    >
-      <Link
-        href={hrefFor(undefined)}
-        data-testid="partner-tab-all"
-        className={tabCls(!status)}
-      >
-        Tất cả
-      </Link>
-      <Link
-        href={hrefFor("active")}
-        data-testid="partner-tab-active"
-        className={tabCls(status === "active")}
-      >
-        Đang hợp tác
-      </Link>
-      <Link
-        href={hrefFor("stopped")}
-        data-testid="partner-tab-stopped"
-        className={tabCls(status === "stopped")}
-      >
-        Đã dừng hợp tác
-      </Link>
     </div>
   );
 }

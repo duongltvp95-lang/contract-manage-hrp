@@ -378,24 +378,17 @@ async function deletePartnerRollback(partnerId: string): Promise<void> {
  */
 export async function listPartners({
   organizationId,
-  status,
   contracts,
 }: PartnerContext & {
-  /** Round 20 — filter by status; absent = all (unchanged). */
-  status?: PartnerStatus;
   /** Round 28 — filter by the computed contract count; absent = all. */
   contracts?: "has" | "none";
 }): Promise<ServiceResult<PartnerWithCount[]>> {
   const supabase = await createClient();
 
-  let query = supabase
+  const query = supabase
     .from("partners")
     .select(PARTNER_COLUMNS)
     .eq("organization_id", organizationId);
-
-  if (status) {
-    query = query.eq("status", status);
-  }
 
   const { data, error } = await query.order("name", { ascending: true });
 
