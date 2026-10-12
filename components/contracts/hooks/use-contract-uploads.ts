@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { FileKind } from "@schemas/file";
 import { completeUploadAction } from "@/app/(app)/contracts/actions";
 import { putFileWithProgress, type PendingFile } from "@/lib/upload";
@@ -92,6 +92,9 @@ export function useContractUploads({
     if (queue.length === 0) {
       setPhase("redirecting");
       onSuccess(contractId);
+      setTimeout(() => {
+        setPhase("idle");
+      }, 4000);
       return;
     }
 
@@ -116,10 +119,10 @@ export function useContractUploads({
       setPhase("redirecting");
       onSuccess(contractId);
       // Safety timeout: nếu trang không unload sau 4 giây (hoặc quay lại), tự trở về idle
-      const timer = setTimeout(() => {
+      setTimeout(() => {
         setPhase("idle");
       }, 4000);
-      return () => clearTimeout(timer);
+      return;
     }
 
     setUploadError(failures.join("\n"));
@@ -134,12 +137,12 @@ export function useContractUploads({
     await runUploads(savedContractId, queue);
   }
 
-  function resetUploads() {
+  const resetUploads = useCallback(() => {
     setFiles([]);
     setPhase("idle");
     setUploadError(null);
     setSavedContractId(null);
-  }
+  }, []);
 
   const failedCount = files.filter((item) => item.status === "error").length;
   const hasFiles = files.length > 0;
