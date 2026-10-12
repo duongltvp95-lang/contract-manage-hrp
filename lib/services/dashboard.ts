@@ -94,6 +94,26 @@ export async function getContractMetrics(
   });
 }
 
+const DASHBOARD_CONTRACT_COLUMNS = `
+  ${CONTRACT_COLUMNS},
+  partner:partners(name),
+  company:companies(name)
+`;
+
+type EmbeddedContractRow = ContractRow & {
+  partner: { name: string } | null;
+  company: { name: string } | null;
+};
+
+function formatDashboardRow(row: EmbeddedContractRow): DashboardContractRow {
+  const { partner, company, ...contract } = row;
+  return {
+    ...contract,
+    partnerName: partner?.name ?? null,
+    companies: company?.name ? [company.name] : [],
+  };
+}
+
 /** Newest contracts first (plan section 67: "Recent Contracts"). */
 export async function getRecentContracts(
   organizationId: string,
@@ -103,7 +123,7 @@ export async function getRecentContracts(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select(CONTRACT_COLUMNS)
+    .select(DASHBOARD_CONTRACT_COLUMNS)
     .eq("organization_id", organizationId)
     .is("archived_at", null)
     .order("created_at", { ascending: false })
@@ -113,7 +133,8 @@ export async function getRecentContracts(
     return dbError("getRecentContracts", error);
   }
 
-  return ok(await attachPartnerInfo((data ?? []) as ContractRow[]));
+  const rows = (data ?? []) as unknown as EmbeddedContractRow[];
+  return ok(rows.map(formatDashboardRow));
 }
 
 /**
@@ -132,7 +153,7 @@ export async function getExpiringContracts(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select(CONTRACT_COLUMNS)
+    .select(DASHBOARD_CONTRACT_COLUMNS)
     .eq("organization_id", organizationId)
     .is("archived_at", null)
     .gte("expiry_date", window.gte!)
@@ -144,65 +165,8 @@ export async function getExpiringContracts(
     return dbError("getExpiringContracts", error);
   }
 
-  return ok(await attachPartnerInfo((data ?? []) as ContractRow[]));
-}
-
-/**
- * Resolves each contract's partner name + the company the contract is signed
- * for (`contracts.company_id`).
- *
- * Round 37 — the old implementation read `partner_companies` and returned every
- * company the partner is linked to. For a partner that works with more than one
- * company (e.g. DONGYANG after round 35), that made every contract look like
- * it was signed for every company, which is wrong. The list and the dashboards
- * now show the company the contract is actually signed for instead.
- */
-async function attachPartnerInfo(rows: ContractRow[]): Promise<DashboardContractRow[]> {
-  if (rows.length === 0) return [];
-
-  const partnerIds = [
-    ...new Set(
-      rows.map((row) => row.partner_id).filter((id): id is string => Boolean(id)),
-    ),
-  ];
-  const companyIds = [
-    ...new Set(
-      rows.map((row) => row.company_id).filter((id): id is string => Boolean(id)),
-    ),
-  ];
-
-  const supabase = await createClient();
-
-  const nameByPartner = new Map<string, string>();
-  if (partnerIds.length > 0) {
-    const { data } = await supabase
-      .from("partners")
-      .select("id, name")
-      .in("id", partnerIds);
-    for (const row of (data ?? []) as { id: string; name: string }[]) {
-      nameByPartner.set(row.id, row.name);
-    }
-  }
-
-  const nameByCompany = new Map<string, string>();
-  if (companyIds.length > 0) {
-    const { data } = await supabase
-      .from("companies")
-      .select("id, name")
-      .in("id", companyIds);
-    for (const row of (data ?? []) as { id: string; name: string }[]) {
-      nameByCompany.set(row.id, row.name);
-    }
-  }
-
-  return rows.map((row) => ({
-    ...row,
-    partnerName: row.partner_id ? (nameByPartner.get(row.partner_id) ?? null) : null,
-    // Round 37 — one element at most, [] when the contract has no company.
-    companies: row.company_id && nameByCompany.get(row.company_id)
-      ? [nameByCompany.get(row.company_id) as string]
-      : [],
-  }));
+  const rows = (data ?? []) as unknown as EmbeddedContractRow[];
+  return ok(rows.map(formatDashboardRow));
 }
 
 /** Exposed so the report and tests can state the window without guessing. */
