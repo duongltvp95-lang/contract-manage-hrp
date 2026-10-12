@@ -133,3 +133,25 @@ export function getContractWarnings(input: {
 
   return warnings;
 }
+
+/**
+ * Schema for AI-extracted contract information (from PDF or images).
+ */
+export const ExtractedContractSchema = z.object({
+  contractNumber: z.string().optional().default(""),
+  signedDate: z.string().optional().default(""),
+  expiryDate: z.string().optional().default(""),
+  durationText: z.string().optional().default(""),
+  partnerName: z.string().optional().default(""),
+  companyName: z.string().optional().default(""),
+  summary: z.string().optional().default(""),
+});
+
+export type ExtractedContract = z.infer<typeof ExtractedContractSchema>;
+
+export type ExtractedContractResult = ExtractedContract & {
+  matchedPartnerId?: string | null;
+  matchedCompanyId?: string | null;
+  matchedPartnerName?: string | null;
+  matchedCompanyName?: string | null;
+};

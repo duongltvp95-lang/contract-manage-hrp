@@ -19,6 +19,14 @@ import {
   validationFailure,
   type ActionResult,
 } from "@/lib/server-action";
+import type { ExtractedContractResult } from "@schemas/contract";
+import { extractContractFromBuffer } from "@/lib/ai/gemini";
+import {
+  cleanEntityName,
+  findBestMatchingCompany,
+  findBestMatchingPartner,
+} from "@/lib/ai/matching";
+import { listCompanies, searchPartners } from "@/lib/services/partners";
 
 /**
  * Server actions for contract CRUD and the upload flow — plan sections 42, 64.
@@ -179,4 +187,64 @@ export async function unarchiveContractAction(
   }
 
   return fromService(await unarchiveContract(id));
+}
+
+/**
+ * AI Contract Extractor — trích xuất tự động thông tin từ tệp PDF/ảnh bằng Google Gemini.
+ */
+export async function extractContractAction(
+  formData: FormData,
+): Promise<ActionResult<ExtractedContractResult>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  const file = formData.get("file");
+  if (!file || !(file instanceof File)) {
+    return validationFailure("Tệp không hợp lệ", [
+      { path: "file", message: "Vui lòng chọn tệp hợp đồng để trích xuất" },
+    ]);
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  const extractionResult = await extractContractFromBuffer({
+    buffer,
+    mimeType: file.type,
+  });
+
+  if (!extractionResult.ok) {
+    return fromService(extractionResult);
+  }
+
+  const extracted = extractionResult.data;
+
+  // Tìm kiếm đối tác và công ty tương đồng trong tổ chức hiện tại
+  const searchTerm = extracted.partnerName ? cleanEntityName(extracted.partnerName) : "";
+  let partnersRes = await searchPartners(searchTerm);
+  if ((!partnersRes.ok || partnersRes.data.length === 0) && searchTerm !== "") {
+    partnersRes = await searchPartners("");
+  }
+  const companiesRes = await listCompanies({
+    organizationId: access.user.organizationId,
+  });
+
+  const partners = partnersRes.ok ? partnersRes.data : [];
+  const companies = companiesRes.ok ? companiesRes.data : [];
+
+  const matchedPartner = findBestMatchingPartner(extracted.partnerName, partners);
+  const matchedCompany = findBestMatchingCompany(extracted.companyName, companies);
+
+  const result: ExtractedContractResult = {
+    ...extracted,
+    matchedPartnerId: matchedPartner?.id ?? null,
+    matchedPartnerName: matchedPartner?.name ?? null,
+    matchedCompanyId: matchedCompany?.id ?? null,
+    matchedCompanyName: matchedCompany?.name ?? null,
+  };
+
+  return {
+    ok: true,
+    data: result,
+  };
 }

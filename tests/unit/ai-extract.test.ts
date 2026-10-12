@@ -1,0 +1,110 @@
+import { describe, expect, it } from "vitest";
+import { ExtractedContractSchema } from "@schemas/contract";
+import {
+  cleanEntityName,
+  findBestMatchingCompany,
+  findBestMatchingPartner,
+  normalizeVietnameseText,
+} from "@/lib/ai/matching";
+
+describe("AI Contract Extractor & Matching Unit Tests", () => {
+  describe("ExtractedContractSchema", () => {
+    it("validates full contract output", () => {
+      const input = {
+        contractNumber: "01/2026/HĐKT",
+        signedDate: "2026-05-15",
+        expiryDate: "2027-05-15",
+        durationText: "12 tháng",
+        partnerName: "Công ty Cổ phần Công nghệ Sao Mai",
+        companyName: "Công ty TNHH HR Partner Việt Nam",
+        summary: "Cung cấp phần mềm quản lý",
+      };
+
+      const result = ExtractedContractSchema.safeParse(input);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.contractNumber).toBe("01/2026/HĐKT");
+        expect(result.data.signedDate).toBe("2026-05-15");
+      }
+    });
+
+    it("defaults missing fields to empty strings", () => {
+      const input = {
+        contractNumber: "02/HĐMB",
+      };
+
+      const result = ExtractedContractSchema.safeParse(input);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.contractNumber).toBe("02/HĐMB");
+        expect(result.data.signedDate).toBe("");
+        expect(result.data.expiryDate).toBe("");
+        expect(result.data.partnerName).toBe("");
+      }
+    });
+  });
+
+  describe("normalizeVietnameseText", () => {
+    it("removes diacritics and converts to lowercase", () => {
+      expect(normalizeVietnameseText("Công Ty Cổ Phần ĐẦU TƯ")).toBe("cong ty co phan dau tu");
+      expect(normalizeVietnameseText("  Đà   Nẵng  ")).toBe("da nang");
+    });
+  });
+
+  describe("cleanEntityName", () => {
+    it("removes legal company prefixes", () => {
+      expect(cleanEntityName("Công ty Cổ phần Sao Mai")).toBe("sao mai");
+      expect(cleanEntityName("Công ty TNHH MTV Công Nghệ Mới")).toBe("cong nghe moi");
+      expect(cleanEntityName("Cty CP Giải Pháp Số")).toBe("giai phap so");
+    });
+  });
+
+  describe("findBestMatchingPartner", () => {
+    const mockPartners = [
+      { id: "p1", name: "Công ty Cổ phần Sao Mai" },
+      { id: "p2", name: "Công ty TNHH Dịch vụ Hoa Sen" },
+      { id: "p3", name: "Tập đoàn Viễn thông An Phát" },
+    ];
+
+    it("matches exact name", () => {
+      const match = findBestMatchingPartner("Công ty Cổ phần Sao Mai", mockPartners);
+      expect(match?.id).toBe("p1");
+    });
+
+    it("matches cleaned name without company prefix", () => {
+      const match = findBestMatchingPartner("Sao Mai", mockPartners);
+      expect(match?.id).toBe("p1");
+    });
+
+    it("matches even if AI extracted different prefix format (e.g. Cty TNHH instead of Cty CP)", () => {
+      const match = findBestMatchingPartner("Công ty TNHH Sao Mai", mockPartners);
+      expect(match?.id).toBe("p1");
+    });
+
+    it("returns null when no matching partner is found", () => {
+      const match = findBestMatchingPartner("Công ty TNHH Hoàn Toàn Khác", mockPartners);
+      expect(match).toBeNull();
+    });
+
+    it("returns null for empty target", () => {
+      expect(findBestMatchingPartner("", mockPartners)).toBeNull();
+      expect(findBestMatchingPartner(undefined, mockPartners)).toBeNull();
+    });
+  });
+
+  describe("findBestMatchingCompany", () => {
+    const mockCompanies = [
+      { id: "c1", name: "Công ty TNHH HR Partner" },
+      { id: "c2", name: "Công ty Cổ phần HR Partner Việt Nam" },
+    ];
+
+    it("matches company by partial or cleaned name", () => {
+      const match = findBestMatchingCompany("HR Partner", mockCompanies);
+      expect(match?.id).toBe("c1");
+    });
+
+    it("returns null when no company matches", () => {
+      expect(findBestMatchingCompany("FPT Software", mockCompanies)).toBeNull();
+    });
+  });
+});

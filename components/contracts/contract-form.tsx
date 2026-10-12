@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2 } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
@@ -15,8 +15,10 @@ import {
 
 import {
   createContractAction,
+  extractContractAction,
   updateContractAction,
 } from "@/app/(app)/contracts/actions";
+import type { PendingFile } from "@/lib/upload";
 import { DateField } from "@/components/contracts/date-field";
 import { ContractCompanyField } from "@/components/contracts/contract-company-field";
 import { ContractFileAttachments } from "@/components/contracts/contract-file-attachments";
@@ -196,6 +198,95 @@ export function ContractForm({
   });
 
   const [formError, setFormError] = useState<string | null>(null);
+  const [isExtractingAi, setIsExtractingAi] = useState(false);
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+
+  async function handleExtractAi(fileItem: PendingFile) {
+    setIsExtractingAi(true);
+    setAiSummary(null);
+
+    const formData = new FormData();
+    formData.append("file", fileItem.file);
+
+    try {
+      const result = await extractContractAction(formData);
+
+      if (!result.ok) {
+        toast.error("Không thể trích xuất thông tin bằng AI", {
+          description: result.message,
+        });
+        return;
+      }
+
+      const data = result.data;
+      const filledFields: string[] = [];
+
+      if (data.contractNumber) {
+        form.setValue("contractNumber", data.contractNumber, {
+          shouldValidate: true,
+          shouldDirty: true,
+        });
+        filledFields.push("Số HĐ");
+      }
+
+      if (data.signedDate) {
+        form.setValue("signedDate", data.signedDate, {
+          shouldValidate: true,
+          shouldDirty: true,
+        });
+        filledFields.push("Ngày ký");
+      }
+
+      if (data.expiryDate) {
+        form.setValue("expiryDate", data.expiryDate, {
+          shouldValidate: true,
+          shouldDirty: true,
+        });
+        filledFields.push("Ngày hết hạn");
+      }
+
+      if (data.durationText) {
+        form.setValue("durationText", data.durationText, {
+          shouldValidate: true,
+          shouldDirty: true,
+        });
+        filledFields.push("Thời hạn");
+      }
+
+      if (data.matchedPartnerId) {
+        form.setValue("partnerId", data.matchedPartnerId, {
+          shouldValidate: true,
+          shouldDirty: true,
+        });
+        filledFields.push(`Đối tác: ${data.matchedPartnerName}`);
+      }
+
+      if (data.matchedCompanyId) {
+        form.setValue("companyId", data.matchedCompanyId, {
+          shouldValidate: true,
+          shouldDirty: true,
+        });
+        filledFields.push(`Công ty: ${data.matchedCompanyName}`);
+      }
+
+      if (data.summary) {
+        setAiSummary(data.summary);
+      }
+
+      toast.success("✨ AI đã trích xuất thành công thông tin hợp đồng!", {
+        description:
+          filledFields.length > 0
+            ? `Đã điền: ${filledFields.join(", ")}.`
+            : "Đã phân tích xong nội dung tệp đính kèm.",
+      });
+    } catch (err) {
+      toast.error("Trích xuất AI gặp sự cố", {
+        description: err instanceof Error ? err.message : "Vui lòng thử lại sau.",
+      });
+    } finally {
+      setIsExtractingAi(false);
+    }
+  }
 
   const signedDate = useWatch({ control: form.control, name: "signedDate" });
   const expiryDate = useWatch({ control: form.control, name: "expiryDate" });
@@ -395,6 +486,18 @@ export function ContractForm({
           </Alert>
         )}
 
+        {aiSummary && (
+          <Alert className="border-purple-200 bg-purple-50/70 dark:border-purple-900/50 dark:bg-purple-950/20">
+            <Sparkles className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+            <AlertTitle className="text-purple-950 dark:text-purple-200 font-semibold">
+              Tóm tắt nội dung hợp đồng từ AI
+            </AlertTitle>
+            <AlertDescription className="text-purple-900/90 dark:text-purple-300">
+              {aiSummary}
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* Tệp hợp đồng & phụ lục: bóc tách sang sub-component ContractFileAttachments */}
         {!isEdit && (
           <ContractFileAttachments
@@ -405,6 +508,8 @@ export function ContractForm({
             uploadError={uploadError}
             failedCount={failedCount}
             onRetryUploads={retryUploads}
+            onExtractAi={handleExtractAi}
+            isExtractingAi={isExtractingAi}
           />
         )}
 
@@ -418,7 +523,7 @@ export function ContractForm({
         )}
 
         <div className="flex items-center gap-3">
-          <Button type="submit" disabled={busy} data-testid="contract-form-submit">
+          <Button type="submit" disabled={busy || isExtractingAi} data-testid="contract-form-submit">
             {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {phase === "saving"
               ? isEdit
