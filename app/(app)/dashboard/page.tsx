@@ -8,6 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { requireUser } from "@/lib/auth";
+import { formatDateOnly } from "@/lib/format";
 import {
   DASHBOARD_LIST_LIMIT,
   expiringWindowBounds,
@@ -73,7 +74,7 @@ async function DashboardContent() {
           testId="metric-expiring-soon"
           title="Sắp hết hạn"
           value={metrics.ok ? metrics.data.expiringSoon : "—"}
-          hint={`Từ ${window.from} đến ${window.to}`}
+          hint={`Từ ${formatDateOnly(window.from)} đến ${formatDateOnly(window.to)}`}
           tone="warning"
           icon={<Clock className="h-6 w-6" />}
         />
@@ -81,7 +82,7 @@ async function DashboardContent() {
           testId="metric-expired"
           title="Đã hết hạn"
           value={metrics.ok ? metrics.data.expired : "—"}
-          hint={`Ngày hết hạn trước ${window.from}`}
+          hint={`Ngày hết hạn trước ${formatDateOnly(window.from)}`}
           tone="danger"
           icon={<AlertCircle className="h-6 w-6" />}
         />
