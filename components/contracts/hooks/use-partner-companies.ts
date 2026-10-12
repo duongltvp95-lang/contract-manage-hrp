@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { partnerCompanyRowsAction } from "@/app/(app)/partners/actions";
 import type { Company } from "@/lib/services/partners";
 
@@ -26,6 +26,14 @@ export function usePartnerCompanies({
   const [companiesError, setCompaniesError] = useState<string | null>(null);
   const [companiesRetry, setCompaniesRetry] = useState(0);
   const [rowsPartnerId, setRowsPartnerId] = useState<string | null>(null);
+
+  const onResetCompanyRef = useRef(onResetCompany);
+  const currentCompanyIdRef = useRef(currentCompanyId);
+
+  useEffect(() => {
+    onResetCompanyRef.current = onResetCompany;
+    currentCompanyIdRef.current = currentCompanyId;
+  });
 
   // Đang tải khi đối tác đổi nhưng dữ liệu của đối tác mới chưa nạp xong
   const companiesLoading = Boolean(partnerId) && rowsPartnerId !== partnerId;
@@ -64,10 +72,10 @@ export function usePartnerCompanies({
 
         // Nếu công ty đang chọn không còn thuộc danh sách mới → reset về ""
         if (
-          currentCompanyId &&
-          !next.some((row) => row.id === currentCompanyId)
+          currentCompanyIdRef.current &&
+          !next.some((row) => row.id === currentCompanyIdRef.current)
         ) {
-          onResetCompany?.();
+          onResetCompanyRef.current?.();
         }
       })
       .catch(() => {
@@ -86,8 +94,6 @@ export function usePartnerCompanies({
     isEdit,
     defaultCompanyId,
     defaultCompanyName,
-    currentCompanyId,
-    onResetCompany,
   ]);
 
   const retryCompanies = () => {

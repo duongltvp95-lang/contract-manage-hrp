@@ -5,7 +5,7 @@ import type { FileKind } from "@schemas/file";
 import { completeUploadAction } from "@/app/(app)/contracts/actions";
 import { putFileWithProgress, type PendingFile } from "@/lib/upload";
 
-export type Phase = "idle" | "saving" | "uploading" | "done" | "failed";
+export type Phase = "idle" | "saving" | "uploading" | "redirecting" | "done" | "failed";
 
 /**
  * Custom hook to manage contract file uploads, presigned URLs, and retry orchestrations.
@@ -90,6 +90,7 @@ export function useContractUploads({
 
   async function runUploads(contractId: string, queue: PendingFile[]) {
     if (queue.length === 0) {
+      setPhase("redirecting");
       onSuccess(contractId);
       return;
     }
@@ -99,17 +100,20 @@ export function useContractUploads({
 
     const failures: string[] = [];
 
-    for (const pending of queue) {
-      try {
-        await uploadOne(contractId, pending);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Tải lên thất bại";
-        failures.push(`${pending.file.name}: ${message}`);
-        patchFile(pending.id, { status: "error", error: message });
-      }
-    }
+    await Promise.all(
+      queue.map(async (pending) => {
+        try {
+          await uploadOne(contractId, pending);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Tải lên thất bại";
+          failures.push(`${pending.file.name}: ${message}`);
+          patchFile(pending.id, { status: "error", error: message });
+        }
+      }),
+    );
 
     if (failures.length === 0) {
+      setPhase("redirecting");
       onSuccess(contractId);
       return;
     }
@@ -128,7 +132,7 @@ export function useContractUploads({
 
   const failedCount = files.filter((item) => item.status === "error").length;
   const hasFiles = files.length > 0;
-  const busy = phase === "saving" || phase === "uploading";
+  const busy = phase === "saving" || phase === "uploading" || phase === "redirecting";
 
   return {
     files,

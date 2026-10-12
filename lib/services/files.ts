@@ -13,7 +13,6 @@ import { getR2Bucket } from "@/lib/r2/client";
 import { formatBytes } from "@/lib/format";
 import { createClient } from "@/lib/supabase/server";
 import { recordCurrentUserAudit } from "./audit-logs";
-import { getContract } from "./contracts";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
@@ -62,9 +61,20 @@ export async function getContractFileAccess(
   contractId: string,
   fileId?: string,
 ): Promise<ServiceResult<FileAccess>> {
-  const contract = await getContract(contractId, organizationId);
+  const supabase = await createClient();
 
-  if (!contract.ok) {
+  const { data: contract, error: contractError } = await supabase
+    .from("contracts")
+    .select("id")
+    .eq("id", contractId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (contractError) {
+    return dbError("getContractFileAccess", contractError);
+  }
+
+  if (!contract) {
     // `not_found` covers both "no such contract" and "another organization's
     // contract"; the caller turns it into 403, not 404, so nothing leaks.
     return err("forbidden", "Hợp đồng không thuộc tổ chức của bạn");
@@ -74,7 +84,6 @@ export async function getContractFileAccess(
     return ok({ contractId, file: null });
   }
 
-  const supabase = await createClient();
   const { data, error } = await supabase
     .from("contract_files")
     .select(CONTRACT_FILE_COLUMNS)

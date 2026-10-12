@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 
@@ -155,6 +155,10 @@ export function ContractForm({
 
   const partnerId = useWatch({ control: form.control, name: "partnerId" });
 
+  const handleResetCompany = useCallback(() => {
+    form.setValue("companyId", "", { shouldDirty: false, shouldValidate: false });
+  }, [form]);
+
   // Hook quản lý tải danh sách công ty theo đối tác
   const {
     companyRows,
@@ -167,9 +171,7 @@ export function ContractForm({
     defaultCompanyId: contract?.company_id,
     defaultCompanyName: contract?.company_name,
     currentCompanyId: form.getValues("companyId"),
-    onResetCompany: () => {
-      form.setValue("companyId", "", { shouldDirty: false, shouldValidate: false });
-    },
+    onResetCompany: handleResetCompany,
   });
 
   // Hook quản lý tải tệp hợp đồng lên R2
@@ -237,6 +239,7 @@ export function ContractForm({
     }
 
     setSavedContractId(created.data.id);
+    router.prefetch(`/contracts/${created.data.id}`);
     await runUploads(created.data.id, files);
   }
 
@@ -423,9 +426,11 @@ export function ContractForm({
                 : "Đang lưu hợp đồng..."
               : phase === "uploading"
                 ? "Đang tải tệp lên..."
-                : isEdit
-                  ? "Lưu thay đổi"
-                  : "Lưu hợp đồng"}
+                : phase === "redirecting"
+                  ? "Đang mở hợp đồng..."
+                  : isEdit
+                    ? "Lưu thay đổi"
+                    : "Lưu hợp đồng"}
           </Button>
 
           {isEdit && onCancel ? (
