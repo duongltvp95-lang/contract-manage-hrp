@@ -3,11 +3,19 @@ import "server-only";
 import { ExtractedContractSchema, type ExtractedContract } from "@schemas/contract";
 import { err, ok, type ServiceResult } from "@/lib/services/types";
 
-const GEMINI_MODELS = [
-  "gemini-3.5-flash-lite",
-  "gemini-flash-latest",
-  "gemini-3.5-flash",
-];
+function getGeminiModels(): string[] {
+  const envModel = process.env.GEMINI_MODEL?.trim();
+  const defaults = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.8-flash",
+    "gemini-flash-latest",
+  ];
+  if (envModel && !defaults.includes(envModel)) {
+    return [envModel, ...defaults];
+  }
+  return defaults;
+}
 
 const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
@@ -139,7 +147,10 @@ export async function extractContractFromBuffer({
   const base64Data = buffer.toString("base64");
   let lastError = "Không thể kết nối tới dịch vụ AI Google Gemini.";
 
-  for (const model of GEMINI_MODELS) {
+  const models = getGeminiModels();
+
+  for (const model of models) {
+    const startTime = Date.now();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
     const requestBody = {
@@ -165,6 +176,7 @@ export async function extractContractFromBuffer({
     };
 
     try {
+      console.log(`[ai:gemini] Đang trích xuất với model: ${model}...`);
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -182,6 +194,7 @@ export async function extractContractFromBuffer({
 
         const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!rawText) {
+          console.warn(`[ai:gemini] Model ${model} trả về nội dung rỗng. Fallback...`);
           continue;
         }
 
@@ -199,6 +212,7 @@ export async function extractContractFromBuffer({
             summary: String(parsedJson.summary ?? "").trim(),
           };
 
+          console.log(`[ai:gemini] Trích xuất thành công với model ${model} (${Date.now() - startTime}ms)`);
           return ok(extracted);
         } catch (parseErr) {
           console.error(`[ai:gemini] Parse error on model ${model}:`, rawText, parseErr);
@@ -214,6 +228,7 @@ export async function extractContractFromBuffer({
 
       // If the model is 503 (high demand) or 404 (model unavailable) or 429, continue to next fallback model
       if (response.status === 503 || response.status === 404 || response.status === 429) {
+        console.warn(`[ai:gemini] Model ${model} trả về HTTP ${response.status} (${lastError}). Đang chuyển sang model tiếp theo...`);
         continue;
       }
 
@@ -221,6 +236,7 @@ export async function extractContractFromBuffer({
       return err("validation", `AI lỗi (${response.status}): ${lastError}`);
     } catch (networkError) {
       lastError = networkError instanceof Error ? networkError.message : "Lỗi kết nối mạng";
+      console.warn(`[ai:gemini] Model ${model} gặp lỗi mạng: ${lastError}. Đang chuyển fallback...`);
     }
   }
 
