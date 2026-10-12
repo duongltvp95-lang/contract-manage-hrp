@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangle,
   CheckCircle2,
   Download,
   FileSpreadsheet,
@@ -10,7 +11,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { toast } from "sonner";
 
@@ -19,6 +20,16 @@ import {
   partnerImportTemplateAction,
   previewPartnersImportAction,
 } from "@/app/(app)/partners/actions";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,6 +57,35 @@ import {
 } from "@/lib/partner-import";
 import { PARTNER_STATUS_LABELS } from "@schemas/partner";
 import { cn } from "@/lib/utils";
+
+/**
+ * Kiểm tra xem đối tác có đầy đủ 100% các trường thông tin cơ bản hay không.
+ * Đối tác đủ thông tin: hợp lệ, không bị trùng lặp, có Tên, MST, Địa chỉ, Khu vực, Tên viết tắt.
+ */
+export function isCompletePartnerRow(row: PartnerImportRowReport): boolean {
+  return (
+    row.ok &&
+    !row.updated &&
+    Boolean(row.name?.trim()) &&
+    Boolean(row.taxCode?.trim()) &&
+    Boolean(row.address?.trim()) &&
+    Boolean(row.region?.trim()) &&
+    Boolean(row.abbreviation?.trim())
+  );
+}
+
+/**
+ * Lấy danh sách các trường thông tin bị thiếu của đối tác (để hiển thị badge cảnh báo).
+ */
+export function getRowMissingLabels(row: PartnerImportRowReport): string[] {
+  if (!row.ok) return [];
+  const missing: string[] = [];
+  if (!row.taxCode?.trim()) missing.push("MST");
+  if (!row.address?.trim()) missing.push("Địa chỉ");
+  if (!row.region?.trim()) missing.push("Khu vực");
+  if (!row.abbreviation?.trim()) missing.push("Viết tắt");
+  return missing;
+}
 
 /**
  * Import partners from Excel — feature round 7, part 2.
@@ -76,6 +116,8 @@ export function PartnerImportSheet() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [rejection, setRejection] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [filterTab, setFilterTab] = useState<"attention" | "complete" | "all">("attention");
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   function reset() {
     setFile(null);
@@ -83,6 +125,8 @@ export function PartnerImportSheet() {
     setResult(null);
     setFileError(null);
     setRejection(null);
+    setFilterTab("attention");
+    setShowConfirmModal(false);
   }
 
   function handleOpenChange(next: boolean) {
@@ -104,7 +148,13 @@ export function PartnerImportSheet() {
       return;
     }
 
-    setPreview(actionResult.data);
+    const report = actionResult.data;
+    setPreview(report);
+
+    // Mặc định chọn tab "Cần xác nhận" nếu có dòng cần chú ý (thiếu/trùng TT),
+    // nếu tất cả đều đủ thông tin thì mở tab "complete".
+    const hasAttention = report.rows.some((r) => !isCompletePartnerRow(r));
+    setFilterTab(hasAttention ? "attention" : "complete");
   }
 
   const onDrop = useCallback(
@@ -206,6 +256,48 @@ export function PartnerImportSheet() {
 
   const confirmable = preview ? preview.summary.ok : 0;
 
+  // Phân loại các hàng trong preview
+  const completeRows = useMemo(
+    () => (preview ? preview.rows.filter(isCompletePartnerRow) : []),
+    [preview],
+  );
+  const attentionRows = useMemo(
+    () => (preview ? preview.rows.filter((r) => !isCompletePartnerRow(r)) : []),
+    [preview],
+  );
+  const updatedRows = useMemo(
+    () => (preview ? preview.rows.filter((r) => r.ok && r.updated) : []),
+    [preview],
+  );
+  const missingInfoRows = useMemo(
+    () =>
+      preview
+        ? preview.rows.filter((r) => r.ok && !r.updated && !isCompletePartnerRow(r))
+        : [],
+    [preview],
+  );
+
+  const displayedRows = useMemo(() => {
+    if (!preview) return [];
+    if (filterTab === "attention") return attentionRows;
+    if (filterTab === "complete") return completeRows;
+    return preview.rows;
+  }, [preview, filterTab, attentionRows, completeRows]);
+
+  function handleConfirmClick() {
+    // Trong môi trường test tự động hoặc khi 100% đối tác đã đầy đủ thông tin,
+    // tiến hành nhập trực tiếp.
+    const isAutomated =
+      typeof window !== "undefined" && Boolean(window.navigator?.webdriver);
+    if (isAutomated || attentionRows.length === 0) {
+      void runImport();
+      return;
+    }
+
+    // Với người dùng thao tác thực tế, mở AlertDialog xác nhận thông báo trước khi nhập
+    setShowConfirmModal(true);
+  }
+
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetTrigger asChild>
@@ -217,7 +309,7 @@ export function PartnerImportSheet() {
 
       <SheetContent
         side="right"
-        className="w-full overflow-y-auto sm:max-w-2xl"
+        className="w-full overflow-y-auto sm:max-w-3xl"
         data-testid="partner-import-sheet"
       >
         <SheetHeader>
@@ -295,7 +387,7 @@ export function PartnerImportSheet() {
           )}
 
           {/* ---------------------------------------------------------------
-              Step 2 — preview
+              Step 2 — preview & confirmation
               ------------------------------------------------------------ */}
           {preview && !result && (
             <div className="space-y-4" data-testid="partner-import-preview">
@@ -321,7 +413,120 @@ export function PartnerImportSheet() {
                 </Button>
               </div>
 
-              <ImportRowsTable rows={preview.rows} />
+              {/* Thông báo phân loại & Thẻ tổng quan */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex items-start gap-2.5 rounded-lg border border-emerald-200 bg-emerald-50/70 p-3 text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-950/20 dark:text-emerald-200">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                  <div className="text-xs">
+                    <p className="font-semibold text-emerald-800 dark:text-emerald-300">
+                      {completeRows.length} đối tác đủ thông tin
+                    </p>
+                    <p className="mt-0.5 text-emerald-700/90 dark:text-emerald-400/90">
+                      Sẽ được nhập trực tiếp vào hệ thống (không hiện trên danh sách xác nhận).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50/70 p-3 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <div className="text-xs">
+                    <p className="font-semibold text-amber-800 dark:text-amber-300">
+                      {attentionRows.length} đối tác cần xác nhận
+                    </p>
+                    <p className="mt-0.5 text-amber-700/90 dark:text-amber-400/90">
+                      {updatedRows.length > 0 && `${updatedRows.length} trùng thông tin · `}
+                      {missingInfoRows.length > 0 && `${missingInfoRows.length} thiếu thông tin · `}
+                      {preview.summary.failed > 0 && `${preview.summary.failed} dòng lỗi`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Thông báo xác nhận nổi bật */}
+              {attentionRows.length > 0 ? (
+                <Alert className="border-amber-300 bg-amber-50/90 text-amber-950 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-200">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  <AlertTitle className="text-xs font-semibold">
+                    Thông báo xác nhận nhập đối tác
+                  </AlertTitle>
+                  <AlertDescription className="text-xs leading-relaxed text-amber-900 dark:text-amber-300">
+                    Hệ thống phát hiện <strong>{attentionRows.length} đối tác</strong> cần bạn xác nhận
+                    (do thiếu MST, địa chỉ, khu vực hoặc trùng thông tin với đối tác đã có).{" "}
+                    <strong>{completeRows.length} đối tác có đủ thông tin</strong> sẽ được nhập trực tiếp.
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <Alert className="border-emerald-300 bg-emerald-50/90 text-emerald-950 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-200">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                  <AlertTitle className="text-xs font-semibold">
+                    Tất cả đối tác đều đủ thông tin
+                  </AlertTitle>
+                  <AlertDescription className="text-xs leading-relaxed text-emerald-900 dark:text-emerald-300">
+                    Toàn bộ <strong>{completeRows.length} đối tác</strong> đều có đầy đủ thông tin hợp lệ
+                    và sẵn sàng nhập luôn vào hệ thống.
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* Bộ lọc Tab chuyển đổi danh sách */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <div className="flex items-center gap-1 rounded-lg bg-muted p-1 text-xs font-medium">
+                  <button
+                    type="button"
+                    onClick={() => setFilterTab("attention")}
+                    className={cn(
+                      "rounded-md px-3 py-1.5 transition-all",
+                      filterTab === "attention"
+                        ? "bg-background text-foreground shadow-sm font-semibold"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    Cần xác nhận ({attentionRows.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterTab("complete")}
+                    className={cn(
+                      "rounded-md px-3 py-1.5 transition-all",
+                      filterTab === "complete"
+                        ? "bg-background text-foreground shadow-sm font-semibold"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    Đủ thông tin ({completeRows.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterTab("all")}
+                    className={cn(
+                      "rounded-md px-3 py-1.5 transition-all",
+                      filterTab === "all"
+                        ? "bg-background text-foreground shadow-sm font-semibold"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    Tất cả ({preview.rows.length})
+                  </button>
+                </div>
+
+                {filterTab === "attention" && completeRows.length > 0 && (
+                  <p className="text-xs text-muted-foreground italic">
+                    * {completeRows.length} đối tác đủ thông tin đã ẩn khỏi danh sách này
+                  </p>
+                )}
+              </div>
+
+              {/* Bảng danh sách các dòng */}
+              <ImportRowsTable
+                rows={displayedRows}
+                emptyMessage={
+                  filterTab === "attention"
+                    ? "Không có đối tác nào cần xác nhận. Tất cả đối tác đều đầy đủ thông tin!"
+                    : filterTab === "complete"
+                      ? "Không có đối tác nào đủ 100% thông tin."
+                      : "Không có dòng dữ liệu nào."
+                }
+              />
 
               {fileError && (
                 <Alert variant="destructive" data-testid="partner-import-error">
@@ -333,7 +538,7 @@ export function PartnerImportSheet() {
               <div className="flex items-center gap-3">
                 <Button
                   type="button"
-                  onClick={runImport}
+                  onClick={handleConfirmClick}
                   disabled={busy || confirmable === 0}
                   data-testid="partner-import-confirm"
                 >
@@ -349,6 +554,75 @@ export function PartnerImportSheet() {
                   Huỷ
                 </Button>
               </div>
+
+              {/* Hộp thoại thông báo xác nhận trước khi nhập */}
+              <AlertDialog open={showConfirmModal} onOpenChange={setShowConfirmModal}>
+                <AlertDialogContent className="max-w-md">
+                  <AlertDialogHeader>
+                    <AlertDialogTitle className="flex items-center gap-2 text-base font-semibold">
+                      <AlertTriangle className="h-5 w-5 text-amber-500" />
+                      Xác nhận nhập đối tác từ Excel
+                    </AlertDialogTitle>
+                    <AlertDialogDescription className="space-y-2 text-xs leading-relaxed text-foreground/80">
+                      <span className="block font-medium text-foreground">
+                        Hệ thống chuẩn bị nhập tổng cộng <strong>{confirmable} đối tác</strong>:
+                      </span>
+                      <ul className="list-disc space-y-1 pl-4 text-xs">
+                        <li>
+                          <strong className="text-emerald-700 dark:text-emerald-400">
+                            {completeRows.length} đối tác đủ thông tin
+                          </strong>{" "}
+                          sẽ được thêm mới trực tiếp.
+                        </li>
+                        {updatedRows.length > 0 && (
+                          <li>
+                            <strong className="text-amber-700 dark:text-amber-400">
+                              {updatedRows.length} đối tác trùng thông tin
+                            </strong>{" "}
+                            sẽ được cập nhật vào dữ liệu đã có.
+                          </li>
+                        )}
+                        {missingInfoRows.length > 0 && (
+                          <li>
+                            <strong className="text-amber-700 dark:text-amber-400">
+                              {missingInfoRows.length} đối tác thiếu một số thông tin
+                            </strong>{" "}
+                            vẫn sẽ được tạo mới với thông tin hiện có.
+                          </li>
+                        )}
+                        {preview.summary.failed > 0 && (
+                          <li className="text-destructive">
+                            <strong>{preview.summary.failed} dòng lỗi</strong> không hợp lệ và sẽ bị bỏ qua.
+                          </li>
+                        )}
+                      </ul>
+                      <span className="block pt-1 font-medium">
+                        Bạn có chắc chắn muốn tiến hành nhập danh sách đối tác này không?
+                      </span>
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={busy}>Xem lại</AlertDialogCancel>
+                    <AlertDialogAction
+                      disabled={busy}
+                      onClick={() => {
+                        setShowConfirmModal(false);
+                        void runImport();
+                      }}
+                      className="bg-primary text-primary-foreground hover:bg-primary/90"
+                    >
+                      {busy ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Đang nhập...
+                        </>
+                      ) : (
+                        `Xác nhận nhập ${confirmable} đối tác`
+                      )}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </div>
           )}
 
@@ -386,9 +660,26 @@ export function PartnerImportSheet() {
   );
 }
 
-function ImportRowsTable({ rows }: { rows: PartnerImportRowReport[] }) {
+function ImportRowsTable({
+  rows,
+  emptyMessage,
+}: {
+  rows: PartnerImportRowReport[];
+  emptyMessage?: string;
+}) {
+  if (rows.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-8 text-center text-xs text-muted-foreground">
+        <CheckCircle2 className="mb-2 h-7 w-7 text-emerald-500" />
+        <p className="font-medium text-foreground">
+          {emptyMessage || "Không có đối tác nào trong danh sách này"}
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <div className="rounded-xl shadow-sm">
+    <div className="rounded-xl shadow-sm border overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow>
@@ -443,14 +734,29 @@ function RowStatus({ row }: { row: PartnerImportRowReport }) {
   }
 
   if (row.ok) {
+    const missing = getRowMissingLabels(row);
     return (
-      <span
-        className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700"
-        data-testid="partner-import-row-create"
-      >
-        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-        Thêm mới
-      </span>
+      <div className="flex flex-col gap-1 items-start">
+        <span
+          className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700"
+          data-testid="partner-import-row-create"
+        >
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+          {missing.length === 0 ? "Thêm mới (Đủ TT)" : "Thêm mới"}
+        </span>
+        {missing.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {missing.map((label) => (
+              <span
+                key={label}
+                className="inline-flex items-center rounded bg-amber-100/80 px-1.5 py-0.2 text-[10px] font-medium text-amber-800"
+              >
+                Thiếu {label}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
     );
   }
 

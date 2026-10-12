@@ -423,3 +423,73 @@ describe("buildPartnerImportTemplate", () => {
     expect(validated.status).toBe("active");
   });
 });
+
+describe("isCompletePartnerRow & getRowMissingLabels", () => {
+  it("recognises a fully complete partner row", async () => {
+    const { isCompletePartnerRow, getRowMissingLabels } = await import(
+      "@/components/partners/partner-import-sheet"
+    );
+
+    const completeRow = {
+      rowNumber: 2,
+      name: "Công ty Cổ phần ABC",
+      address: "123 Hoàng Quốc Việt, Cầu Giấy, Hà Nội",
+      taxCode: "0101234567",
+      region: "Hà Nội",
+      abbreviation: "ABC",
+      status: "active" as const,
+      hasCompanyColumn: true,
+      companies: ["HRP"],
+      ok: true,
+    };
+
+    expect(isCompletePartnerRow(completeRow)).toBe(true);
+    expect(getRowMissingLabels(completeRow)).toEqual([]);
+  });
+
+  it("identifies incomplete fields when information is missing", async () => {
+    const { isCompletePartnerRow, getRowMissingLabels } = await import(
+      "@/components/partners/partner-import-sheet"
+    );
+
+    const missingRow = {
+      rowNumber: 3,
+      name: "Công ty Thiếu MST và Địa Chỉ",
+      address: "",
+      taxCode: "",
+      region: "Bắc Ninh",
+      abbreviation: "TMS",
+      status: "active" as const,
+      hasCompanyColumn: true,
+      companies: ["HRP"],
+      ok: true,
+    };
+
+    expect(isCompletePartnerRow(missingRow)).toBe(false);
+    expect(getRowMissingLabels(missingRow)).toEqual(["MST", "Địa chỉ"]);
+  });
+
+  it("marks updated/duplicate rows as needing attention even if info is full", async () => {
+    const { isCompletePartnerRow } = await import(
+      "@/components/partners/partner-import-sheet"
+    );
+
+    const updatedRow = {
+      rowNumber: 4,
+      name: "Công ty Trùng Lặp",
+      address: "Đà Nẵng",
+      taxCode: "0401234567",
+      region: "Đà Nẵng",
+      abbreviation: "CTL",
+      status: "active" as const,
+      hasCompanyColumn: true,
+      companies: ["HRP"],
+      ok: true,
+      updated: true,
+      matchedPartnerName: "Công ty Trùng Lặp Cũ",
+    };
+
+    expect(isCompletePartnerRow(updatedRow)).toBe(false);
+  });
+});
+

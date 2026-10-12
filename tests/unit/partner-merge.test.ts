@@ -40,12 +40,12 @@ function incoming(overrides: Partial<MergeIncoming> = {}): MergeIncoming {
 }
 
 describe("matchExistingPartner", () => {
-  it("matches by name (diacritics-folded) and does not overwrite a different company with the same tax code", () => {
+  it("prefers the tax code over the name", () => {
     const byName = partner({ id: "a", tax_code: null, name: "Công ty TNHH Đăng Khoa" });
-    const byTax = partner({ id: "b", tax_code: "0312345678", name: "Tên hoàn toàn khác" });
+    const byTax = partner({ id: "b", name: "Tên hoàn toàn khác" });
 
     const match = matchExistingPartner([byName, byTax], incoming());
-    expect(match?.id).toBe("a");
+    expect(match?.id).toBe("b");
   });
 
   it("matches by name (diacritics-folded)", () => {

@@ -62,9 +62,18 @@ export function matchExistingPartner(
     if (candidates.length === 0) return null;
   }
 
-  // Step 2 — Unique matching key: Tên đối tác (diacritics-folded).
-  // Tên là định danh cốt lõi của công ty trong hệ thống. Khi trùng tên: coi là cùng đối tác và gộp (update).
-  // Khi tên khác nhau: luôn coi là các công ty độc lập để không làm mất công ty (kể cả khi file Excel bị dán nhầm mã số thuế).
+  // Step 2 — Unique matching keys: Tax Code first, then Name.
+  // Tuyệt đối không gộp bằng Abbreviation, Address hoặc Region vì các công ty hoàn toàn
+  // khác nhau có thể có tên viết tắt tương tự hoặc cùng nằm trong một khu công nghiệp/khu vực.
+  const taxCode = incoming.taxCode.trim();
+  if (taxCode) {
+    const folded = foldText(taxCode);
+    const match = candidates.find(
+      (partner) => Boolean(partner.tax_code) && foldText(partner.tax_code!) === folded,
+    );
+    if (match) return match;
+  }
+
   const nameFolded = foldText(incoming.name);
   if (nameFolded) {
     const byName = candidates.find(
