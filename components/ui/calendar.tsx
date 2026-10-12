@@ -6,6 +6,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
 } from "lucide-react"
+import { vi } from "date-fns/locale"
 import { DayButton, DayPicker, getDefaultClassNames } from "react-day-picker"
 
 import { cn } from "@/lib/utils"
@@ -15,10 +16,14 @@ function Calendar({
   className,
   classNames,
   showOutsideDays = true,
-  captionLayout = "label",
+  captionLayout = "dropdown",
   buttonVariant = "ghost",
+  locale = vi,
+  startMonth = new Date(1990, 0),
+  endMonth = new Date(2050, 11),
   formatters,
   components,
+  labels,
   ...props
 }: React.ComponentProps<typeof DayPicker> & {
   buttonVariant?: React.ComponentProps<typeof Button>["variant"]
@@ -35,10 +40,20 @@ function Calendar({
         className
       )}
       captionLayout={captionLayout}
+      locale={locale}
+      startMonth={startMonth}
+      endMonth={endMonth}
       formatters={{
-        formatMonthDropdown: (date) =>
-          date.toLocaleString("default", { month: "short" }),
+        formatMonthDropdown: (date) => `Tháng ${date.getMonth() + 1}`,
+        formatCaption: (date) => `Tháng ${date.getMonth() + 1} năm ${date.getFullYear()}`,
         ...formatters,
+      }}
+      labels={{
+        labelPrevious: () => "Tháng trước",
+        labelNext: () => "Tháng sau",
+        labelMonthDropdown: () => "Chọn tháng",
+        labelYearDropdown: () => "Chọn năm",
+        ...labels,
       }}
       classNames={{
         root: cn("w-fit", defaultClassNames.root),
@@ -48,40 +63,37 @@ function Calendar({
         ),
         month: cn("flex w-full flex-col gap-4", defaultClassNames.month),
         nav: cn(
-          "absolute inset-x-0 top-0 flex w-full items-center justify-between gap-1",
+          "pointer-events-none absolute inset-x-0 top-0 flex w-full items-center justify-between gap-1",
           defaultClassNames.nav
         ),
         button_previous: cn(
           buttonVariants({ variant: buttonVariant }),
-          "h-[--cell-size] w-[--cell-size] select-none p-0 aria-disabled:opacity-50",
+          "pointer-events-auto h-[--cell-size] w-[--cell-size] select-none p-0 aria-disabled:opacity-50",
           defaultClassNames.button_previous
         ),
         button_next: cn(
           buttonVariants({ variant: buttonVariant }),
-          "h-[--cell-size] w-[--cell-size] select-none p-0 aria-disabled:opacity-50",
+          "pointer-events-auto h-[--cell-size] w-[--cell-size] select-none p-0 aria-disabled:opacity-50",
           defaultClassNames.button_next
         ),
         month_caption: cn(
-          "flex h-[--cell-size] w-full items-center justify-center px-[--cell-size]",
+          "flex h-[--cell-size] w-full items-center justify-center px-8",
           defaultClassNames.month_caption
         ),
         dropdowns: cn(
-          "flex h-[--cell-size] w-full items-center justify-center gap-1.5 text-sm font-medium",
+          "flex h-[--cell-size] items-center justify-center gap-1.5 text-sm font-medium z-10",
           defaultClassNames.dropdowns
         ),
         dropdown_root: cn(
-          "has-focus:border-ring border-input shadow-xs has-focus:ring-ring/50 has-focus:ring-[3px] relative rounded-md border",
+          "has-focus:border-ring border-input shadow-2xs has-focus:ring-ring/50 has-focus:ring-[2px] relative rounded-md border bg-background hover:bg-accent/80 transition-colors",
           defaultClassNames.dropdown_root
         ),
         dropdown: cn(
-          "bg-popover absolute inset-0 opacity-0",
+          "bg-popover absolute inset-0 cursor-pointer opacity-0 z-10 w-full h-full",
           defaultClassNames.dropdown
         ),
         caption_label: cn(
-          "select-none font-medium",
-          captionLayout === "label"
-            ? "text-sm"
-            : "[&>svg]:text-muted-foreground flex h-8 items-center gap-1 rounded-md pl-2 pr-1 text-sm [&>svg]:size-3.5",
+          "select-none font-medium flex h-7 items-center gap-1 rounded-md px-2 text-xs font-semibold text-foreground [&>svg]:size-3 [&>svg]:text-muted-foreground",
           defaultClassNames.caption_label
         ),
         month_grid: cn("w-full border-collapse", defaultClassNames.month_grid),
@@ -185,12 +197,15 @@ function CalendarDayButton({
     if (modifiers.focused) ref.current?.focus()
   }, [modifiers.focused])
 
+  const iso = `${day.date.getFullYear()}-${String(day.date.getMonth() + 1).padStart(2, "0")}-${String(day.date.getDate()).padStart(2, "0")}`;
+
   return (
     <Button
       ref={ref}
       variant="ghost"
       size="icon"
       data-day={day.date.toLocaleDateString()}
+      data-date={iso}
       data-selected-single={
         modifiers.selected &&
         !modifiers.range_start &&

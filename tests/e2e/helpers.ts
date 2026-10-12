@@ -315,6 +315,27 @@ function ordinal(day: number): string {
  */
 export async function pickDate(page: Page, iso: string): Promise<void> {
   const [year, month, day] = iso.split("-").map(Number);
+
+  // Quick dropdown selection when available
+  const monthSelect = page
+    .locator('[data-radix-popper-content-wrapper] select.rdp-months_dropdown')
+    .first();
+  const yearSelect = page
+    .locator('[data-radix-popper-content-wrapper] select.rdp-years_dropdown')
+    .first();
+
+  const hasDropdowns = await monthSelect.isVisible({ timeout: 1000 }).catch(() => false);
+  if (hasDropdowns) {
+    await monthSelect.selectOption(String(month - 1));
+    await yearSelect.selectOption(String(year));
+
+    const dayButton = page
+      .locator(`[data-radix-popper-content-wrapper] button[data-date="${iso}"]`)
+      .first();
+    await dayButton.click();
+    return;
+  }
+
   const targetIndex = year * 12 + (month - 1);
 
   const caption = page
@@ -344,9 +365,14 @@ export async function pickDate(page: Page, iso: string): Promise<void> {
       .not.toBe(label);
   }
 
-  const dayButton = page.getByRole("button", {
-    name: new RegExp(`${MONTHS[month - 1]} ${ordinal(day)}, ${year}`),
-  });
+  const dayButton = page
+    .locator(`[data-radix-popper-content-wrapper] button[data-date="${iso}"]`)
+    .or(
+      page.getByRole("button", {
+        name: new RegExp(`${MONTHS[month - 1]} ${ordinal(day)}, ${year}`),
+      }),
+    )
+    .first();
 
   await dayButton.click();
 }
