@@ -99,6 +99,90 @@ export function findBestMatchingPartner(
 }
 
 /**
+ * Checks if a company name belongs to one of our internal companies:
+ * - CÔNG TY TNHH HR PARTNER VIỆT NAM (HR VN)
+ * - CÔNG TY TNHH HR PARTNER (HRP)
+ */
+export function isInternalCompany(name: string | undefined | null): boolean {
+  if (!name || !name.trim()) return false;
+  const normalized = normalizeVietnameseText(name);
+
+  // Exact abbreviations
+  if (normalized === "hrp" || normalized === "hr vn") return true;
+
+  // Contains HR Partner / HRPartner
+  if (normalized.includes("hr partner") || normalized.includes("hrpartner")) return true;
+
+  // Contains HR VN / HR Viet Nam
+  if (normalized.includes("hr vn") || normalized.includes("hr viet nam")) return true;
+
+  return false;
+}
+
+/**
+ * Resolves which of our 2 internal companies ("HR VN" or "HRP") a given name refers to.
+ */
+export function resolveInternalCompanyKey(name: string | undefined | null): "HR VN" | "HRP" | null {
+  if (!name || !name.trim()) return null;
+  const normalized = normalizeVietnameseText(name);
+
+  if (
+    normalized.includes("viet nam") ||
+    normalized.includes("hr vn") ||
+    normalized === "hr vn"
+  ) {
+    if (
+      normalized.includes("hr partner") ||
+      normalized.includes("hrpartner") ||
+      normalized.includes("hr vn") ||
+      normalized.includes("hr viet nam")
+    ) {
+      return "HR VN";
+    }
+  }
+
+  if (
+    normalized === "hrp" ||
+    normalized.includes("hr partner") ||
+    normalized.includes("hrpartner")
+  ) {
+    return "HRP";
+  }
+
+  return null;
+}
+
+/**
+ * Reconciles parties extracted from contract:
+ * Ensures that if an internal company was assigned to partnerName,
+ * it gets swapped with companyName or moved to companyName,
+ * so our internal company NEVER becomes partnerName.
+ */
+export function reconcileContractParties(input: {
+  partnerName: string;
+  companyName: string;
+}): { partnerName: string; companyName: string } {
+  let partner = input.partnerName.trim();
+  let company = input.companyName.trim();
+
+  const partnerIsInternal = isInternalCompany(partner);
+  const companyIsInternal = isInternalCompany(company);
+
+  if (partnerIsInternal && !companyIsInternal) {
+    // Partner is our internal company, and Company is the external party -> Swap them!
+    const temp = partner;
+    partner = company;
+    company = temp;
+  } else if (partnerIsInternal && companyIsInternal) {
+    // Both point to internal companies -> Keep the internal one in company, clear partner
+    company = partner;
+    partner = "";
+  }
+
+  return { partnerName: partner, companyName: company };
+}
+
+/**
  * Finds the best matching company (internal legal entity) given an extracted company name.
  */
 export function findBestMatchingCompany(
@@ -106,6 +190,16 @@ export function findBestMatchingCompany(
   companies: EntityOption[],
 ): EntityOption | null {
   if (!extractedName || !extractedName.trim()) return null;
+
+  // 1. Check known aliases for HR VN and HRP
+  const resolvedKey = resolveInternalCompanyKey(extractedName);
+  if (resolvedKey) {
+    const matched = companies.find(
+      (c) => normalizeVietnameseText(c.name) === normalizeVietnameseText(resolvedKey),
+    );
+    if (matched) return matched;
+  }
+
   const rawTarget = normalizeVietnameseText(extractedName);
   const cleanTarget = cleanEntityName(extractedName);
 

@@ -4,7 +4,10 @@ import {
   cleanEntityName,
   findBestMatchingCompany,
   findBestMatchingPartner,
+  isInternalCompany,
   normalizeVietnameseText,
+  reconcileContractParties,
+  resolveInternalCompanyKey,
 } from "@/lib/ai/matching";
 
 describe("AI Contract Extractor & Matching Unit Tests", () => {
@@ -98,14 +101,72 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
     });
   });
 
+  describe("Internal Company Identification & Reconciliation", () => {
+    it("correctly identifies internal companies", () => {
+      expect(isInternalCompany("CÔNG TY TNHH HR PARTNER VIỆT NAM")).toBe(true);
+      expect(isInternalCompany("CONG TY TNHH HR PARTNER VIET NAM")).toBe(true);
+      expect(isInternalCompany("HR VN")).toBe(true);
+      expect(isInternalCompany("CÔNG TY TNHH HR PARTNER")).toBe(true);
+      expect(isInternalCompany("HRP")).toBe(true);
+      expect(isInternalCompany("Công ty TNHH Công nghệ XPark")).toBe(false);
+      expect(isInternalCompany("Cty CP Sao Mai")).toBe(false);
+    });
+
+    it("resolves exact company alias keys (HRP vs HR VN)", () => {
+      expect(resolveInternalCompanyKey("CÔNG TY TNHH HR PARTNER VIỆT NAM")).toBe("HR VN");
+      expect(resolveInternalCompanyKey("CONG TY TNHH HR PARTNER VIET NAM")).toBe("HR VN");
+      expect(resolveInternalCompanyKey("HR VN")).toBe("HR VN");
+      expect(resolveInternalCompanyKey("CÔNG TY TNHH HR PARTNER")).toBe("HRP");
+      expect(resolveInternalCompanyKey("HRP")).toBe("HRP");
+      expect(resolveInternalCompanyKey("Công ty Khác")).toBeNull();
+    });
+
+    it("swaps parties if internal company was extracted as partnerName", () => {
+      const swapped = reconcileContractParties({
+        partnerName: "CÔNG TY TNHH HR PARTNER VIỆT NAM",
+        companyName: "Công ty Cổ phần Công nghệ Sao Mai",
+      });
+      expect(swapped.partnerName).toBe("Công ty Cổ phần Công nghệ Sao Mai");
+      expect(swapped.companyName).toBe("CÔNG TY TNHH HR PARTNER VIỆT NAM");
+    });
+
+    it("keeps external party as partner and internal company as companyName", () => {
+      const preserved = reconcileContractParties({
+        partnerName: "Công ty TNHH Đối Tác ABC",
+        companyName: "CÔNG TY TNHH HR PARTNER",
+      });
+      expect(preserved.partnerName).toBe("Công ty TNHH Đối Tác ABC");
+      expect(preserved.companyName).toBe("CÔNG TY TNHH HR PARTNER");
+    });
+
+    it("clears partnerName if only internal company was extracted in partnerName", () => {
+      const cleared = reconcileContractParties({
+        partnerName: "CÔNG TY TNHH HR PARTNER VIỆT NAM",
+        companyName: "",
+      });
+      expect(cleared.partnerName).toBe("");
+      expect(cleared.companyName).toBe("CÔNG TY TNHH HR PARTNER VIỆT NAM");
+    });
+  });
+
   describe("findBestMatchingCompany", () => {
     const mockCompanies = [
-      { id: "c1", name: "Công ty TNHH HR Partner" },
-      { id: "c2", name: "Công ty Cổ phần HR Partner Việt Nam" },
+      { id: "c1", name: "HRP" },
+      { id: "c2", name: "HR VN" },
     ];
 
-    it("matches company by partial or cleaned name", () => {
-      const match = findBestMatchingCompany("HR Partner", mockCompanies);
+    it("maps full company names to short internal company codes (HRP and HR VN)", () => {
+      const matchVn = findBestMatchingCompany("CÔNG TY TNHH HR PARTNER VIỆT NAM", mockCompanies);
+      expect(matchVn?.id).toBe("c2");
+      expect(matchVn?.name).toBe("HR VN");
+
+      const matchHrp = findBestMatchingCompany("CÔNG TY TNHH HR PARTNER", mockCompanies);
+      expect(matchHrp?.id).toBe("c1");
+      expect(matchHrp?.name).toBe("HRP");
+    });
+
+    it("matches company by exact name", () => {
+      const match = findBestMatchingCompany("HRP", mockCompanies);
       expect(match?.id).toBe("c1");
     });
 

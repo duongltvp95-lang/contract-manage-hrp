@@ -26,6 +26,8 @@ import {
   cleanEntityName,
   findBestMatchingCompany,
   findBestMatchingPartner,
+  isInternalCompany,
+  reconcileContractParties,
 } from "@/lib/ai/matching";
 import { createPartner, listCompanies, searchPartners } from "@/lib/services/partners";
 
@@ -250,6 +252,16 @@ export async function extractContractAction(
 
   const extracted = extractionResult.data;
 
+  // Phân định quy cách rõ ràng giữa Công ty nội bộ (HRP / HR VN) và Đối tác:
+  // Nếu thấy 1 trong 2 công ty của chúng ta (bất kể hợp đồng ghi Bên A hay Bên B) -> điền vào companyName.
+  // Bên còn lại là công ty khác -> đó chính là partnerName!
+  const reconciled = reconcileContractParties({
+    partnerName: extracted.partnerName,
+    companyName: extracted.companyName,
+  });
+  extracted.partnerName = reconciled.partnerName;
+  extracted.companyName = reconciled.companyName;
+
   // Tìm kiếm đối tác và công ty tương đồng trong tổ chức hiện tại
   const searchTerm = extracted.partnerName ? cleanEntityName(extracted.partnerName) : "";
   let partnersRes = await searchPartners(searchTerm);
@@ -269,8 +281,13 @@ export async function extractContractAction(
   let isNewPartner = false;
   const trimmedPartnerName = extracted.partnerName?.trim() ?? "";
 
-  // Nếu trong danh bạ chưa có đối tác này và AI đọc được tên đối tác, tự động tạo mới đối tác vào hệ thống
-  if (!matchedPartner && trimmedPartnerName.length > 0) {
+  // Nếu trong danh bạ chưa có đối tác này, AI đọc được tên đối tác và TUYỆT ĐỐI không phải công ty nội bộ:
+  // Tự động tạo mới đối tác vào hệ thống
+  if (
+    !matchedPartner &&
+    trimmedPartnerName.length > 0 &&
+    !isInternalCompany(trimmedPartnerName)
+  ) {
     const targetCompanyIds = matchedCompany?.id
       ? [matchedCompany.id]
       : companies.length > 0
