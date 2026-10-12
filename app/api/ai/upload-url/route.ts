@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const uploadUrl = await createUploadUrl(objectKey, resolvedMime);
-    return NextResponse.json({ uploadUrl, objectKey }, { status: 200 });
+    return NextResponse.json({ uploadUrl, objectKey, mimeType: resolvedMime }, { status: 200 });
   } catch (error) {
     console.error("[api:ai/upload-url] presign error:", error);
     return NextResponse.json(

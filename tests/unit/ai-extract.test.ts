@@ -108,7 +108,7 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
     });
   });
 
-  describe("cleanJsonText & resolveMimeType", () => {
+  describe("cleanJsonText & resolveMimeType & normalizeDateToIso", () => {
     it("strips markdown fences around JSON", async () => {
       const { cleanJsonText } = await import("@/lib/ai/gemini");
       const wrapped = "```json\n{\"contractNumber\": \"12/HĐ\"}\n```";
@@ -120,6 +120,16 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
       expect(resolveMimeType("sample.pdf", "")).toBe("application/pdf");
       expect(resolveMimeType("contract.jpg", "application/octet-stream")).toBe("image/jpeg");
       expect(resolveMimeType("doc.png", "")).toBe("image/png");
+    });
+
+    it("normalizes Vietnamese and ISO dates to standard YYYY-MM-DD", async () => {
+      const { normalizeDateToIso } = await import("@/lib/ai/gemini");
+      expect(normalizeDateToIso("15/03/2026")).toBe("2026-03-15");
+      expect(normalizeDateToIso("1/5/2026")).toBe("2026-05-01");
+      expect(normalizeDateToIso("2026-03-15")).toBe("2026-03-15");
+      expect(normalizeDateToIso("2026/03/15")).toBe("2026-03-15");
+      expect(normalizeDateToIso("invalid-date")).toBe("");
+      expect(normalizeDateToIso("")).toBe("");
     });
   });
 });

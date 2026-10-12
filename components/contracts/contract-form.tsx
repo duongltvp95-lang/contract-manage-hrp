@@ -226,18 +226,25 @@ export function ContractForm({
           throw new Error(errPayload?.error ?? "Không thể chuẩn bị tải tệp lên máy chủ");
         }
 
-        const { uploadUrl, objectKey } = (await presignRes.json()) as {
+        const {
+          uploadUrl,
+          objectKey,
+          mimeType: serverMime,
+        } = (await presignRes.json()) as {
           uploadUrl: string;
           objectKey: string;
+          mimeType?: string;
         };
 
+        const targetMime = serverMime || fileItem.file.type || "application/pdf";
+
         await putFileWithProgress(uploadUrl, fileItem.file, {
-          contentType: fileItem.file.type,
+          contentType: targetMime,
         });
 
         formData.append("objectKey", objectKey);
         formData.append("filename", fileItem.file.name);
-        formData.append("mimeType", fileItem.file.type);
+        formData.append("mimeType", targetMime);
       } else {
         formData.append("file", fileItem.file);
       }

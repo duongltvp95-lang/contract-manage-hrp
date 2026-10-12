@@ -63,6 +63,44 @@ export function resolveMimeType(filename: string, mimeType?: string): string {
 }
 
 /**
+ * Normalizes various date string formats (YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY)
+ * to standard ISO YYYY-MM-DD accepted by HTML date inputs and database date fields.
+ */
+export function normalizeDateToIso(dateStr?: string): string {
+  if (!dateStr) return "";
+  const trimmed = dateStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const d = new Date(`${trimmed}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === trimmed
+      ? trimmed
+      : "";
+  }
+  const dmyMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (dmyMatch) {
+    const day = dmyMatch[1].padStart(2, "0");
+    const month = dmyMatch[2].padStart(2, "0");
+    const year = dmyMatch[3];
+    const candidate = `${year}-${month}-${day}`;
+    const d = new Date(`${candidate}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === candidate
+      ? candidate
+      : "";
+  }
+  const ymdMatch = trimmed.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+  if (ymdMatch) {
+    const year = ymdMatch[1];
+    const month = ymdMatch[2].padStart(2, "0");
+    const day = ymdMatch[3].padStart(2, "0");
+    const candidate = `${year}-${month}-${day}`;
+    const d = new Date(`${candidate}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === candidate
+      ? candidate
+      : "";
+  }
+  return "";
+}
+
+/**
  * Extracts contract metadata and parties from a file buffer using Google Gemini.
  */
 export async function extractContractFromBuffer({
@@ -149,22 +187,19 @@ export async function extractContractFromBuffer({
 
         try {
           const cleanedText = cleanJsonText(rawText);
-          const parsedJson = JSON.parse(cleanedText);
-          const validated = ExtractedContractSchema.safeParse(parsedJson);
+          const parsedJson = (JSON.parse(cleanedText) ?? {}) as Record<string, unknown>;
 
-          if (!validated.success) {
-            return ok({
-              contractNumber: String(parsedJson.contractNumber ?? ""),
-              signedDate: String(parsedJson.signedDate ?? ""),
-              expiryDate: String(parsedJson.expiryDate ?? ""),
-              durationText: String(parsedJson.durationText ?? ""),
-              partnerName: String(parsedJson.partnerName ?? ""),
-              companyName: String(parsedJson.companyName ?? ""),
-              summary: String(parsedJson.summary ?? ""),
-            });
-          }
+          const extracted: ExtractedContract = {
+            contractNumber: String(parsedJson.contractNumber ?? "").trim(),
+            signedDate: normalizeDateToIso(String(parsedJson.signedDate ?? "")),
+            expiryDate: normalizeDateToIso(String(parsedJson.expiryDate ?? "")),
+            durationText: String(parsedJson.durationText ?? "").trim(),
+            partnerName: String(parsedJson.partnerName ?? "").trim(),
+            companyName: String(parsedJson.companyName ?? "").trim(),
+            summary: String(parsedJson.summary ?? "").trim(),
+          };
 
-          return ok(validated.data);
+          return ok(extracted);
         } catch (parseErr) {
           console.error(`[ai:gemini] Parse error on model ${model}:`, rawText, parseErr);
           continue;
