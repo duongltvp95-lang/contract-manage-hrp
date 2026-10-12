@@ -27,7 +27,7 @@ import {
   findBestMatchingCompany,
   findBestMatchingPartner,
 } from "@/lib/ai/matching";
-import { listCompanies, searchPartners } from "@/lib/services/partners";
+import { createPartner, listCompanies, searchPartners } from "@/lib/services/partners";
 
 /**
  * Server actions for contract CRUD and the upload flow — plan sections 42, 64.
@@ -263,8 +263,56 @@ export async function extractContractAction(
   const partners = partnersRes.ok ? partnersRes.data : [];
   const companies = companiesRes.ok ? companiesRes.data : [];
 
-  const matchedPartner = findBestMatchingPartner(extracted.partnerName, partners);
+  let matchedPartner = findBestMatchingPartner(extracted.partnerName, partners);
   const matchedCompany = findBestMatchingCompany(extracted.companyName, companies);
+
+  let isNewPartner = false;
+  const trimmedPartnerName = extracted.partnerName?.trim() ?? "";
+
+  // Nếu trong danh bạ chưa có đối tác này và AI đọc được tên đối tác, tự động tạo mới đối tác vào hệ thống
+  if (!matchedPartner && trimmedPartnerName.length > 0) {
+    const targetCompanyIds = matchedCompany?.id
+      ? [matchedCompany.id]
+      : companies.length > 0
+        ? [companies[0].id]
+        : [];
+
+    if (targetCompanyIds.length > 0) {
+      let taxCode = extracted.partnerTaxCode?.trim() || "";
+      if (!/^\d{10}(-\d{3})?$/.test(taxCode)) {
+        taxCode = "";
+      }
+
+      let createRes = await createPartner(
+        {
+          name: trimmedPartnerName,
+          taxCode: taxCode || undefined,
+          address: extracted.partnerAddress?.trim() || undefined,
+          companyIds: targetCompanyIds,
+        },
+        { organizationId: access.user.organizationId },
+      );
+
+      // Nếu tạo với taxCode/address bị lỗi, fallback tạo với name + companyIds
+      if (!createRes.ok) {
+        createRes = await createPartner(
+          {
+            name: trimmedPartnerName,
+            companyIds: targetCompanyIds,
+          },
+          { organizationId: access.user.organizationId },
+        );
+      }
+
+      if (createRes.ok) {
+        matchedPartner = {
+          id: createRes.data.id,
+          name: createRes.data.name,
+        };
+        isNewPartner = true;
+      }
+    }
+  }
 
   const result: ExtractedContractResult = {
     ...extracted,
@@ -272,6 +320,7 @@ export async function extractContractAction(
     matchedPartnerName: matchedPartner?.name ?? null,
     matchedCompanyId: matchedCompany?.id ?? null,
     matchedCompanyName: matchedCompany?.name ?? null,
+    isNewPartner,
   };
 
   return {

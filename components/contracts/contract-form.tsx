@@ -294,12 +294,25 @@ export function ContractForm({
         filledFields.push("Thời hạn");
       }
 
-      if (data.matchedPartnerId) {
+      if (data.matchedPartnerId && data.matchedPartnerName) {
+        setPartnerOptions((current) =>
+          current.some((option) => option.id === data.matchedPartnerId)
+            ? current
+            : [...current, { id: data.matchedPartnerId!, name: data.matchedPartnerName! }].sort((a, b) =>
+                a.name.localeCompare(b.name, "vi"),
+              ),
+        );
+
         form.setValue("partnerId", data.matchedPartnerId, {
           shouldValidate: true,
           shouldDirty: true,
         });
-        filledFields.push(`Đối tác: ${data.matchedPartnerName}`);
+
+        if (data.isNewPartner) {
+          filledFields.push(`Tự động thêm đối tác "${data.matchedPartnerName}"`);
+        } else {
+          filledFields.push(`Đối tác: ${data.matchedPartnerName}`);
+        }
       }
 
       if (data.matchedCompanyId) {
@@ -314,7 +327,11 @@ export function ContractForm({
         setAiSummary(data.summary);
       }
 
-      toast.success("✨ AI đã trích xuất thành công thông tin hợp đồng!", {
+      const toastTitle = data.isNewPartner
+        ? "✨ AI đã trích xuất & tự động thêm đối tác mới!"
+        : "✨ AI đã trích xuất thành công thông tin hợp đồng!";
+
+      toast.success(toastTitle, {
         description:
           filledFields.length > 0
             ? `Đã điền: ${filledFields.join(", ")}.`

@@ -16,6 +16,8 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
         expiryDate: "2027-05-15",
         durationText: "12 tháng",
         partnerName: "Công ty Cổ phần Công nghệ Sao Mai",
+        partnerTaxCode: "0109988776",
+        partnerAddress: "Số 1 Đại Cồ Việt, Hai Bà Trưng, Hà Nội",
         companyName: "Công ty TNHH HR Partner Việt Nam",
         summary: "Cung cấp phần mềm quản lý",
       };
@@ -25,6 +27,8 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
       if (result.success) {
         expect(result.data.contractNumber).toBe("01/2026/HĐKT");
         expect(result.data.signedDate).toBe("2026-05-15");
+        expect(result.data.partnerTaxCode).toBe("0109988776");
+        expect(result.data.partnerAddress).toBe("Số 1 Đại Cồ Việt, Hai Bà Trưng, Hà Nội");
       }
     });
 
@@ -40,6 +44,8 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
         expect(result.data.signedDate).toBe("");
         expect(result.data.expiryDate).toBe("");
         expect(result.data.partnerName).toBe("");
+        expect(result.data.partnerTaxCode).toBe("");
+        expect(result.data.partnerAddress).toBe("");
       }
     });
   });

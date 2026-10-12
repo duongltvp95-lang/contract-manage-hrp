@@ -33,6 +33,8 @@ Hãy đọc kỹ tài liệu hợp đồng đính kèm và trích xuất các th
 - expiryDate: Ngày hết hạn của hợp đồng theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2027-03-15", để trống "" nếu không có hoặc không xác định)
 - durationText: Thời hạn của hợp đồng ghi dạng chữ (ví dụ: "12 tháng", "2 năm", "Không xác định thời hạn", để trống "" nếu không có)
 - partnerName: Tên đầy đủ của công ty hoặc pháp nhân đối tác (Bên B hoặc đối tác cung cấp/nhận dịch vụ)
+- partnerTaxCode: Mã số thuế của đối tác nếu có trong hợp đồng (chuỗi số, ví dụ: "0101234567", để trống "" nếu không có)
+- partnerAddress: Địa chỉ trụ sở của đối tác nếu có trong hợp đồng (để trống "" nếu không có)
 - companyName: Tên công ty nội bộ (Bên A hoặc bên ký hợp đồng)
 - summary: Tóm tắt ngắn gọn nội dung và phạm vi hợp đồng trong 1-2 câu tiếng Việt.
 
@@ -208,6 +210,8 @@ export async function extractContractFromBuffer({
             expiryDate: normalizeDateToIso(String(parsedJson.expiryDate ?? "")),
             durationText: String(parsedJson.durationText ?? "").trim(),
             partnerName: String(parsedJson.partnerName ?? "").trim(),
+            partnerTaxCode: String(parsedJson.partnerTaxCode ?? "").trim(),
+            partnerAddress: String(parsedJson.partnerAddress ?? "").trim(),
             companyName: String(parsedJson.companyName ?? "").trim(),
             summary: String(parsedJson.summary ?? "").trim(),
           };

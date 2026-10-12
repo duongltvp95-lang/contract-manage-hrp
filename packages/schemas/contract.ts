@@ -143,6 +143,8 @@ export const ExtractedContractSchema = z.object({
   expiryDate: z.string().optional().default(""),
   durationText: z.string().optional().default(""),
   partnerName: z.string().optional().default(""),
+  partnerTaxCode: z.string().optional().default(""),
+  partnerAddress: z.string().optional().default(""),
   companyName: z.string().optional().default(""),
   summary: z.string().optional().default(""),
 });
@@ -154,4 +156,5 @@ export type ExtractedContractResult = ExtractedContract & {
   matchedCompanyId?: string | null;
   matchedPartnerName?: string | null;
   matchedCompanyName?: string | null;
+  isNewPartner?: boolean;
 };
