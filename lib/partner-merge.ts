@@ -62,7 +62,9 @@ export function matchExistingPartner(
     if (candidates.length === 0) return null;
   }
 
-  // Step 2 — the five keys, strongest first.
+  // Step 2 — Unique matching keys: Tax Code first, then Name.
+  // Tuyệt đối không gộp bằng Abbreviation, Address hoặc Region vì các công ty hoàn toàn
+  // khác nhau có thể có tên viết tắt tương tự hoặc cùng nằm trong một khu công nghiệp/khu vực.
   const taxCode = incoming.taxCode.trim();
   if (taxCode) {
     const folded = foldText(taxCode);
@@ -72,38 +74,12 @@ export function matchExistingPartner(
     if (match) return match;
   }
 
-  const abbreviation = incoming.abbreviation.trim();
-  if (abbreviation) {
-    const folded = foldText(abbreviation);
-    const match = candidates.find(
-      (partner) =>
-        Boolean(partner.abbreviation) && foldText(partner.abbreviation!) === folded,
-    );
-    if (match) return match;
-  }
-
   const nameFolded = foldText(incoming.name);
-  const byName = candidates.find(
-    (partner) => foldText(partner.name) === nameFolded,
-  );
-  if (byName) return byName;
-
-  const address = incoming.address.trim();
-  if (address) {
-    const folded = foldText(address);
-    const match = candidates.find(
-      (partner) => Boolean(partner.address) && foldText(partner.address!) === folded,
+  if (nameFolded) {
+    const byName = candidates.find(
+      (partner) => foldText(partner.name) === nameFolded,
     );
-    if (match) return match;
-  }
-
-  const region = incoming.region.trim();
-  if (region) {
-    const folded = foldText(region);
-    const match = candidates.find(
-      (partner) => Boolean(partner.region) && foldText(partner.region!) === folded,
-    );
-    if (match) return match;
+    if (byName) return byName;
   }
 
   return null;

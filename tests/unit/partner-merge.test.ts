@@ -48,15 +48,6 @@ describe("matchExistingPartner", () => {
     expect(match?.id).toBe("b");
   });
 
-  it("matches by abbreviation (diacritics-folded)", () => {
-    const p = partner({ tax_code: null, name: "Tên khác", abbreviation: "ĐK" });
-    const match = matchExistingPartner(
-      [p],
-      incoming({ taxCode: "", name: "Tên khác nữa", abbreviation: "dk" }),
-    );
-    expect(match?.id).toBe("p1");
-  });
-
   it("matches by name (diacritics-folded)", () => {
     const p = partner({ tax_code: null, abbreviation: null, name: "Công ty TNHH Đăng Khoa" });
     const match = matchExistingPartner(
@@ -66,39 +57,26 @@ describe("matchExistingPartner", () => {
     expect(match?.id).toBe("p1");
   });
 
-  it("matches by address (diacritics-folded)", () => {
+  it("does not match different companies just because abbreviation, address or region are equal", () => {
     const p = partner({
       tax_code: null,
-      abbreviation: null,
-      name: "Tên khác",
+      abbreviation: "ĐK",
+      name: "Công ty TNHH Đăng Khoa",
       address: "Bắc Ninh",
-    });
-    const match = matchExistingPartner(
-      [p],
-      incoming({ taxCode: "", abbreviation: "", name: "Tên khác nữa", address: "bac ninh" }),
-    );
-    expect(match?.id).toBe("p1");
-  });
-
-  it("matches by region only when the four stronger keys all fail", () => {
-    const p = partner({
-      tax_code: null,
-      abbreviation: null,
-      name: "Tên khác",
-      address: "Hà Nội",
       region: "Miền Bắc",
     });
+    // Another company in the same region, same address, same abbreviation but different name and empty tax code
     const match = matchExistingPartner(
       [p],
       incoming({
         taxCode: "",
-        abbreviation: "",
-        name: "Tên khác nữa",
-        address: "Hồ Chí Minh",
-        region: "mien bac",
+        name: "Công ty TNHH Hoàng Long",
+        abbreviation: "ĐK",
+        address: "Bắc Ninh",
+        region: "Miền Bắc",
       }),
     );
-    expect(match?.id).toBe("p1");
+    expect(match).toBeNull();
   });
 
   it("skips a key whose incoming value is empty", () => {
