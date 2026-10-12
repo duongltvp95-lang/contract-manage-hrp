@@ -58,6 +58,7 @@ export function ContractCompanyField({
         },
       }}
       render={({ field }) => {
+        const hasSelectedValue = Boolean(field.value && field.value.length > 0);
         const noPartnerChosen = !partnerId;
         const partnerHasNoCompany =
           !companiesError &&
@@ -65,9 +66,12 @@ export function ContractCompanyField({
           !companiesLoading &&
           companyRows.length === 0;
 
-        // Loading: Select hiển thị nhưng disabled
+        // Select disabled nếu: đang bận, hoặc (chưa chọn đối tác VÀ chưa có công ty được chọn), hoặc đối tác không có công ty VÀ chưa có công ty
         const selectDisabled =
-          busy || noPartnerChosen || companiesLoading || partnerHasNoCompany;
+          busy ||
+          (noPartnerChosen && !hasSelectedValue) ||
+          (companiesLoading && !hasSelectedValue) ||
+          (partnerHasNoCompany && !hasSelectedValue);
 
         return (
           <FormItem>
@@ -108,22 +112,31 @@ export function ContractCompanyField({
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
-                    {(companiesLoading ? [] : companyRows).map((company) => (
+                    {(companiesLoading && !hasSelectedValue ? [] : companyRows).map((company) => (
                       <SelectItem key={company.id} value={company.id}>
                         {company.name}
                       </SelectItem>
                     ))}
+                    {field.value && !companyRows.some((c) => c.id === field.value) && (
+                      <SelectItem key={field.value} value={field.value}>
+                        {field.value === "00000000-0000-4000-8000-000000000002"
+                          ? "HR VN"
+                          : field.value === "00000000-0000-4000-8000-000000000001"
+                            ? "HRP"
+                            : field.value}
+                      </SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
-                {noPartnerChosen ? (
+                {noPartnerChosen && !hasSelectedValue ? (
                   <FormDescription data-testid="contract-companies-hint">
                     Hãy chọn đối tác trước để xem công ty được liên kết.
                   </FormDescription>
-                ) : companiesLoading ? (
+                ) : companiesLoading && !hasSelectedValue ? (
                   <FormDescription data-testid="contract-companies-loading">
                     Đang tải danh sách công ty…
                   </FormDescription>
-                ) : partnerHasNoCompany ? (
+                ) : partnerHasNoCompany && !hasSelectedValue ? (
                   <FormDescription data-testid="contract-companies-hint">
                     Đối tác này chưa được gán công ty. Hãy gán công ty cho
                     đối tác ở trang Đối tác.

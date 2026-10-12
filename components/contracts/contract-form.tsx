@@ -161,6 +161,12 @@ export function ContractForm({
     form.setValue("companyId", "", { shouldDirty: false, shouldValidate: false });
   }, [form]);
 
+  const [extraCompany, setExtraCompany] = useState<{ id: string; name: string } | null>(
+    contract?.company_id && contract?.company_name
+      ? { id: contract.company_id, name: contract.company_name }
+      : null,
+  );
+
   // Hook quản lý tải danh sách công ty theo đối tác
   const {
     companyRows,
@@ -174,6 +180,7 @@ export function ContractForm({
     defaultCompanyName: contract?.company_name,
     currentCompanyId: form.getValues("companyId"),
     onResetCompany: handleResetCompany,
+    extraCompany,
   });
 
   // Hook quản lý tải tệp hợp đồng lên R2
@@ -315,7 +322,12 @@ export function ContractForm({
         }
       }
 
-      if (data.matchedCompanyId) {
+      if (data.matchedCompanyId && data.matchedCompanyName) {
+        setExtraCompany({
+          id: data.matchedCompanyId,
+          name: data.matchedCompanyName,
+        });
+
         form.setValue("companyId", data.matchedCompanyId, {
           shouldValidate: true,
           shouldDirty: true,

@@ -198,6 +198,13 @@ export function findBestMatchingCompany(
       (c) => normalizeVietnameseText(c.name) === normalizeVietnameseText(resolvedKey),
     );
     if (matched) return matched;
+
+    if (resolvedKey === "HR VN") {
+      return { id: "00000000-0000-4000-8000-000000000002", name: "HR VN" };
+    }
+    if (resolvedKey === "HRP") {
+      return { id: "00000000-0000-4000-8000-000000000001", name: "HRP" };
+    }
   }
 
   const rawTarget = normalizeVietnameseText(extractedName);

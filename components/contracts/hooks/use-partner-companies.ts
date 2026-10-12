@@ -14,6 +14,7 @@ export function usePartnerCompanies({
   defaultCompanyName,
   currentCompanyId,
   onResetCompany,
+  extraCompany,
 }: {
   partnerId?: string;
   isEdit: boolean;
@@ -21,8 +22,13 @@ export function usePartnerCompanies({
   defaultCompanyName?: string | null;
   currentCompanyId?: string;
   onResetCompany?: () => void;
+  extraCompany?: { id: string; name: string } | null;
 }) {
-  const [companyRows, setCompanyRows] = useState<Company[]>([]);
+  const [companyRows, setCompanyRows] = useState<Company[]>(() => {
+    if (extraCompany) return [extraCompany];
+    if (defaultCompanyId) return [{ id: defaultCompanyId, name: defaultCompanyName ?? "" }];
+    return [];
+  });
   const [companiesError, setCompaniesError] = useState<string | null>(null);
   const [companiesRetry, setCompaniesRetry] = useState(0);
   const [rowsPartnerId, setRowsPartnerId] = useState<string | null>(null);
@@ -39,8 +45,17 @@ export function usePartnerCompanies({
   const companiesLoading = Boolean(partnerId) && rowsPartnerId !== partnerId;
 
   useEffect(() => {
-    // Chưa chọn đối tác → không gọi server
-    if (!partnerId) return;
+    // Chưa chọn đối tác → nếu có extraCompany hoặc defaultCompany, vẫn giữ trong options
+    if (!partnerId) {
+      if (extraCompany) {
+        setCompanyRows([extraCompany]);
+      } else if (defaultCompanyId) {
+        setCompanyRows([{ id: defaultCompanyId, name: defaultCompanyName ?? "" }]);
+      } else {
+        setCompanyRows([]);
+      }
+      return;
+    }
 
     let active = true;
     partnerCompanyRowsAction(partnerId)
@@ -49,31 +64,34 @@ export function usePartnerCompanies({
         setRowsPartnerId(partnerId);
 
         if (!result.ok) {
-          setCompanyRows([]);
+          setCompanyRows(extraCompany ? [extraCompany] : []);
           setCompaniesError(result.message || "Không tải được danh sách công ty");
           return;
         }
         setCompaniesError(null);
         let next = result.data;
 
-        // Hợp đồng cũ có `company_id` không thuộc đối tác hiện tại: ghép thêm
-        // một dòng {id, name} để Select hiển thị đúng nhãn.
-        if (isEdit && defaultCompanyId) {
-          const stillPresent = next.some((row) => row.id === defaultCompanyId);
+        // Đảm bảo nếu có defaultCompanyId hoặc extraCompany, luôn có mặt trong options
+        const targetCompany =
+          extraCompany ||
+          (defaultCompanyId
+            ? { id: defaultCompanyId, name: defaultCompanyName ?? "" }
+            : null);
+
+        if (targetCompany && targetCompany.id) {
+          const stillPresent = next.some((row) => row.id === targetCompany.id);
           if (!stillPresent) {
-            next = [
-              ...next,
-              { id: defaultCompanyId, name: defaultCompanyName ?? "" },
-            ];
+            next = [...next, targetCompany];
           }
         }
 
         setCompanyRows(next);
 
-        // Nếu công ty đang chọn không còn thuộc danh sách mới → reset về ""
+        // Chỉ reset về "" nếu công ty đang chọn KHÔNG thuộc next VÀ KHÔNG phải extraCompany / defaultCompany
         if (
           currentCompanyIdRef.current &&
-          !next.some((row) => row.id === currentCompanyIdRef.current)
+          !next.some((row) => row.id === currentCompanyIdRef.current) &&
+          (!targetCompany || targetCompany.id !== currentCompanyIdRef.current)
         ) {
           onResetCompanyRef.current?.();
         }
@@ -81,7 +99,7 @@ export function usePartnerCompanies({
       .catch(() => {
         if (!active) return;
         setRowsPartnerId(partnerId);
-        setCompanyRows([]);
+        setCompanyRows(extraCompany ? [extraCompany] : []);
         setCompaniesError("Không tải được danh sách công ty. Vui lòng thử lại.");
       });
 
@@ -94,6 +112,8 @@ export function usePartnerCompanies({
     isEdit,
     defaultCompanyId,
     defaultCompanyName,
+    extraCompany?.id,
+    extraCompany?.name,
   ]);
 
   const retryCompanies = () => {
