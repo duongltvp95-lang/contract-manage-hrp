@@ -156,8 +156,16 @@ export function ContractForm({
       : null;
 
   const partnerId = useWatch({ control: form.control, name: "partnerId" });
+  const companyId = useWatch({ control: form.control, name: "companyId" });
 
   const handleResetCompany = useCallback(() => {
+    const current = form.getValues("companyId");
+    if (
+      current === "00000000-0000-4000-8000-000000000001" ||
+      current === "00000000-0000-4000-8000-000000000002"
+    ) {
+      return;
+    }
     form.setValue("companyId", "", { shouldDirty: false, shouldValidate: false });
   }, [form]);
 
@@ -178,7 +186,7 @@ export function ContractForm({
     isEdit,
     defaultCompanyId: contract?.company_id,
     defaultCompanyName: contract?.company_name,
-    currentCompanyId: form.getValues("companyId"),
+    currentCompanyId: companyId,
     onResetCompany: handleResetCompany,
     extraCompany,
   });
@@ -301,6 +309,27 @@ export function ContractForm({
         filledFields.push("Thời hạn");
       }
 
+      if (data.matchedCompanyId) {
+        const companyName =
+          data.matchedCompanyName ||
+          (data.matchedCompanyId === "00000000-0000-4000-8000-000000000002"
+            ? "HR VN"
+            : data.matchedCompanyId === "00000000-0000-4000-8000-000000000001"
+              ? "HRP"
+              : "HR VN");
+
+        setExtraCompany({
+          id: data.matchedCompanyId,
+          name: companyName,
+        });
+
+        form.setValue("companyId", data.matchedCompanyId, {
+          shouldValidate: true,
+          shouldDirty: true,
+        });
+        filledFields.push(`Công ty: ${companyName}`);
+      }
+
       if (data.matchedPartnerId && data.matchedPartnerName) {
         setPartnerOptions((current) =>
           current.some((option) => option.id === data.matchedPartnerId)
@@ -320,19 +349,6 @@ export function ContractForm({
         } else {
           filledFields.push(`Đối tác: ${data.matchedPartnerName}`);
         }
-      }
-
-      if (data.matchedCompanyId && data.matchedCompanyName) {
-        setExtraCompany({
-          id: data.matchedCompanyId,
-          name: data.matchedCompanyName,
-        });
-
-        form.setValue("companyId", data.matchedCompanyId, {
-          shouldValidate: true,
-          shouldDirty: true,
-        });
-        filledFields.push(`Công ty: ${data.matchedCompanyName}`);
       }
 
       if (data.summary) {

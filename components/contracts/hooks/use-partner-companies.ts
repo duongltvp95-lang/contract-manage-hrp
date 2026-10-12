@@ -45,6 +45,15 @@ export function usePartnerCompanies({
   const companiesLoading = Boolean(partnerId) && rowsPartnerId !== partnerId;
 
   useEffect(() => {
+    if (extraCompany && extraCompany.id) {
+      setCompanyRows((prev) => {
+        if (prev.some((row) => row.id === extraCompany.id)) return prev;
+        return [...prev, extraCompany];
+      });
+    }
+  }, [extraCompany?.id, extraCompany?.name]);
+
+  useEffect(() => {
     // Chưa chọn đối tác → nếu có extraCompany hoặc defaultCompany, vẫn giữ trong options
     if (!partnerId) {
       if (extraCompany) {
@@ -85,13 +94,29 @@ export function usePartnerCompanies({
           }
         }
 
+        const currentId = currentCompanyIdRef.current;
+        const isInternalCompany =
+          currentId === "00000000-0000-4000-8000-000000000001" ||
+          currentId === "00000000-0000-4000-8000-000000000002";
+
+        if (currentId && isInternalCompany) {
+          const internalName =
+            currentId === "00000000-0000-4000-8000-000000000002"
+              ? "HR VN"
+              : "HRP";
+          if (!next.some((row) => row.id === currentId)) {
+            next = [...next, { id: currentId, name: internalName }];
+          }
+        }
+
         setCompanyRows(next);
 
-        // Chỉ reset về "" nếu công ty đang chọn KHÔNG thuộc next VÀ KHÔNG phải extraCompany / defaultCompany
+        // Chỉ reset về "" nếu công ty đang chọn KHÔNG thuộc next, KHÔNG phải targetCompany, VÀ KHÔNG phải công ty nội bộ
         if (
-          currentCompanyIdRef.current &&
-          !next.some((row) => row.id === currentCompanyIdRef.current) &&
-          (!targetCompany || targetCompany.id !== currentCompanyIdRef.current)
+          currentId &&
+          !isInternalCompany &&
+          !next.some((row) => row.id === currentId) &&
+          (!targetCompany || targetCompany.id !== currentId)
         ) {
           onResetCompanyRef.current?.();
         }

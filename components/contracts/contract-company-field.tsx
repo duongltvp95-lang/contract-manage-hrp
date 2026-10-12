@@ -73,6 +73,14 @@ export function ContractCompanyField({
           (companiesLoading && !hasSelectedValue) ||
           (partnerHasNoCompany && !hasSelectedValue);
 
+        const currentCompanyLabel =
+          companyRows.find((c) => c.id === field.value)?.name ||
+          (field.value === "00000000-0000-4000-8000-000000000002"
+            ? "HR VN"
+            : field.value === "00000000-0000-4000-8000-000000000001"
+              ? "HRP"
+              : undefined);
+
         return (
           <FormItem>
             <FormLabel>Công ty</FormLabel>
@@ -98,6 +106,7 @@ export function ContractCompanyField({
             ) : (
               <>
                 <Select
+                  key={field.value || "empty"}
                   value={field.value ?? ""}
                   onValueChange={field.onChange}
                   disabled={selectDisabled}
@@ -108,7 +117,9 @@ export function ContractCompanyField({
                       data-testid="contract-company-select"
                       aria-invalid={hasError ? true : undefined}
                     >
-                      <SelectValue placeholder="Chọn công ty" />
+                      <SelectValue placeholder="Chọn công ty">
+                        {currentCompanyLabel}
+                      </SelectValue>
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
@@ -119,11 +130,7 @@ export function ContractCompanyField({
                     ))}
                     {field.value && !companyRows.some((c) => c.id === field.value) && (
                       <SelectItem key={field.value} value={field.value}>
-                        {field.value === "00000000-0000-4000-8000-000000000002"
-                          ? "HR VN"
-                          : field.value === "00000000-0000-4000-8000-000000000001"
-                            ? "HRP"
-                            : field.value}
+                        {currentCompanyLabel || field.value}
                       </SelectItem>
                     )}
                   </SelectContent>
