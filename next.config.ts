@@ -3,6 +3,12 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   cacheComponents: true,
 
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "25mb",
+    },
+  },
+
   /**
    * Next 16 allows only one `next dev` per project directory, keyed on the build
    * directory rather than the port — a second server on another port exits with

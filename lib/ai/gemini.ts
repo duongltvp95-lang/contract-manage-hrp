@@ -31,27 +31,63 @@ Hãy đọc kỹ tài liệu hợp đồng đính kèm và trích xuất các th
 Chỉ trả về JSON hợp lệ khớp với cấu trúc trên.`;
 
 /**
+ * Safely strips markdown code blocks and extracts JSON object substring.
+ */
+export function cleanJsonText(raw: string): string {
+  let cleaned = raw.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  }
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace >= firstBrace) {
+    cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+  }
+  return cleaned;
+}
+
+/**
+ * Resolves accurate mime type using filename extension as fallback.
+ */
+export function resolveMimeType(filename: string, mimeType?: string): string {
+  const cleanMime = mimeType?.toLowerCase().trim();
+  if (cleanMime && ALLOWED_MIME_TYPES.has(cleanMime)) {
+    return cleanMime;
+  }
+  const ext = filename.toLowerCase().split(".").pop();
+  if (ext === "pdf") return "application/pdf";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "png") return "image/png";
+  if (ext === "webp") return "image/webp";
+  return cleanMime || "application/octet-stream";
+}
+
+/**
  * Extracts contract metadata and parties from a file buffer using Google Gemini.
  */
 export async function extractContractFromBuffer({
   buffer,
   mimeType,
+  filename = "",
 }: {
   buffer: Buffer;
   mimeType: string;
+  filename?: string;
 }): Promise<ServiceResult<ExtractedContract>> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
     return err(
       "validation",
-      "Chưa cấu hình GEMINI_API_KEY trên máy chủ. Vui lòng thêm khoá API vào biến môi trường.",
+      "Chưa cấu hình GEMINI_API_KEY trên máy chủ (Vercel). Vui lòng thêm biến môi trường GEMINI_API_KEY vào Project Settings trên Vercel.",
     );
   }
 
-  if (!ALLOWED_MIME_TYPES.has(mimeType)) {
+  const resolvedMime = resolveMimeType(filename, mimeType);
+
+  if (!ALLOWED_MIME_TYPES.has(resolvedMime)) {
     return err(
       "validation",
-      "AI chỉ hỗ trợ phân tích tài liệu định dạng PDF hoặc hình ảnh (PNG, JPG, WebP).",
+      `Định dạng tệp (${resolvedMime || "không rõ"}) chưa được hỗ trợ. AI chỉ hỗ trợ phân tích PDF hoặc hình ảnh (PNG, JPG, WebP).`,
     );
   }
 
@@ -63,7 +99,6 @@ export async function extractContractFromBuffer({
   }
 
   const base64Data = buffer.toString("base64");
-
   let lastError = "Không thể kết nối tới dịch vụ AI Google Gemini.";
 
   for (const model of GEMINI_MODELS) {
@@ -75,7 +110,7 @@ export async function extractContractFromBuffer({
           parts: [
             {
               inlineData: {
-                mimeType,
+                mimeType: resolvedMime,
                 data: base64Data,
               },
             },
@@ -109,11 +144,12 @@ export async function extractContractFromBuffer({
 
         const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!rawText) {
-          return err("validation", "AI không trả về nội dung dữ liệu nào.");
+          continue;
         }
 
         try {
-          const parsedJson = JSON.parse(rawText);
+          const cleanedText = cleanJsonText(rawText);
+          const parsedJson = JSON.parse(cleanedText);
           const validated = ExtractedContractSchema.safeParse(parsedJson);
 
           if (!validated.success) {
@@ -129,8 +165,9 @@ export async function extractContractFromBuffer({
           }
 
           return ok(validated.data);
-        } catch {
-          return err("validation", "Không thể phân tích dữ liệu JSON trả về từ AI.");
+        } catch (parseErr) {
+          console.error(`[ai:gemini] Parse error on model ${model}:`, rawText, parseErr);
+          continue;
         }
       }
 
@@ -140,7 +177,7 @@ export async function extractContractFromBuffer({
 
       lastError = errorPayload?.error?.message ?? `Lỗi HTTP ${response.status} từ Gemini API`;
 
-      // If the model is 503 (high demand) or 404 (model unavailable), continue to next fallback model
+      // If the model is 503 (high demand) or 404 (model unavailable) or 429, continue to next fallback model
       if (response.status === 503 || response.status === 404 || response.status === 429) {
         continue;
       }

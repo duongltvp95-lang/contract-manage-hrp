@@ -107,4 +107,19 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
       expect(findBestMatchingCompany("FPT Software", mockCompanies)).toBeNull();
     });
   });
+
+  describe("cleanJsonText & resolveMimeType", () => {
+    it("strips markdown fences around JSON", async () => {
+      const { cleanJsonText } = await import("@/lib/ai/gemini");
+      const wrapped = "```json\n{\"contractNumber\": \"12/HĐ\"}\n```";
+      expect(cleanJsonText(wrapped)).toBe("{\"contractNumber\": \"12/HĐ\"}");
+    });
+
+    it("resolves mime type by file extension when mimeType is empty or generic", async () => {
+      const { resolveMimeType } = await import("@/lib/ai/gemini");
+      expect(resolveMimeType("sample.pdf", "")).toBe("application/pdf");
+      expect(resolveMimeType("contract.jpg", "application/octet-stream")).toBe("image/jpeg");
+      expect(resolveMimeType("doc.png", "")).toBe("image/png");
+    });
+  });
 });

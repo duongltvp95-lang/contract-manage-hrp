@@ -1,6 +1,6 @@
 import "server-only";
 
-import { DeleteObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 
 import { createR2Client, getR2Bucket } from "./client";
 
@@ -49,3 +49,19 @@ export async function deleteObject(objectKey: string): Promise<void> {
     new DeleteObjectCommand({ Bucket: getR2Bucket(), Key: objectKey }),
   );
 }
+
+/** Reads an object's full bytes as a Buffer. */
+export async function getObjectBuffer(objectKey: string): Promise<Buffer | null> {
+  try {
+    const result = await createR2Client().send(
+      new GetObjectCommand({ Bucket: getR2Bucket(), Key: objectKey }),
+    );
+    if (!result.Body) return null;
+    const byteArray = await result.Body.transformToByteArray();
+    return Buffer.from(byteArray);
+  } catch (error) {
+    console.error("[r2:getObjectBuffer]", error);
+    return null;
+  }
+}
+

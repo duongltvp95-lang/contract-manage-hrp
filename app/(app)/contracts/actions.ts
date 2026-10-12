@@ -13,6 +13,7 @@ import {
   type ContractRow,
 } from "@/lib/services/contracts";
 import { completeUpload, type ContractFileRow } from "@/lib/services/files";
+import { deleteObject, getObjectBuffer } from "@/lib/r2/objects";
 import {
   authorized,
   fromService,
@@ -198,19 +199,49 @@ export async function extractContractAction(
   const access = await authorized();
   if (!access.ok) return access.result;
 
-  const file = formData.get("file");
-  if (!file || !(file instanceof File)) {
-    return validationFailure("Tệp không hợp lệ", [
-      { path: "file", message: "Vui lòng chọn tệp hợp đồng để trích xuất" },
-    ]);
-  }
+  const objectKey = formData.get("objectKey");
+  let buffer: Buffer;
+  let filename = "document.pdf";
+  let mimeType = "application/pdf";
 
-  const arrayBuffer = await file.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
+  if (typeof objectKey === "string" && objectKey.length > 0) {
+    const expectedPrefix = `ai-temp/${access.user.organizationId}/`;
+    if (!objectKey.startsWith(expectedPrefix)) {
+      return validationFailure("objectKey không hợp lệ", [
+        { path: "objectKey", message: "Tệp không thuộc tổ chức của bạn" },
+      ]);
+    }
+
+    const downloaded = await getObjectBuffer(objectKey);
+    await deleteObject(objectKey).catch(() => {});
+
+    if (!downloaded) {
+      return validationFailure("Không tìm thấy tệp", [
+        { path: "objectKey", message: "Không thể đọc tệp từ kho lưu trữ đám mây" },
+      ]);
+    }
+
+    buffer = downloaded;
+    filename = (formData.get("filename") as string) || "document.pdf";
+    mimeType = (formData.get("mimeType") as string) || "application/pdf";
+  } else {
+    const file = formData.get("file");
+    if (!file || !(file instanceof File)) {
+      return validationFailure("Tệp không hợp lệ", [
+        { path: "file", message: "Vui lòng chọn tệp hợp đồng để trích xuất" },
+      ]);
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    buffer = Buffer.from(arrayBuffer);
+    filename = file.name;
+    mimeType = file.type;
+  }
 
   const extractionResult = await extractContractFromBuffer({
     buffer,
-    mimeType: file.type,
+    mimeType,
+    filename,
   });
 
   if (!extractionResult.ok) {

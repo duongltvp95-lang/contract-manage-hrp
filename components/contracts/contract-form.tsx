@@ -18,7 +18,7 @@ import {
   extractContractAction,
   updateContractAction,
 } from "@/app/(app)/contracts/actions";
-import type { PendingFile } from "@/lib/upload";
+import { putFileWithProgress, type PendingFile } from "@/lib/upload";
 import { DateField } from "@/components/contracts/date-field";
 import { ContractCompanyField } from "@/components/contracts/contract-company-field";
 import { ContractFileAttachments } from "@/components/contracts/contract-file-attachments";
@@ -205,15 +205,49 @@ export function ContractForm({
     setIsExtractingAi(true);
     setAiSummary(null);
 
-    const formData = new FormData();
-    formData.append("file", fileItem.file);
-
     try {
+      const formData = new FormData();
+
+      // Nếu tệp lớn hơn 3.5 MB (như tệp 5 MB), tải trực tiếp lên Cloudflare R2
+      // để vượt qua giới hạn payload 4.5 MB của Vercel Serverless
+      if (fileItem.file.size > 3.5 * 1024 * 1024) {
+        const presignRes = await fetch("/api/ai/upload-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: fileItem.file.name,
+            mimeType: fileItem.file.type,
+            fileSize: fileItem.file.size,
+          }),
+        });
+
+        if (!presignRes.ok) {
+          const errPayload = await presignRes.json().catch(() => null);
+          throw new Error(errPayload?.error ?? "Không thể chuẩn bị tải tệp lên máy chủ");
+        }
+
+        const { uploadUrl, objectKey } = (await presignRes.json()) as {
+          uploadUrl: string;
+          objectKey: string;
+        };
+
+        await putFileWithProgress(uploadUrl, fileItem.file, {
+          contentType: fileItem.file.type,
+        });
+
+        formData.append("objectKey", objectKey);
+        formData.append("filename", fileItem.file.name);
+        formData.append("mimeType", fileItem.file.type);
+      } else {
+        formData.append("file", fileItem.file);
+      }
+
       const result = await extractContractAction(formData);
 
       if (!result.ok) {
         toast.error("Không thể trích xuất thông tin bằng AI", {
           description: result.message,
+          duration: 6000,
         });
         return;
       }
