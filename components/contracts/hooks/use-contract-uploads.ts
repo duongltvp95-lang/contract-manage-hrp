@@ -115,7 +115,11 @@ export function useContractUploads({
     if (failures.length === 0) {
       setPhase("redirecting");
       onSuccess(contractId);
-      return;
+      // Safety timeout: nếu trang không unload sau 4 giây (hoặc quay lại), tự trở về idle
+      const timer = setTimeout(() => {
+        setPhase("idle");
+      }, 4000);
+      return () => clearTimeout(timer);
     }
 
     setUploadError(failures.join("\n"));
@@ -128,6 +132,13 @@ export function useContractUploads({
       (item) => item.status === "pending" || item.status === "error",
     );
     await runUploads(savedContractId, queue);
+  }
+
+  function resetUploads() {
+    setFiles([]);
+    setPhase("idle");
+    setUploadError(null);
+    setSavedContractId(null);
   }
 
   const failedCount = files.filter((item) => item.status === "error").length;
@@ -149,5 +160,6 @@ export function useContractUploads({
     mergeFiles,
     runUploads,
     retryUploads,
+    resetUploads,
   };
 }

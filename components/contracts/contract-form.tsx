@@ -3,7 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 
@@ -205,16 +205,59 @@ export function ContractForm({
     mergeFiles,
     runUploads,
     retryUploads,
+    resetUploads,
   } = useContractUploads({
     onSuccess: (contractId) => {
       toast.success("Đã tạo hợp đồng");
       router.push(`/contracts/${contractId}`);
+      // Dọn dẹp sau khi điều hướng để nếu người dùng quay lại (Back), form lập tức sạch sẽ
+      setTimeout(() => {
+        resetFormState();
+      }, 500);
     },
   });
 
   const [formError, setFormError] = useState<string | null>(null);
   const [isExtractingAi, setIsExtractingAi] = useState(false);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
+
+  const resetFormState = useCallback(() => {
+    form.reset(EMPTY_VALUES);
+    setExtraCompany(null);
+    setAiSummary(null);
+    setFormError(null);
+    resetUploads();
+  }, [form, resetUploads]);
+
+  // Xử lý khi người dùng quay lại bằng nút Back / Forward của trình duyệt (BFCache)
+  useEffect(() => {
+    function handlePageShow(event: PageTransitionEvent) {
+      if (event.persisted || phase === "redirecting" || phase === "done") {
+        resetFormState();
+      }
+    }
+
+    window.addEventListener("pageshow", handlePageShow);
+    return () => {
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, [phase, resetFormState]);
+
+  // Nếu quay lại trang tạo hợp đồng mà vẫn còn trạng thái redirecting/done trước đó thì reset ngay
+  useEffect(() => {
+    if (!isEdit && (phase === "redirecting" || phase === "done")) {
+      resetFormState();
+    }
+  }, [isEdit, phase, resetFormState]);
+
+  // Tự động dọn dẹp khi unmount trang tạo hợp đồng
+  useEffect(() => {
+    return () => {
+      if (!isEdit) {
+        resetFormState();
+      }
+    };
+  }, [isEdit, resetFormState]);
 
   async function handleExtractAi(fileItem: PendingFile) {
     setIsExtractingAi(true);
