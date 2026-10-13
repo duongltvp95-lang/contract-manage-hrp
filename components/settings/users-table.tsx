@@ -1,5 +1,6 @@
 import { USER_ROLE_LABELS } from "@schemas/user";
 
+import { isOwnerEmail, isOwnerUserId } from "@/lib/owner";
 import { AddUserDialog } from "@/components/settings/add-user-dialog";
 import { UserRowActions } from "@/components/settings/user-row-actions";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -15,18 +16,6 @@ import {
 import { formatDateTime } from "@/lib/format";
 import type { ManagedUser } from "@/lib/services/users";
 
-/**
- * Users table — feature round 2, part 3 + round 3, part 1.
- *
- * Họ tên · Email · Vai trò · Trạng thái · Ngày tạo · Thao tác. The last column
- * is the round 3 addition: edit role/active, delete with email re-confirmation.
- *
- * The "delete" button on the row of the signed-in user is replaced by a
- * disabled control with a Vietnamese tooltip: the service refuses a self-delete
- * too, but the UI should not offer a control that cannot succeed.
- *
- * A Server Component: only the dialogs and the action wrapper need the client.
- */
 export function UsersTable({
   rows,
   currentUserId,
@@ -60,6 +49,7 @@ export function UsersTable({
         <TableBody>
           {rows.map((row) => {
             const isSelf = row.id === currentUserId;
+            const isOwner = isOwnerEmail(row.email) || isOwnerUserId(row.id);
             return (
               <TableRow
                 key={row.id}
@@ -68,6 +58,11 @@ export function UsersTable({
               >
                 <TableCell className="font-medium">
                   {row.fullName ?? "—"}
+                  {isOwner ? (
+                    <Badge variant="outline" className="ml-2 text-[10px] px-1.5 py-0 border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10">
+                      Owner
+                    </Badge>
+                  ) : null}
                   {isSelf ? (
                     <span className="ml-2 text-xs text-muted-foreground">(bạn)</span>
                   ) : null}
@@ -77,7 +72,7 @@ export function UsersTable({
                 </TableCell>
                 <TableCell>
                   <Badge variant={row.role === "admin" ? "default" : "secondary"}>
-                    {USER_ROLE_LABELS[row.role]}
+                    {isOwner ? "Quản trị viên (Owner)" : USER_ROLE_LABELS[row.role]}
                   </Badge>
                 </TableCell>
                 <TableCell>

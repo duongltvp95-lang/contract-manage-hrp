@@ -12,6 +12,7 @@ import {
   type UserRole,
 } from "@schemas/user";
 
+import { isOwnerEmail, isOwnerUserId } from "@/lib/owner";
 import { updateUserAction } from "@/app/(app)/settings/actions";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -80,6 +81,8 @@ export function EditUserDialog({
     defaultValues: { role: user.role, isActive: user.isActive },
   });
 
+  const isOwner = isOwnerEmail(user.email) || isOwnerUserId(user.id);
+
   function handleOpenChange(next: boolean) {
     setOpen(next);
     if (!next) {
@@ -90,6 +93,16 @@ export function EditUserDialog({
 
   async function onSubmit(values: FormValues) {
     setFormError(null);
+
+    if (isOwner && values.role !== user.role) {
+      setFormError("Không ai có quyền chỉnh sửa vai trò của tài khoản Quản trị viên tối cao (duongltvp95@gmail.com)");
+      return;
+    }
+
+    if (isOwner && !values.isActive) {
+      setFormError("Không ai có quyền vô hiệu hoá tài khoản Quản trị viên tối cao (duongltvp95@gmail.com)");
+      return;
+    }
 
     const payload: UpdateUserInput = {
       userId: user.id,
@@ -139,6 +152,15 @@ export function EditUserDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {isOwner && (
+          <Alert className="border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
+            <AlertTitle className="text-xs font-semibold">Tài khoản Quản trị viên tối cao (Owner)</AlertTitle>
+            <AlertDescription className="text-xs">
+              Tài khoản này có vai trò cố định là <strong>Quản trị viên</strong> và không thể bị chỉnh sửa vai trò hay vô hiệu hoá bởi bất kỳ ai.
+            </AlertDescription>
+          </Alert>
+        )}
+
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField
@@ -150,7 +172,7 @@ export function EditUserDialog({
                   <Select
                     value={field.value}
                     onValueChange={field.onChange}
-                    disabled={saving}
+                    disabled={saving || isOwner}
                   >
                     <FormControl>
                       <SelectTrigger data-testid="edit-user-role">
@@ -165,6 +187,11 @@ export function EditUserDialog({
                       ))}
                     </SelectContent>
                   </Select>
+                  {isOwner && (
+                    <FormDescription className="text-xs text-amber-700 dark:text-amber-400">
+                      Vai trò được cố định là Quản trị viên, không thể thay đổi.
+                    </FormDescription>
+                  )}
                   <FormMessage />
                 </FormItem>
               )}
@@ -181,17 +208,18 @@ export function EditUserDialog({
                         id="editUserActive"
                         checked={field.value}
                         onCheckedChange={(checked) => field.onChange(checked === true)}
-                        disabled={saving}
+                        disabled={saving || isOwner}
                         data-testid="edit-user-active"
                       />
                     </FormControl>
-                    <FormLabel htmlFor="editUserActive" className="cursor-pointer">
+                    <FormLabel htmlFor="editUserActive" className={isOwner ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer"}>
                       Đang hoạt động
                     </FormLabel>
                   </div>
                   <FormDescription>
-                    Bỏ chọn để tạm khoá tài khoản. Người dùng sẽ bị chặn ở
-                    mọi yêu cầu cho tới khi kích hoạt lại.
+                    {isOwner
+                      ? "Tài khoản Quản trị viên tối cao luôn ở trạng thái hoạt động."
+                      : "Bỏ chọn để tạm khoá tài khoản. Người dùng sẽ bị chặn ở mọi yêu cầu cho tới khi kích hoạt lại."}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

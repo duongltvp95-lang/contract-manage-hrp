@@ -12,6 +12,7 @@ import {
 } from "@schemas/user";
 
 import { getCurrentUser } from "@/lib/auth";
+import { isOwnerEmail, isOwnerUserId } from "@/lib/owner";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateTemporaryPassword } from "@/lib/temp-password";
 import { recordAudit, recordCurrentUserAudit } from "@/lib/services/audit-logs";
@@ -608,6 +609,32 @@ export async function updateUser(
 
   const target = existing as ProfileDbRow;
 
+  // --- Owner protection guard --------------------------------------------
+  // duongltvp95@gmail.com is the immutable system Owner.
+  // NO ONE (including other admins and the owner themselves) can change their role or deactivate them.
+  let targetEmail: string | null = null;
+  try {
+    const { data: targetAuth } = await service.auth.admin.getUserById(userId);
+    targetEmail = targetAuth?.user?.email ?? null;
+  } catch {
+    // ignore
+  }
+
+  if (isOwnerUserId(userId) || isOwnerEmail(targetEmail)) {
+    if (role !== undefined) {
+      return err(
+        "forbidden",
+        "Không ai có quyền chỉnh sửa vai trò của tài khoản Quản trị viên tối cao (duongltvp95@gmail.com)",
+      );
+    }
+    if (isActive === false) {
+      return err(
+        "forbidden",
+        "Không ai có quyền vô hiệu hoá tài khoản Quản trị viên tối cao (duongltvp95@gmail.com)",
+      );
+    }
+  }
+
   // --- last-admin guard ---------------------------------------------------
   const lastAdminCheck = await assertNotLastAdmin(
     service,
@@ -810,6 +837,15 @@ export async function deleteUser(
   if (!realEmail) {
     return err("not_found", "Không tìm thấy email của người dùng");
   }
+
+  // --- Owner protection guard --------------------------------------------
+  if (isOwnerUserId(userId) || isOwnerEmail(realEmail)) {
+    return err(
+      "forbidden",
+      "Không ai có quyền xoá tài khoản Quản trị viên tối cao (duongltvp95@gmail.com)",
+    );
+  }
+
   if (realEmail.trim().toLowerCase() !== confirmEmail.trim().toLowerCase()) {
     return err("validation", "Email xác nhận không khớp với email người dùng");
   }
