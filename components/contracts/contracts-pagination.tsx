@@ -30,17 +30,22 @@ export function ContractsPagination({
   total,
   pageCount,
   basePath = "/contracts",
+  scope = "active",
 }: {
   query: ContractsQuery;
   total: number;
   pageCount: number;
   /** Where this pagination lives; the partner page reuses it. */
   basePath?: string;
+  scope?: "active" | "expired" | "archived" | "all";
 }) {
   const router = useRouter();
 
   const hrefFor = (patch: Partial<ContractsQuery>) => {
-    const href = contractsHref(patch, query);
+    let href = contractsHref(patch, query);
+    if (scope && scope !== "active") {
+      href = `${href}${href.includes("?") ? "&" : "?"}scope=${scope}`;
+    }
     return basePath === "/contracts" ? href : `${basePath}${href.slice("/contracts".length)}`;
   };
 

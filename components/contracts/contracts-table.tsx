@@ -7,6 +7,8 @@ import { useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { format } from "date-fns";
+import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { CompanyBadges } from "@/components/partners/partner-badges";
 import { BulkDeleteContractsButton } from "@/components/contracts/bulk-delete-contracts-button";
@@ -63,7 +65,7 @@ export function ContractsTable({
   /** Round 19 — show the delete action (delete-admin emails only). */
   canDelete?: boolean;
   /** Round 19/20 — preserved in the sort links. */
-  scope?: "active" | "expired" | "archived";
+  scope?: "active" | "expired" | "archived" | "all";
 }) {
   const router = useRouter();
   // Round 24 — bulk selection. The page remounts this table with a `key` when
@@ -88,7 +90,7 @@ export function ContractsTable({
 
   const hrefFor = (patch: Partial<ContractsQuery>) => {
     let href = contractsHref(patch, query);
-    if (scope !== "active") {
+    if (scope && scope !== "active") {
       href = `${href}${href.includes("?") ? "&" : "?"}scope=${scope}`;
     }
     return basePath === "/contracts" ? href : `${basePath}${href.slice("/contracts".length)}`;
@@ -148,6 +150,8 @@ export function ContractsTable({
         <TableBody>
           {rows.map((row) => {
             const href = `/contracts/${row.id}`;
+            const todayStr = format(new Date(), "yyyy-MM-dd");
+            const isExpired = Boolean(row.expiry_date && row.expiry_date < todayStr);
             return (
               <TableRow
                 key={row.id}
@@ -186,8 +190,18 @@ export function ContractsTable({
                 </TableCell>
                 <TableCell>{formatDateOnly(row.signed_date)}</TableCell>
                 <TableCell>
-                  <div>{row.duration_text ?? "—"}</div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1.5">
+                    <span>{row.duration_text ?? "—"}</span>
+                    {isExpired && (
+                      <Badge
+                        variant="outline"
+                        className="border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400 text-[10px] px-1.5 py-0 font-normal leading-normal"
+                      >
+                        Hết hạn
+                      </Badge>
+                    )}
+                  </div>
+                  <div className={cn("text-xs", isExpired ? "text-red-600/90 dark:text-red-400/90 font-medium" : "text-muted-foreground")}>
                     {formatDateOnly(row.expiry_date)}
                   </div>
                 </TableCell>

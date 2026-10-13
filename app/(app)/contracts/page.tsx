@@ -69,6 +69,7 @@ async function ContractsContent({
             query={query}
             total={result.data.total}
             pageCount={result.data.pageCount}
+            scope={scope}
           />
         </>
       ) : (

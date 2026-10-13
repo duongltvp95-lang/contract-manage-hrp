@@ -14,10 +14,11 @@ import { NoPartnerContractsEmptyState } from "@/components/partners/partners-tab
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth";
-import { parseContractsQuery } from "@/lib/contracts-query";
+import { parseContractsQuery, type ContractsQuery } from "@/lib/contracts-query";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { listContracts } from "@/lib/services/contracts";
 import { getPartner, type PartnerDetail } from "@/lib/services/partners";
+import { cn } from "@/lib/utils";
 
 /**
  * Partner detail — feature round 2, part 2.
@@ -62,6 +63,63 @@ async function loadPartner(params: PartnerParams): Promise<{
   };
 }
 
+function PartnerContractsTabs({
+  basePath,
+  scope,
+  query,
+}: {
+  basePath: string;
+  scope: "all" | "active" | "expired";
+  query: ContractsQuery;
+}) {
+  const withScope = (next: "all" | "active" | "expired") => {
+    const params = new URLSearchParams();
+    if (query.q) params.set("q", query.q);
+    if (query.sort && query.sort !== "updated_at") params.set("sort", query.sort);
+    if (query.dir && query.dir !== "desc") params.set("dir", query.dir);
+    if (next !== "all") params.set("scope", next);
+    const qs = params.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  };
+
+  const tabCls = (active: boolean) =>
+    cn(
+      "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+      active
+        ? "bg-primary text-primary-foreground shadow-sm"
+        : "text-muted-foreground hover:text-foreground",
+    );
+
+  return (
+    <div
+      className="inline-flex items-center gap-1 rounded-lg border p-1"
+      data-testid="partner-contracts-tabs"
+    >
+      <Link
+        href={withScope("all")}
+        data-testid="partner-contract-tab-all"
+        className={tabCls(scope === "all")}
+      >
+        Tất cả
+      </Link>
+      <Link
+        href={withScope("active")}
+        data-testid="partner-contract-tab-active"
+        className={tabCls(scope === "active")}
+      >
+        Đang hoạt động
+      </Link>
+      <Link
+        href={withScope("expired")}
+        data-testid="partner-contract-tab-expired"
+        className={tabCls(scope === "expired")}
+      >
+        Đã hết hạn
+      </Link>
+    </div>
+  );
+}
+
 async function PartnerContracts({
   id,
   organizationId,
@@ -71,11 +129,15 @@ async function PartnerContracts({
   organizationId: string;
   searchParams: RawSearchParams;
 }) {
+  const rawScope = typeof searchParams.scope === "string" ? searchParams.scope : undefined;
+  const scope: "all" | "active" | "expired" =
+    rawScope === "active" || rawScope === "expired" ? rawScope : "all";
+
   // The path segment is authoritative: whatever `partnerId` the URL carries, the
   // page stays scoped to the partner it is showing.
   const query = { ...parseContractsQuery(searchParams), partnerId: id };
 
-  const result = await listContracts({ organizationId, query });
+  const result = await listContracts({ organizationId, query, scope });
 
   if (!result.ok) {
     // Plan section 80: a readable message, never a raw stack trace.
@@ -88,12 +150,18 @@ async function PartnerContracts({
   }
 
   return (
-    <>
+    <div className="space-y-4">
+      <PartnerContractsTabs
+        basePath={`/partners/${id}`}
+        scope={scope}
+        query={query}
+      />
       <ContractsTable
         rows={result.data.rows}
         query={query}
         total={result.data.total}
         basePath={`/partners/${id}`}
+        scope={scope}
         emptyState={<NoPartnerContractsEmptyState />}
       />
       <ContractsPagination
@@ -101,8 +169,9 @@ async function PartnerContracts({
         total={result.data.total}
         pageCount={result.data.pageCount}
         basePath={`/partners/${id}`}
+        scope={scope}
       />
-    </>
+    </div>
   );
 }
 

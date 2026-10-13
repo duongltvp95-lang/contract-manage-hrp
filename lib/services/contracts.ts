@@ -423,9 +423,10 @@ export async function listContracts({
   query: ContractsQuery;
   /**
    * Round 19/20 — active (default) lists non-archived, not-yet-expired;
-   * expired lists non-archived, already-expired; archived lists only archived.
+   * expired lists non-archived, already-expired; archived lists only archived;
+   * all lists non-archived, both active and expired.
    */
-  scope?: "active" | "expired" | "archived";
+  scope?: "active" | "expired" | "archived" | "all";
 }): Promise<ServiceResult<ContractListResult>> {
   const supabase = await createClient();
 
@@ -456,12 +457,13 @@ export async function listContracts({
     builder = builder.is("archived_at", null);
     if (scope === "expired") {
       builder = builder.lt("expiry_date", today);
-    } else {
+    } else if (scope === "active") {
       // "Chưa hết hạn" = a future (or missing) expiry date. A contract with no
       // expiry date never expires, so it belongs here rather than disappearing
       // from both tabs.
       builder = builder.or(`expiry_date.is.null,expiry_date.gte.${today}`);
     }
+    // scope === "all": không lọc theo ngày hết hạn, hiển thị cả đang hoạt động và đã hết hạn
   }
 
   // --- search (plan sections 50, 51; feature round 2 adds the partner link) --
