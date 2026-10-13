@@ -7,6 +7,7 @@ import {
   createContract,
   deleteContract,
   deleteContracts,
+  findDuplicateContract,
   unarchiveContract,
   updateContract,
   type BulkDeleteItem,
@@ -331,6 +332,15 @@ export async function extractContractAction(
     }
   }
 
+  const duplicate = extracted.contractNumber
+    ? await findDuplicateContract({
+        contractNumber: extracted.contractNumber,
+        signedDate: extracted.signedDate,
+        expiryDate: extracted.expiryDate,
+        organizationId: access.user.organizationId,
+      })
+    : null;
+
   const result: ExtractedContractResult = {
     ...extracted,
     matchedPartnerId: matchedPartner?.id ?? null,
@@ -338,10 +348,40 @@ export async function extractContractAction(
     matchedCompanyId: matchedCompany?.id ?? null,
     matchedCompanyName: matchedCompany?.name ?? null,
     isNewPartner,
+    isDuplicate: Boolean(duplicate),
+    duplicateContractId: duplicate?.id ?? null,
   };
 
   return {
     ok: true,
     data: result,
+  };
+}
+
+/**
+ * Checks whether an active contract with the given number, signed date,
+ * and expiry date already exists in the organization.
+ */
+export async function checkDuplicateContractAction(input: {
+  contractNumber?: string | null;
+  signedDate?: string | null;
+  expiryDate?: string | null;
+}): Promise<ActionResult<{ isDuplicate: boolean; contractId: string | null }>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  const duplicate = await findDuplicateContract({
+    contractNumber: input.contractNumber,
+    signedDate: input.signedDate,
+    expiryDate: input.expiryDate,
+    organizationId: access.user.organizationId,
+  });
+
+  return {
+    ok: true,
+    data: {
+      isDuplicate: Boolean(duplicate),
+      contractId: duplicate?.id ?? null,
+    },
   };
 }

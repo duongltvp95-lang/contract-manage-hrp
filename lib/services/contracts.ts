@@ -14,6 +14,7 @@ import { canDeleteEntities, BULK_DELETE_LIMIT } from "@/lib/delete-permissions";
 import { deleteObject } from "@/lib/r2/objects";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { formatDateOnly } from "@/lib/format";
 import { recordCurrentUserAudit } from "./audit-logs";
 import { getCompany, getPartner } from "./partners";
 import { dbError, err, ok, type ServiceErr, type ServiceResult } from "./types";
@@ -74,6 +75,69 @@ export type CreateContractContext = {
   userId: string;
   organizationId: string;
 };
+
+export type DuplicateContractCheck = {
+  contractNumber?: string | null;
+  signedDate?: string | null;
+  expiryDate?: string | null;
+  organizationId: string;
+  excludeContractId?: string;
+};
+
+/**
+ * Checks if a contract with the same contract_number, signed_date, and expiry_date
+ * already exists in the organization (ignoring archived contracts).
+ */
+export async function findDuplicateContract({
+  contractNumber,
+  signedDate,
+  expiryDate,
+  organizationId,
+  excludeContractId,
+}: DuplicateContractCheck): Promise<ContractRow | null> {
+  const cleanNumber = emptyToNull(contractNumber);
+  if (!cleanNumber) return null;
+
+  const cleanSigned = emptyToNull(signedDate);
+  const cleanExpiry = emptyToNull(expiryDate);
+
+  const supabase = await createClient();
+  const escapedNumber = cleanNumber.trim().replace(/[%_]/g, "\\$&");
+
+  let query = supabase
+    .from("contracts")
+    .select(CONTRACT_COLUMNS)
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .ilike("contract_number", escapedNumber);
+
+  if (cleanSigned) {
+    query = query.eq("signed_date", cleanSigned);
+  } else {
+    query = query.is("signed_date", null);
+  }
+
+  if (cleanExpiry) {
+    query = query.eq("expiry_date", cleanExpiry);
+  } else {
+    query = query.is("expiry_date", null);
+  }
+
+  if (excludeContractId) {
+    query = query.neq("id", excludeContractId);
+  }
+
+  const { data, error } = await query
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return data as ContractRow;
+}
 
 /** Plan sections 31, 45 — inserts one contract for the caller's organization. */
 export async function createContract(
@@ -153,6 +217,26 @@ export async function createContract(
   const company = await getCompany(companyId, { organizationId });
   if (!company.ok) {
     return err("validation", "Công ty được chọn không thuộc tổ chức của bạn");
+  }
+
+  /**
+   * Chặn thêm hợp đồng trùng lặp: nếu số hợp đồng, ngày ký và ngày hết hạn
+   * đã tồn tại trong cùng tổ chức thì không cho thêm.
+   */
+  const duplicate = await findDuplicateContract({
+    contractNumber: values.contractNumber,
+    signedDate: values.signedDate,
+    expiryDate: values.expiryDate,
+    organizationId,
+  });
+
+  if (duplicate) {
+    const signedDisplay = duplicate.signed_date ? formatDateOnly(duplicate.signed_date) : "trống";
+    const expiryDisplay = duplicate.expiry_date ? formatDateOnly(duplicate.expiry_date) : "trống";
+    return err(
+      "validation",
+      `Hợp đồng số "${duplicate.contract_number}" với ngày ký (${signedDisplay}) và ngày hết hạn (${expiryDisplay}) đã tồn tại trong hệ thống. Vui lòng không thêm trùng lặp.`,
+    );
   }
 
   const supabase = await createClient();

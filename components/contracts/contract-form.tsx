@@ -19,6 +19,7 @@ import {
   updateContractAction,
 } from "@/app/(app)/contracts/actions";
 import { putFileWithProgress, type PendingFile } from "@/lib/upload";
+import { formatDateOnly } from "@/lib/format";
 import { DateField } from "@/components/contracts/date-field";
 import { ContractCompanyField } from "@/components/contracts/contract-company-field";
 import { ContractFileAttachments } from "@/components/contracts/contract-file-attachments";
@@ -378,6 +379,17 @@ export function ContractForm({
         setAiSummary(data.summary);
       }
 
+      if (data.isDuplicate) {
+        const signedDisp = data.signedDate ? formatDateOnly(data.signedDate) : "trống";
+        const expiryDisp = data.expiryDate ? formatDateOnly(data.expiryDate) : "trống";
+        const dupMsg = `Hợp đồng số "${data.contractNumber}" (ngày ký: ${signedDisp}, hết hạn: ${expiryDisp}) đã tồn tại trong hệ thống. Vui lòng không thêm trùng lặp.`;
+        setFormError(dupMsg);
+        toast.warning("Hợp đồng này đã tồn tại trong hệ thống!", {
+          description: dupMsg,
+          duration: 8000,
+        });
+      }
+
       const toastTitle = data.isNewPartner
         ? "✨ AI đã trích xuất & tự động thêm đối tác mới!"
         : "✨ AI đã trích xuất thành công thông tin hợp đồng!";
@@ -397,9 +409,16 @@ export function ContractForm({
     }
   }
 
+  const contractNumber = useWatch({ control: form.control, name: "contractNumber" });
   const signedDate = useWatch({ control: form.control, name: "signedDate" });
   const expiryDate = useWatch({ control: form.control, name: "expiryDate" });
   const warnings = getContractWarnings({ signedDate, expiryDate });
+
+  useEffect(() => {
+    if (formError && formError.includes("đã tồn tại trong hệ thống")) {
+      setFormError(null);
+    }
+  }, [contractNumber, signedDate, expiryDate]);
 
   async function submitEdit(values: CreateContractInput) {
     if (!contract) return;
@@ -434,6 +453,9 @@ export function ContractForm({
 
     if (!created.ok) {
       setFormError(created.message);
+      toast.error("Không thể lưu hợp đồng", {
+        description: created.message,
+      });
       setPhase("failed");
       return;
     }
