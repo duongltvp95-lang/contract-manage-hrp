@@ -31,10 +31,23 @@ export async function loginAction(payload: {
 
   try {
     const supabase = await createClient();
-    const { error } = await supabase.auth.signInWithPassword({
+    let { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
+
+    // Nếu mật khẩu có khoảng trắng đầu/cuối do bàn phím iPhone tự gợi ý và bị lỗi,
+    // tự động thử lại một lần với mật khẩu đã trim để hỗ trợ người dùng di động.
+    if (error && password.trim() !== password) {
+      const retry = await supabase.auth.signInWithPassword({
+        email,
+        password: password.trim(),
+      });
+      if (!retry.error) {
+        return { success: true };
+      }
+      error = retry.error;
+    }
 
     if (error) {
       const msg = error.message.toLowerCase();

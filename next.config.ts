@@ -6,6 +6,13 @@ const nextConfig: NextConfig = {
   experimental: {
     serverActions: {
       bodySizeLimit: "25mb",
+      allowedOrigins: [
+        "cm.hrpartner.vn",
+        "*.hrpartner.vn",
+        "contract-manage-hrp.vercel.app",
+        "*.vercel.app",
+        "localhost:3000",
+      ],
     },
   },
 
