@@ -107,7 +107,7 @@ function PartnerContractsTabs({
         data-testid="partner-contract-tab-active"
         className={tabCls(scope === "active")}
       >
-        Đang hoạt động
+        Còn hiệu lực
       </Link>
       <Link
         href={withScope("expired")}
