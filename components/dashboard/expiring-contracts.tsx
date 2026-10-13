@@ -36,15 +36,15 @@ export function ExpiringContracts({ contracts }: { contracts: DashboardContractR
   }
 
   return (
-    <div className="rounded-xl shadow-sm">
+    <div className="rounded-xl border border-border/60 overflow-hidden shadow-xs bg-card">
       <Table data-testid="expiring-contracts-table">
-        <TableHeader>
-          <TableRow>
-            <TableHead>Số hợp đồng</TableHead>
-            <TableHead>Đối tác</TableHead>
-            <TableHead>Công ty</TableHead>
-            <TableHead>Ngày hết hạn</TableHead>
-            <TableHead>Còn lại</TableHead>
+        <TableHeader className="bg-muted/30">
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="font-semibold text-xs">Số hợp đồng</TableHead>
+            <TableHead className="font-semibold text-xs">Đối tác</TableHead>
+            <TableHead className="font-semibold text-xs">Công ty</TableHead>
+            <TableHead className="font-semibold text-xs">Ngày hết hạn</TableHead>
+            <TableHead className="font-semibold text-xs">Còn lại</TableHead>
           </TableRow>
         </TableHeader>
 
@@ -54,11 +54,11 @@ export function ExpiringContracts({ contracts }: { contracts: DashboardContractR
             const urgent = days !== null && days <= 30;
 
             return (
-              <TableRow key={contract.id}>
+              <TableRow key={contract.id} className="hover:bg-emerald-500/[0.02] transition-colors">
                 <TableCell className="font-medium">
                   <Link
                     href={`/contracts/${contract.id}`}
-                    className="hover:underline"
+                    className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
                   >
                     {contract.contract_number ?? "Chưa đặt số"}
                   </Link>
@@ -71,16 +71,16 @@ export function ExpiringContracts({ contracts }: { contracts: DashboardContractR
                     <CompanyBadges companies={contract.companies} />
                   ) : null}
                 </TableCell>
-                <TableCell className="whitespace-nowrap">
+                <TableCell className="whitespace-nowrap text-muted-foreground text-sm">
                   {formatDateOnly(contract.expiry_date)}
                 </TableCell>
                 <TableCell className="whitespace-nowrap">
                   <span
                     className={cn(
-                      "inline-flex items-center rounded-full px-3 py-1 text-xs font-medium shadow-sm",
+                      "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium shadow-xs",
                       urgent
-                        ? "bg-red-500 text-white"
-                        : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300",
+                        ? "bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30"
+                        : "bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30",
                     )}
                   >
                     {formatExpiryHint(contract.expiry_date)}

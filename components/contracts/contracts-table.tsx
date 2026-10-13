@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ChevronsUpDown, FilePlus2, Plus, SearchX } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronsUpDown, FilePlus2, Paperclip, Plus, SearchX } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
@@ -108,10 +108,10 @@ export function ContractsTable({
           onDone={() => setSelectedIds([])}
         />
       )}
-      <div className="rounded-xl shadow-sm">
+      <div className="rounded-2xl border border-border/80 shadow-sm bg-card overflow-hidden">
         <Table>
-          <TableHeader>
-            <TableRow>
+          <TableHeader className="bg-muted/30">
+            <TableRow className="hover:bg-transparent">
               {canDelete && (
                 <TableHead className="w-10">
                   <Checkbox
@@ -152,10 +152,13 @@ export function ContractsTable({
             const href = `/contracts/${row.id}`;
             const todayStr = format(new Date(), "yyyy-MM-dd");
             const isExpired = Boolean(row.expiry_date && row.expiry_date < todayStr);
+            const partnerName = partnerDisplayName(row);
+            const initial = partnerName && partnerName !== "—" ? partnerName.trim().charAt(0).toUpperCase() : null;
+
             return (
               <TableRow
                 key={row.id}
-                className="cursor-pointer"
+                className="cursor-pointer hover:bg-emerald-500/[0.02] transition-colors"
                 onClick={() => router.push(href)}
               >
                 {canDelete && (
@@ -172,26 +175,37 @@ export function ContractsTable({
                   {/* Real link so keyboard and screen-reader users can open the row. */}
                   <Link
                     href={href}
-                    className="hover:underline"
+                    className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
                     onClick={(event) => event.stopPropagation()}
                   >
                     {row.contract_number ?? "(chưa có số)"}
                   </Link>
                 </TableCell>
-                <TableCell className="max-w-[22rem] truncate">
+                <TableCell className="max-w-[22rem]">
                   {/* The linked partner's name wins; the free-text column is the
                       fallback for contracts that predate the directory. */}
-                  {partnerDisplayName(row)}
+                  {partnerName !== "—" ? (
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-xs font-semibold text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/20">
+                        {initial}
+                      </div>
+                      <span className="truncate">{partnerName}</span>
+                    </div>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
                 </TableCell>
                 <TableCell>
                   {row.companies.length > 0 ? (
                     <CompanyBadges companies={row.companies} />
                   ) : null}
                 </TableCell>
-                <TableCell>{formatDateOnly(row.signed_date)}</TableCell>
+                <TableCell className="text-muted-foreground">{formatDateOnly(row.signed_date)}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1.5">
-                    <span>{formatDuration(row.duration_text, row.signed_date, row.expiry_date)}</span>
+                    <span className="inline-flex items-center rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                      {formatDuration(row.duration_text, row.signed_date, row.expiry_date)}
+                    </span>
                     {isExpired && (
                       <Badge
                         variant="outline"
@@ -201,15 +215,18 @@ export function ContractsTable({
                       </Badge>
                     )}
                   </div>
-                  <div className={cn("text-xs", isExpired ? "text-red-600/90 dark:text-red-400/90 font-medium" : "text-muted-foreground")}>
+                  <div className={cn("text-xs mt-1", isExpired ? "text-red-600/90 dark:text-red-400/90 font-medium" : "text-muted-foreground")}>
                     {formatDateOnly(row.expiry_date)}
                   </div>
                 </TableCell>
                 <TableCell className="text-center">
                   {row.file_count > 0 ? (
-                    <Badge variant="secondary">{row.file_count}</Badge>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-muted/80 px-2 py-0.5 text-xs font-medium text-foreground">
+                      <Paperclip className="h-3 w-3 text-muted-foreground" />
+                      {row.file_count}
+                    </span>
                   ) : (
-                    <span className="text-muted-foreground">0</span>
+                    <span className="text-xs text-muted-foreground/60">—</span>
                   )}
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
@@ -228,7 +245,7 @@ export function ContractsTable({
           })}
         </TableBody>
         </Table>
-        <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+        <p className="border-t px-4 py-2.5 text-xs text-muted-foreground bg-muted/10">
           {total} hợp đồng
         </p>
       </div>

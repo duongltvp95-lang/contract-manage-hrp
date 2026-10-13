@@ -1,10 +1,12 @@
-import { AlertCircle, Clock, FileText } from "lucide-react";
+import { AlertCircle, ArrowUpRight, Clock, FileText } from "lucide-react";
+import Link from "next/link";
 import { Suspense } from "react";
 
 import { ExpiringContracts } from "@/components/dashboard/expiring-contracts";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { RecentContracts } from "@/components/dashboard/recent-contracts";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { requireUser } from "@/lib/auth";
@@ -48,11 +50,19 @@ async function DashboardContent() {
 
   return (
     <div className="space-y-6 p-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-bold">Tổng quan</h1>
-        <p className="text-sm text-muted-foreground">
-          Xin chào, {user.fullName ?? user.email}
-        </p>
+      <header className="flex flex-wrap items-center justify-between gap-4 pb-1">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-2xl font-bold tracking-tight">Tổng quan</h1>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Hệ thống ổn định
+            </span>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Xin chào, <span className="font-medium text-foreground">{user.fullName ?? user.email}</span> · Theo dõi hợp đồng theo thời gian thực
+          </p>
+        </div>
       </header>
 
       {failure && (
@@ -67,32 +77,40 @@ async function DashboardContent() {
           testId="metric-total"
           title="Tổng hợp đồng"
           value={metrics.ok ? metrics.data.total : "—"}
+          badgeText={metrics.ok ? `${metrics.data.active} còn hiệu lực` : undefined}
           hint="Không tính hợp đồng đã lưu trữ"
-          icon={<FileText className="h-6 w-6" />}
+          icon={<FileText className="h-5 w-5" />}
         />
         <MetricCard
           testId="metric-expiring-soon"
           title="Sắp hết hạn"
           value={metrics.ok ? metrics.data.expiringSoon : "—"}
+          badgeText="Trong 90 ngày"
           hint={`Từ ${formatDateOnly(window.from)} đến ${formatDateOnly(window.to)}`}
           tone="warning"
-          icon={<Clock className="h-6 w-6" />}
+          icon={<Clock className="h-5 w-5" />}
         />
         <MetricCard
           testId="metric-expired"
           title="Đã hết hạn"
           value={metrics.ok ? metrics.data.expired : "—"}
+          badgeText={metrics.ok && metrics.data.expired > 0 ? "Cần xử lý" : undefined}
           hint={`Ngày hết hạn trước ${formatDateOnly(window.from)}`}
           tone="danger"
-          icon={<AlertCircle className="h-6 w-6" />}
+          icon={<AlertCircle className="h-5 w-5" />}
         />
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Hợp đồng gần đây</CardTitle>
+      <Card className="rounded-2xl border border-border/80 shadow-sm bg-card overflow-hidden">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 border-b border-border/40">
+          <CardTitle className="text-base font-semibold tracking-tight">Hợp đồng gần đây</CardTitle>
+          <Button variant="ghost" size="sm" asChild className="text-xs text-muted-foreground hover:text-emerald-600 gap-1 h-8">
+            <Link href="/contracts">
+              Xem tất cả <ArrowUpRight className="h-3.5 w-3.5" />
+            </Link>
+          </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-4">
           {recent.ok ? (
             <RecentContracts contracts={recent.data} />
           ) : (
@@ -103,11 +121,16 @@ async function DashboardContent() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Hợp đồng sắp hết hạn</CardTitle>
+      <Card className="rounded-2xl border border-border/80 shadow-sm bg-card overflow-hidden">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 border-b border-border/40">
+          <CardTitle className="text-base font-semibold tracking-tight">Hợp đồng sắp hết hạn</CardTitle>
+          <Button variant="ghost" size="sm" asChild className="text-xs text-muted-foreground hover:text-emerald-600 gap-1 h-8">
+            <Link href="/contracts?preset=d90">
+              Xem tất cả <ArrowUpRight className="h-3.5 w-3.5" />
+            </Link>
+          </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-4">
           {expiring.ok ? (
             <ExpiringContracts contracts={expiring.data} />
           ) : (

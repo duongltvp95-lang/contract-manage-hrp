@@ -12,6 +12,7 @@ import { requireUser } from "@/lib/auth";
 import { contractsHref, parseContractsQuery, type ContractsQuery } from "@/lib/contracts-query";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { listContracts } from "@/lib/services/contracts";
+import { getContractMetrics } from "@/lib/services/dashboard";
 import { cn } from "@/lib/utils";
 
 /**
@@ -40,18 +41,28 @@ async function ContractsContent({
   const requestedScope = raw === "expired" || raw === "archived" ? raw : "active";
   const scope = requestedScope === "archived" && !canDelete ? "active" : requestedScope;
 
-  const result = await listContracts({
-    // authoritative, from the session
-    organizationId: me.organizationId,
-    query,
-    scope,
-  });
+  const [result, metricsResult] = await Promise.all([
+    listContracts({
+      organizationId: me.organizationId,
+      query,
+      scope,
+    }),
+    getContractMetrics(me.organizationId),
+  ]);
+
+  const counts = metricsResult.ok
+    ? {
+        active: metricsResult.data.active,
+        expired: metricsResult.data.expired,
+        archived: metricsResult.data.archived,
+      }
+    : undefined;
 
   return (
     <div className="space-y-6 p-4 sm:p-6 md:p-8">
       <PageHeader />
 
-      <ContractsTabs scope={scope} canDelete={canDelete} query={query} />
+      <ContractsTabs scope={scope} canDelete={canDelete} query={query} counts={counts} />
 
       <ContractsToolbar query={query} scope={scope} />
 
@@ -88,10 +99,12 @@ function ContractsTabs({
   scope,
   canDelete,
   query,
+  counts,
 }: {
   scope: "active" | "expired" | "archived";
   canDelete: boolean;
   query: ContractsQuery;
+  counts?: { active: number; expired: number; archived: number };
 }) {
   const base = contractsHref({}, query);
   const withScope = (next: "active" | "expired" | "archived") =>
@@ -101,15 +114,23 @@ function ContractsTabs({
 
   const tabCls = (active: boolean) =>
     cn(
-      "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+      "inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-sm font-medium transition-all duration-150",
       active
-        ? "bg-primary text-primary-foreground"
-        : "text-muted-foreground hover:text-foreground",
+        ? "bg-emerald-600 text-white shadow-sm font-semibold"
+        : "text-muted-foreground hover:bg-background/80 hover:text-foreground",
+    );
+
+  const badgeCls = (active: boolean) =>
+    cn(
+      "rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums leading-none",
+      active
+        ? "bg-white/20 text-white"
+        : "bg-muted text-muted-foreground",
     );
 
   return (
     <div
-      className="inline-flex items-center gap-1 rounded-lg border p-1"
+      className="inline-flex items-center gap-1.5 rounded-xl border border-border/70 bg-muted/40 p-1 shadow-xs backdrop-blur"
       data-testid="contracts-tabs"
     >
       <Link
@@ -117,14 +138,20 @@ function ContractsTabs({
         data-testid="contract-tab-active"
         className={tabCls(scope === "active")}
       >
-        Còn hiệu lực
+        <span>Còn hiệu lực</span>
+        {counts !== undefined && (
+          <span className={badgeCls(scope === "active")}>{counts.active}</span>
+        )}
       </Link>
       <Link
         href={withScope("expired")}
         data-testid="contract-tab-expired"
         className={tabCls(scope === "expired")}
       >
-        Đã hết hạn
+        <span>Đã hết hạn</span>
+        {counts !== undefined && (
+          <span className={badgeCls(scope === "expired")}>{counts.expired}</span>
+        )}
       </Link>
       {canDelete && (
         <Link
@@ -132,7 +159,10 @@ function ContractsTabs({
           data-testid="contract-tab-archived"
           className={tabCls(scope === "archived")}
         >
-          Đã lưu trữ
+          <span>Đã lưu trữ</span>
+          {counts !== undefined && (
+            <span className={badgeCls(scope === "archived")}>{counts.archived}</span>
+          )}
         </Link>
       )}
     </div>
@@ -143,12 +173,12 @@ function PageHeader() {
   return (
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h1 className="text-2xl font-bold">Hợp đồng</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Hợp đồng</h1>
         <p className="text-muted-foreground">
           Tìm kiếm, lọc và quản lý hợp đồng của tổ chức.
         </p>
       </div>
-      <Button asChild>
+      <Button asChild className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-sm hover:shadow-md transition-all duration-200">
         <Link href="/contracts/new">
           <Plus className="mr-2 h-4 w-4" />
           Thêm hợp đồng

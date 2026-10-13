@@ -39,25 +39,25 @@ export function RecentContracts({ contracts }: { contracts: DashboardContractRow
   }
 
   return (
-    <div className="rounded-xl shadow-sm">
+    <div className="rounded-xl border border-border/60 overflow-hidden shadow-xs bg-card">
       <Table data-testid="recent-contracts-table">
-        <TableHeader>
-          <TableRow>
-            <TableHead>Số hợp đồng</TableHead>
-            <TableHead>Đối tác</TableHead>
-            <TableHead>Công ty</TableHead>
-            <TableHead>Ngày ký</TableHead>
-            <TableHead>Ngày hết hạn</TableHead>
+        <TableHeader className="bg-muted/30">
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="font-semibold text-xs">Số hợp đồng</TableHead>
+            <TableHead className="font-semibold text-xs">Đối tác</TableHead>
+            <TableHead className="font-semibold text-xs">Công ty</TableHead>
+            <TableHead className="font-semibold text-xs">Ngày ký</TableHead>
+            <TableHead className="font-semibold text-xs">Ngày hết hạn</TableHead>
           </TableRow>
         </TableHeader>
 
         <TableBody>
           {contracts.map((contract) => (
-            <TableRow key={contract.id}>
+            <TableRow key={contract.id} className="hover:bg-emerald-500/[0.02] transition-colors">
               <TableCell className="font-medium">
                 <Link
                   href={`/contracts/${contract.id}`}
-                  className="hover:underline"
+                  className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
                 >
                   {contract.contract_number ?? "Chưa đặt số"}
                 </Link>
@@ -70,10 +70,10 @@ export function RecentContracts({ contracts }: { contracts: DashboardContractRow
                   <CompanyBadges companies={contract.companies} />
                 ) : null}
               </TableCell>
-              <TableCell className="whitespace-nowrap">
+              <TableCell className="whitespace-nowrap text-muted-foreground text-sm">
                 {formatDateOnly(contract.signed_date)}
               </TableCell>
-              <TableCell className="whitespace-nowrap">
+              <TableCell className="whitespace-nowrap text-muted-foreground text-sm">
                 {formatDateOnly(contract.expiry_date)}
               </TableCell>
             </TableRow>

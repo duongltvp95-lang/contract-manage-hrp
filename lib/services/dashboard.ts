@@ -22,8 +22,10 @@ import { dbError, ok, type ServiceResult } from "./types";
 
 export type ContractMetrics = {
   total: number;
+  active: number;
   expiringSoon: number;
   expired: number;
+  archived: number;
 };
 
 /**
@@ -76,21 +78,37 @@ export async function getContractMetrics(
   const soon = expiryWindow("expiring90", today);
   const past = expiryWindow("expired", today);
 
-  const [totalResult, soonResult, expiredResult] = await Promise.all([
+  const [totalResult, soonResult, expiredResult, archivedResult] = await Promise.all([
     base(),
     base().gte("expiry_date", soon.gte!).lte("expiry_date", soon.lte!),
     base().lt("expiry_date", past.lt!),
+    supabase
+      .from("contracts")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organizationId)
+      .not("archived_at", "is", null),
   ]);
 
-  const failure = totalResult.error ?? soonResult.error ?? expiredResult.error;
+  const failure =
+    totalResult.error ??
+    soonResult.error ??
+    expiredResult.error ??
+    archivedResult.error;
   if (failure) {
     return dbError("getContractMetrics", failure);
   }
 
+  const total = totalResult.count ?? 0;
+  const expired = expiredResult.count ?? 0;
+  const active = Math.max(0, total - expired);
+  const archived = archivedResult.count ?? 0;
+
   return ok({
-    total: totalResult.count ?? 0,
+    total,
+    active,
     expiringSoon: soonResult.count ?? 0,
-    expired: expiredResult.count ?? 0,
+    expired,
+    archived,
   });
 }
 

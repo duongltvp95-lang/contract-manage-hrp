@@ -130,10 +130,10 @@ export function PartnersTable({
           onClearAll={handleClearAll}
         />
       )}
-      <div className="rounded-xl shadow-sm">
+      <div className="rounded-2xl border border-border/80 shadow-sm bg-card overflow-hidden">
         <Table>
-          <TableHeader>
-            <TableRow>
+          <TableHeader className="bg-muted/30">
+            <TableRow className="hover:bg-transparent">
               {canDelete && (
                 <TableHead className="w-10">
                   <Checkbox
@@ -312,7 +312,7 @@ export function PartnersTable({
                 return (
                   <TableRow
                     key={row.id}
-                    className="cursor-pointer"
+                    className="cursor-pointer hover:bg-emerald-500/[0.02] transition-colors"
                     onClick={() => router.push(href)}
                     data-testid="partner-row"
                     data-partner-name={row.name}
@@ -329,13 +329,18 @@ export function PartnersTable({
                       </TableCell>
                     )}
                     <TableCell className="font-medium" data-testid={`partner-name-cell-${row.id}`}>
-                      <Link
-                        href={href}
-                        className="hover:underline"
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        {row.name}
-                      </Link>
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-xs font-semibold text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-500/20">
+                          {row.name ? row.name.trim().charAt(0).toUpperCase() : "—"}
+                        </div>
+                        <Link
+                          href={href}
+                          className="hover:underline"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          {row.name}
+                        </Link>
+                      </div>
                     </TableCell>
                     <TableCell
                       className="hidden font-mono text-sm text-muted-foreground sm:table-cell"
@@ -383,7 +388,7 @@ export function PartnersTable({
             )}
           </TableBody>
         </Table>
-        <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+        <p className="border-t px-4 py-2.5 text-xs text-muted-foreground bg-muted/10">
           {hasFilters
             ? `${filteredRows.length} / ${rows.length} đối tác`
             : `${rows.length} đối tác`}

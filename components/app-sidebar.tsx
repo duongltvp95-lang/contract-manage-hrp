@@ -107,19 +107,26 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="flex-row items-center gap-2 px-3 py-2">
-        <Image
-          src="/hrp-logo.webp"
-          alt="HRP"
-          width={36}
-          height={36}
-          priority
-          data-testid="app-logo"
-          className="h-9 w-9 shrink-0 object-contain group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8"
-        />
-        <span className="truncate text-sm font-semibold text-sidebar-foreground group-data-[collapsible=icon]:hidden">
-          Quản lý hợp đồng
-        </span>
+      <SidebarHeader className="flex-row items-center gap-2.5 px-3 py-3 border-b border-sidebar-border/40">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 ring-1 ring-emerald-500/20 shadow-xs group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8">
+          <Image
+            src="/hrp-logo.webp"
+            alt="HRP"
+            width={32}
+            height={32}
+            priority
+            data-testid="app-logo"
+            className="h-7 w-7 shrink-0 object-contain group-data-[collapsible=icon]:h-6 group-data-[collapsible=icon]:w-6"
+          />
+        </div>
+        <div className="flex flex-col truncate group-data-[collapsible=icon]:hidden">
+          <span className="truncate text-sm font-bold tracking-tight text-sidebar-foreground">
+            HRP Contract
+          </span>
+          <span className="truncate text-[11px] text-muted-foreground font-medium">
+            Quản lý hợp đồng
+          </span>
+        </div>
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
@@ -135,7 +142,7 @@ export function AppSidebar() {
                       onClick={() => {
                         if (isMobile) setOpenMobile(false);
                       }}
-                      className="rounded-lg transition-colors hover:bg-gray-100 data-[active=true]:bg-primary/10 data-[active=true]:text-primary data-[active=true]:font-semibold data-[active=true]:hover:bg-primary/10"
+                      className="rounded-lg transition-colors hover:bg-emerald-500/[0.06] data-[active=true]:bg-emerald-500/10 data-[active=true]:text-emerald-700 dark:data-[active=true]:text-emerald-300 data-[active=true]:font-semibold data-[active=true]:hover:bg-emerald-500/15"
                     >
                       <Link href={item.url}>
                         <item.icon />
