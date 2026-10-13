@@ -31,11 +31,13 @@ const eslintConfig = [
   {
     ignores: [
       ".next/**",
+      ".next*/**",
       // The test suites build into their own directories (next.config.ts reads
       // NEXT_DIST_DIR) so they never clash with a running dev server. Those are
       // generated bundles, not source, and must not be linted.
       ".next-test/**",
       ".next-e2e/**",
+      ".next-e2e35/**",
       // Same thing, another name: an integration/dev server pointed at
       // NEXT_DIST_DIR=.next-int. Already listed in .gitignore; listing it here
       // too is what keeps `eslint .` from reporting ~11k problems inside

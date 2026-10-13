@@ -1,6 +1,6 @@
 import "server-only";
 
-import { ExtractedContractSchema, type ExtractedContract } from "@schemas/contract";
+import { type ExtractedContract } from "@schemas/contract";
 import { err, ok, type ServiceResult } from "@/lib/services/types";
 
 function getGeminiModels(): string[] {

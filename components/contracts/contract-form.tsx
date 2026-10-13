@@ -259,7 +259,10 @@ export function ContractForm({
   // Nếu quay lại trang tạo mới mà hợp đồng trước đó đã được lưu thành công thì tự động làm sạch form
   useEffect(() => {
     if (!isEdit && savedContractId) {
-      resetFormState();
+      const timer = setTimeout(() => {
+        resetFormState();
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [isEdit, savedContractId, resetFormState]);
 
@@ -439,9 +442,12 @@ export function ContractForm({
 
   useEffect(() => {
     if (formError && formError.includes("đã tồn tại trong hệ thống")) {
-      setFormError(null);
+      const timer = setTimeout(() => {
+        setFormError(null);
+      }, 0);
+      return () => clearTimeout(timer);
     }
-  }, [contractNumber, signedDate, expiryDate]);
+  }, [contractNumber, signedDate, expiryDate, formError]);
 
   async function submitEdit(values: CreateContractInput) {
     if (!contract) return;
