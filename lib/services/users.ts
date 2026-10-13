@@ -267,26 +267,25 @@ async function listAuthEmails(
  * Administrator only. `profiles` carries the role and the state; the email is
  * joined in from `auth.users` because that is where it actually lives.
  */
-export async function listUsers({
-  organizationId,
-}: {
-  organizationId: string;
+export async function listUsers(params?: {
+  organizationId?: string;
 }): Promise<ServiceResult<ManagedUser[]>> {
   const admin = await requireAdmin();
   if (!admin.ok) return admin;
 
-  if (admin.data.organizationId !== organizationId) {
-    return err("forbidden", "Không thể xem người dùng của tổ chức khác");
-  }
-
   const service = createAdminClient();
 
-  const { data: profiles, error } = await service
+  let query = service
     .from("profiles")
     .select("id, full_name, role, is_active, created_at")
-    .eq("organization_id", organizationId)
     .eq("is_tombstone", false)
     .order("created_at", { ascending: true });
+
+  if (params?.organizationId) {
+    query = query.eq("organization_id", params.organizationId);
+  }
+
+  const { data: profiles, error } = await query;
 
   if (error) {
     return dbError("listUsers", error);
@@ -323,32 +322,19 @@ export async function listUsers({
  * Provisions a new user in the administrator's organization.
  *
  * Order matters:
- *   1. authorize (administrator, and the organization matches the session);
+ *   1. authorize (administrator);
  *   2. validate the payload;
  *   3. refuse a duplicate email — before creating anything, so the common
  *      mistake produces a clear message instead of a half-made account;
  *   4. create the auth user with a generated password and a confirmed email
  *      (public sign-up is disabled, so this is the only way in);
  *   5. write the profile: full_name, role, and the organization explicitly.
- *
- * Step 5 sets `organization_id` even though `handle_new_user` already assigned
- * the *default* organization. The two agree today because there is one
- * organization; making it explicit means the invariant is "the new user belongs
- * to the administrator's organization" by construction, rather than by luck
- * when a second organization appears.
  */
 export async function createUser(
   input: CreateUserServiceInput,
 ): Promise<ServiceResult<CreatedUser>> {
   const admin = await requireAdmin();
   if (!admin.ok) return admin;
-
-  if (admin.data.organizationId !== input.organizationId) {
-    return err(
-      "forbidden",
-      "Không thể tạo người dùng cho tổ chức khác",
-    );
-  }
 
   const parsed = CreateUserSchema.safeParse(input);
 
@@ -405,7 +391,7 @@ export async function createUser(
     .update({
       full_name: fullName,
       role,
-      organization_id: admin.data.organizationId,
+      organization_id: input.organizationId || admin.data.organizationId,
     })
     .eq("id", userId)
     .select("id, full_name, role, is_active, created_at")
@@ -594,22 +580,22 @@ export async function updateUser(
     return dbError("updateUser", error);
   }
 
-  // --- the target row has to exist in our organization ---------------------
+  // --- the target row has to exist ---------------------
   const { data: existing, error: existingError } = await service
     .from("profiles")
-    .select("id, full_name, role, is_active, created_at")
+    .select("id, full_name, role, is_active, created_at, organization_id")
     .eq("id", userId)
-    .eq("organization_id", admin.data.organizationId)
     .maybeSingle();
 
   if (existingError) {
     return dbError("updateUser", existingError);
   }
   if (!existing) {
-    return err("not_found", "Không tìm thấy người dùng trong tổ chức");
+    return err("not_found", "Không tìm thấy người dùng trong hệ thống");
   }
 
-  const target = existing as ProfileDbRow;
+  const target = existing as ProfileDbRow & { organization_id?: string | null };
+  const targetOrgId = target.organization_id || admin.data.organizationId;
 
   // --- Owner protection guard --------------------------------------------
   // duongltvp95@gmail.com is the immutable system Owner.
@@ -640,7 +626,7 @@ export async function updateUser(
   // --- last-admin guard ---------------------------------------------------
   const lastAdminCheck = await assertNotLastAdmin(
     service,
-    admin.data.organizationId,
+    targetOrgId,
     userId,
     role,
     isActive,
@@ -688,7 +674,7 @@ export async function updateUser(
     metadata.role_to = next.role;
     try {
       await recordAudit({
-        organizationId: admin.data.organizationId,
+        organizationId: targetOrgId,
         actorId: loggedInUserId,
         actorRole: "admin",
         action: "update_user_role",
@@ -703,7 +689,7 @@ export async function updateUser(
   if (patch.is_active !== undefined) {
     try {
       await recordAudit({
-        organizationId: admin.data.organizationId,
+        organizationId: targetOrgId,
         actorId: loggedInUserId,
         actorRole: "admin",
         action: "set_active_user",
@@ -792,25 +778,25 @@ export async function deleteUser(
   // --- target lookup -----------------------------------------------------
   const { data: target, error: targetError } = await service
     .from("profiles")
-    .select("id, full_name, role, is_active, created_at")
+    .select("id, full_name, role, is_active, created_at, organization_id")
     .eq("id", userId)
-    .eq("organization_id", admin.data.organizationId)
     .maybeSingle();
 
   if (targetError) {
     return dbError("deleteUser", targetError);
   }
   if (!target) {
-    return err("not_found", "Không tìm thấy người dùng trong tổ chức");
+    return err("not_found", "Không tìm thấy người dùng trong hệ thống");
   }
 
-  const targetRow = target as ProfileDbRow;
+  const targetRow = target as ProfileDbRow & { organization_id?: string | null };
+  const targetOrgId = targetRow.organization_id || admin.data.organizationId;
 
   // --- guard 4: last-admin ----------------------------------------------
   if (targetRow.role === "admin" && targetRow.is_active) {
     const lastAdminCheck = await assertNotLastAdmin(
       service,
-      admin.data.organizationId,
+      targetOrgId,
       userId,
       "user",
       false,
@@ -859,7 +845,7 @@ export async function deleteUser(
   // call is the only one that hits the Admin API.
   const tombstone = await ensureTombstoneProfile(
     service,
-    admin.data.organizationId,
+    targetOrgId,
   );
   if (!tombstone.ok) {
     return tombstone;
@@ -888,7 +874,7 @@ export async function deleteUser(
   // user; that column has no FK, so the later cascade is a no-op for it.
   try {
     await recordAudit({
-      organizationId: admin.data.organizationId,
+      organizationId: targetOrgId,
       actorId: loggedInUserId,
       actorRole: "admin",
       action: "delete_user",
@@ -962,30 +948,25 @@ export async function resetUserPassword(
   const { userId, password } = parsed.data;
   const service = createAdminClient();
 
-  // 1. Kiểm tra tài khoản đích có tồn tại trong cùng tổ chức không
-  const { data: existing, error: existingError } = await service
+  // 1. Kiểm tra tài khoản đích trong Auth / Profiles (không giới hạn phạm vi tổ chức)
+  let targetEmail: string | null = null;
+  try {
+    const { data: targetAuth, error: authGetError } = await service.auth.admin.getUserById(userId);
+    if (authGetError || !targetAuth?.user) {
+      return err("not_found", "Không tìm thấy người dùng trong hệ thống");
+    }
+    targetEmail = targetAuth.user.email ?? null;
+  } catch (error) {
+    return dbError("resetUserPassword", error);
+  }
+
+  const { data: targetProfile } = await service
     .from("profiles")
     .select("id, role, is_active, organization_id")
     .eq("id", userId)
-    .eq("organization_id", admin.data.organizationId)
     .maybeSingle();
 
-  if (existingError) {
-    return dbError("resetUserPassword", existingError);
-  }
-  if (!existing) {
-    return err("not_found", "Không tìm thấy người dùng trong tổ chức");
-  }
-
   // 2. Bảo vệ Owner: Không admin nào được phép reset mật khẩu của Owner duongltvp95@gmail.com
-  let targetEmail: string | null = null;
-  try {
-    const { data: targetAuth } = await service.auth.admin.getUserById(userId);
-    targetEmail = targetAuth?.user?.email ?? null;
-  } catch {
-    // ignore
-  }
-
   if (isOwnerUserId(userId) || isOwnerEmail(targetEmail)) {
     if (!isOwnerUserId(loggedInUserId)) {
       return err(
@@ -1005,9 +986,10 @@ export async function resetUserPassword(
   }
 
   // 4. Ghi audit log
+  const auditOrgId = targetProfile?.organization_id || admin.data.organizationId;
   try {
     await recordAudit({
-      organizationId: admin.data.organizationId,
+      organizationId: auditOrgId,
       actorId: loggedInUserId,
       actorRole: "admin",
       action: "update_profile",

@@ -50,7 +50,7 @@ async function SettingsContent() {
   const serviceReady = hasServiceRoleKey();
   const users =
     isAdmin && serviceReady
-      ? await listUsers({ organizationId: user.organizationId })
+      ? await listUsers()
       : null;
 
   return (
