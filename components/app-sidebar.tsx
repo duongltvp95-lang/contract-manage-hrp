@@ -107,18 +107,16 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="flex-row items-center gap-2.5 px-3 py-3 border-b border-sidebar-border/40">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 ring-1 ring-emerald-500/20 shadow-xs group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8">
-          <Image
-            src="/hrp-logo.webp"
-            alt="HRP"
-            width={32}
-            height={32}
-            priority
-            data-testid="app-logo"
-            className="h-7 w-7 shrink-0 object-contain group-data-[collapsible=icon]:h-6 group-data-[collapsible=icon]:w-6"
-          />
-        </div>
+      <SidebarHeader className="flex-row items-center gap-2 px-3 py-3 border-b border-sidebar-border/40">
+        <Image
+          src="/hrp-logo.webp"
+          alt="HRP"
+          width={36}
+          height={36}
+          priority
+          data-testid="app-logo"
+          className="h-9 w-9 shrink-0 object-contain group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8"
+        />
         <div className="flex flex-col truncate group-data-[collapsible=icon]:hidden">
           <span className="truncate text-sm font-bold tracking-tight text-sidebar-foreground">
             HRP Contract
