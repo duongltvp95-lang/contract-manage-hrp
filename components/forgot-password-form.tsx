@@ -30,9 +30,16 @@ export function ForgotPasswordForm({
     setIsLoading(true);
     setError(null);
 
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail) {
+      setError("Vui lòng nhập địa chỉ email.");
+      setIsLoading(false);
+      return;
+    }
+
     try {
       // The url which will be included in the email. This URL needs to be configured in your redirect URLs in the Supabase dashboard at https://supabase.com/dashboard/project/_/auth/url-configuration
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
         redirectTo: `${window.location.origin}/auth/update-password`,
       });
       if (error) throw error;
@@ -79,6 +86,10 @@ export function ForgotPasswordForm({
                     type="email"
                     placeholder="ten@hrpartner.vn"
                     required
+                    autoComplete="email"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                   />

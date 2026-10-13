@@ -1,7 +1,6 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -13,8 +12,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { loginAction } from "@/app/login/actions";
 
 export function LoginForm({
   className,
@@ -24,24 +23,36 @@ export function LoginForm({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const router = useRouter();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const supabase = createClient();
     setIsLoading(true);
     setError(null);
 
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !password) {
+      setError("Vui lòng nhập đầy đủ email và mật khẩu.");
+      setIsLoading(false);
+      return;
+    }
+
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
+      const res = await loginAction({
+        email: cleanEmail,
         password,
       });
-      if (error) throw error;
-      router.push("/dashboard");
-    } catch (error: unknown) {
-      setError(error instanceof Error ? error.message : "Đã xảy ra lỗi");
-    } finally {
+
+      if (!res.success) {
+        setError(res.error);
+        setIsLoading(false);
+        return;
+      }
+
+      // Hard redirect để đồng bộ hoàn toàn cookie trên Safari iOS và mobile browsers
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+      window.location.href = "/dashboard";
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Đã xảy ra lỗi khi đăng nhập.");
       setIsLoading(false);
     }
   };
@@ -65,6 +76,10 @@ export function LoginForm({
                   type="email"
                   placeholder="ten@hrpartner.vn"
                   required
+                  autoComplete="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
@@ -83,6 +98,7 @@ export function LoginForm({
                   id="password"
                   type="password"
                   required
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
