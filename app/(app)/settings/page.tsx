@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { requireUser } from "@/lib/auth";
+import { isOwnerEmail, isOwnerUserId } from "@/lib/owner";
 import { getOrganization } from "@/lib/services/organizations";
 import { listUsers } from "@/lib/services/users";
 import { hasServiceRoleKey } from "@/lib/supabase/admin";
@@ -104,7 +105,11 @@ async function SettingsContent() {
                 </AlertDescription>
               </Alert>
             ) : users?.ok ? (
-              <UsersTable rows={users.data} currentUserId={user.id} />
+              <UsersTable
+                rows={users.data}
+                currentUserId={user.id}
+                isCurrentUserOwner={isOwnerUserId(user.id) || isOwnerEmail(user.email)}
+              />
             ) : (
               <Alert variant="destructive">
                 <AlertTitle>Không tải được danh sách người dùng</AlertTitle>

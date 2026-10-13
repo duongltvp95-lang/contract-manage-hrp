@@ -18,9 +18,11 @@ import type { ManagedUser } from "@/lib/services/users";
 export function UserRowActions({
   user,
   isSelf,
+  isCurrentUserOwner = false,
 }: {
   user: ManagedUser;
   isSelf: boolean;
+  isCurrentUserOwner?: boolean;
 }) {
   const isOwner = isOwnerEmail(user.email) || isOwnerUserId(user.id);
 
@@ -40,22 +42,7 @@ export function UserRowActions({
             </Button>
           }
         />
-        {isOwner && !isSelf ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                disabled
-                data-testid="user-reset-password-button-owner"
-                aria-label="Không thể đặt lại mật khẩu của Quản trị viên tối cao"
-              >
-                <KeyRound className="h-4 w-4 text-muted-foreground/50" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Không thể đặt lại mật khẩu của Quản trị viên tối cao</TooltipContent>
-          </Tooltip>
-        ) : (
+        {isCurrentUserOwner ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <span>
@@ -76,7 +63,7 @@ export function UserRowActions({
             </TooltipTrigger>
             <TooltipContent>Đặt lại mật khẩu</TooltipContent>
           </Tooltip>
-        )}
+        ) : null}
         {isOwner ? (
           <Tooltip>
             <TooltipTrigger asChild>

@@ -945,6 +945,18 @@ export async function resetUserPassword(
   const admin = await requireAdmin();
   if (!admin.ok) return admin;
 
+  // QUY TẮC BẢO MẬT: Chỉ Quản trị viên tối cao (Owner - duongltvp95@gmail.com) mới có quyền đặt lại mật khẩu!
+  if (
+    !isOwnerUserId(loggedInUserId) &&
+    !isOwnerEmail(admin.data.email) &&
+    !isOwnerUserId(admin.data.id)
+  ) {
+    return err(
+      "forbidden",
+      "Chỉ Quản trị viên tối cao (Owner) mới có quyền đặt lại mật khẩu cho người dùng",
+    );
+  }
+
   const { userId, password } = parsed.data;
   const service = createAdminClient();
 
@@ -965,16 +977,6 @@ export async function resetUserPassword(
     .select("id, role, is_active, organization_id")
     .eq("id", userId)
     .maybeSingle();
-
-  // 2. Bảo vệ Owner: Không admin nào được phép reset mật khẩu của Owner duongltvp95@gmail.com
-  if (isOwnerUserId(userId) || isOwnerEmail(targetEmail)) {
-    if (!isOwnerUserId(loggedInUserId)) {
-      return err(
-        "forbidden",
-        "Chỉ Quản trị viên tối cao mới có quyền đặt lại mật khẩu cho tài khoản này",
-      );
-    }
-  }
 
   // 3. Cập nhật mật khẩu trong auth.users bằng Admin client
   const { error: updateAuthError } = await service.auth.admin.updateUserById(userId, {

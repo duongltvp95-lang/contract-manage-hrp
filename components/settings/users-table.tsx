@@ -19,10 +19,14 @@ import type { ManagedUser } from "@/lib/services/users";
 export function UsersTable({
   rows,
   currentUserId,
+  isCurrentUserOwner,
 }: {
   rows: ManagedUser[];
   currentUserId: string;
+  isCurrentUserOwner?: boolean;
 }) {
+  const isOwnerSession = isCurrentUserOwner ?? isOwnerUserId(currentUserId);
+
   if (rows.length === 0) {
     return (
       <EmptyState
@@ -84,7 +88,11 @@ export function UsersTable({
                   {formatDateTime(row.createdAt)}
                 </TableCell>
                 <TableCell className="text-right">
-                  <UserRowActions user={row} isSelf={isSelf} />
+                  <UserRowActions
+                    user={row}
+                    isSelf={isSelf}
+                    isCurrentUserOwner={isOwnerSession}
+                  />
                 </TableCell>
               </TableRow>
             );
