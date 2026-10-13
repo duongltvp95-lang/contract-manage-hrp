@@ -2,6 +2,7 @@ import "server-only";
 
 import { type ExtractedContract } from "@schemas/contract";
 import { err, ok, type ServiceResult } from "@/lib/services/types";
+import { normalizeDurationText } from "@/lib/ai/matching";
 
 function getGeminiModels(): string[] {
   const envModel = process.env.GEMINI_MODEL?.trim();
@@ -31,7 +32,11 @@ Hãy đọc kỹ tài liệu hợp đồng đính kèm và trích xuất các th
 - contractNumber: Số hợp đồng (chuỗi ký tự, ví dụ: "12/2026/HĐKT", để trống "" nếu không có)
 - signedDate: Ngày ký hợp đồng theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2026-03-15", để trống "" nếu không tìm thấy)
 - expiryDate: Ngày hết hạn của hợp đồng theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2027-03-15", để trống "" nếu không có hoặc không xác định)
-- durationText: Thời hạn của hợp đồng ghi dạng chữ (ví dụ: "12 tháng", "2 năm", "Không xác định thời hạn", để trống "" nếu không có)
+- durationText: Thời hạn hiệu lực của hợp đồng ghi dạng khoảng thời gian như số tháng hoặc số năm (ví dụ: "6 tháng", "1 năm", "2 năm", "3 năm", "Không xác định thời hạn", để trống "" nếu không có).
+  QUY TẮC BẮT BUỘC VỀ THỜI HẠN:
+  + TUYỆT ĐỐI KHÔNG ghi dạng khoảng ngày "Từ ngày ... đến ngày ..." hay ngày tháng cụ thể vào trường này.
+  + Nếu hợp đồng chỉ ghi khoảng ngày bắt đầu và kết thúc (ví dụ: từ ngày 20/12/2025 đến ngày 20/12/2026), bạn PHẢI tự tính toán và quy đổi ra số tháng hoặc số năm tương ứng (ví dụ: tròn 12 tháng -> "1 năm", 24 tháng -> "2 năm", 6 tháng -> "6 tháng").
+  + Chuẩn hóa cách ghi: 12 tháng -> "1 năm", 24 tháng -> "2 năm", 36 tháng -> "3 năm", "01 năm" -> "1 năm", "02 năm" -> "2 năm".
 - companyName: Tên công ty nội bộ của chúng tôi (dù hợp đồng ghi là Bên A hay Bên B).
   QUY TẮC QUAN TRỌNG: Chúng tôi có 2 công ty nội bộ trên hệ thống:
   1) "CÔNG TY TNHH HRP VIỆT NAM" (quy ước viết tắt là HRP)
@@ -89,7 +94,18 @@ export function normalizeDateToIso(dateStr?: string): string {
       ? trimmed
       : "";
   }
-  const dmyMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  const viMatch = trimmed.match(/ngày\s*(\d{1,2})\s*tháng\s*(\d{1,2})\s*năm\s*(\d{4})/i);
+  if (viMatch) {
+    const day = viMatch[1].padStart(2, "0");
+    const month = viMatch[2].padStart(2, "0");
+    const year = viMatch[3];
+    const candidate = `${year}-${month}-${day}`;
+    const d = new Date(`${candidate}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === candidate
+      ? candidate
+      : "";
+  }
+  const dmyMatch = trimmed.match(/^(\d{1,2})[/\.-](\d{1,2})[/\.-](\d{4})$/);
   if (dmyMatch) {
     const day = dmyMatch[1].padStart(2, "0");
     const month = dmyMatch[2].padStart(2, "0");
@@ -100,7 +116,7 @@ export function normalizeDateToIso(dateStr?: string): string {
       ? candidate
       : "";
   }
-  const ymdMatch = trimmed.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+  const ymdMatch = trimmed.match(/^(\d{4})[/\.-](\d{1,2})[/\.-](\d{1,2})$/);
   if (ymdMatch) {
     const year = ymdMatch[1];
     const month = ymdMatch[2].padStart(2, "0");
@@ -208,11 +224,19 @@ export async function extractContractFromBuffer({
           const cleanedText = cleanJsonText(rawText);
           const parsedJson = (JSON.parse(cleanedText) ?? {}) as Record<string, unknown>;
 
+          const signedIso = normalizeDateToIso(String(parsedJson.signedDate ?? ""));
+          const expiryIso = normalizeDateToIso(String(parsedJson.expiryDate ?? ""));
+          const normalizedDuration = normalizeDurationText({
+            durationText: String(parsedJson.durationText ?? "").trim(),
+            signedDate: signedIso,
+            expiryDate: expiryIso,
+          });
+
           const extracted: ExtractedContract = {
             contractNumber: String(parsedJson.contractNumber ?? "").trim(),
-            signedDate: normalizeDateToIso(String(parsedJson.signedDate ?? "")),
-            expiryDate: normalizeDateToIso(String(parsedJson.expiryDate ?? "")),
-            durationText: String(parsedJson.durationText ?? "").trim(),
+            signedDate: signedIso,
+            expiryDate: expiryIso,
+            durationText: normalizedDuration,
             partnerName: String(parsedJson.partnerName ?? "").trim(),
             partnerTaxCode: String(parsedJson.partnerTaxCode ?? "").trim(),
             partnerAddress: String(parsedJson.partnerAddress ?? "").trim(),

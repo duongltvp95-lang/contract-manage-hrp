@@ -28,6 +28,7 @@ import {
   findBestMatchingCompany,
   findBestMatchingPartner,
   isInternalCompany,
+  normalizeDurationText,
   reconcileContractParties,
 } from "@/lib/ai/matching";
 import { createPartner, listCompanies, searchPartners } from "@/lib/services/partners";
@@ -252,6 +253,13 @@ export async function extractContractAction(
   }
 
   const extracted = extractionResult.data;
+
+  // Chuẩn hóa thời hạn hợp đồng thành số tháng hoặc năm (ví dụ: "6 tháng", "1 năm", "2 năm")
+  extracted.durationText = normalizeDurationText({
+    durationText: extracted.durationText,
+    signedDate: extracted.signedDate,
+    expiryDate: extracted.expiryDate,
+  });
 
   // Phân định quy cách rõ ràng giữa Công ty nội bộ (HRP / HR VN) và Đối tác:
   // Nếu thấy 1 trong 2 công ty của chúng ta (bất kể hợp đồng ghi Bên A hay Bên B) -> điền vào companyName.

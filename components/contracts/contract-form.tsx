@@ -601,7 +601,7 @@ export function ContractForm({
             <FormLabel>Thời hạn</FormLabel>
             <FormControl>
               <Input
-                placeholder='VD: 12 tháng, hoặc "Không xác định thời hạn"'
+                placeholder='VD: 6 tháng, 1 năm, 2 năm hoặc "Không xác định thời hạn"'
                 disabled={busy}
                 {...field}
               />

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { ExtractedContractSchema } from "@schemas/contract";
 import {
+  calculateDurationBetweenDates,
   cleanEntityName,
+  extractDatesFromText,
   findBestMatchingCompany,
   findBestMatchingPartner,
   isInternalCompany,
+  normalizeDurationText,
   normalizeVietnameseText,
   reconcileContractParties,
   resolveInternalCompanyKey,
@@ -220,4 +223,128 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
       expect(normalizeDateToIso("")).toBe("");
     });
   });
+
+  describe("Duration Extraction & Normalization (normalizeDurationText)", () => {
+    it("converts raw date range strings to duration (e.g. 1 năm, 6 tháng, 2 năm)", () => {
+      // Direct scenario from user: "Từ ngày 20/12/2025 đến 20/12/2026"
+      expect(
+        normalizeDurationText({
+          durationText: "Từ ngày 20/12/2025 đến 20/12/2026",
+          signedDate: "2025-12-20",
+          expiryDate: "2026-12-20",
+        }),
+      ).toBe("1 năm");
+
+      // Without signedDate / expiryDate passed: parses dates directly from durationText
+      expect(
+        normalizeDurationText({
+          durationText: "Từ ngày 20/12/2025 đến 20/12/2026",
+        }),
+      ).toBe("1 năm");
+
+      // 6 months date range
+      expect(
+        normalizeDurationText({
+          durationText: "từ 01/01/2025 đến 30/06/2025",
+        }),
+      ).toBe("6 tháng");
+
+      // 2 years date range
+      expect(
+        normalizeDurationText({
+          durationText: "Từ ngày 20/12/2025 đến ngày 20/12/2027",
+        }),
+      ).toBe("2 năm");
+    });
+
+    it("normalizes standard duration expressions into 1 năm, 2 năm, 6 tháng, etc.", () => {
+      // 12 months -> 1 năm
+      expect(normalizeDurationText({ durationText: "12 tháng" })).toBe("1 năm");
+      expect(normalizeDurationText({ durationText: "24 tháng" })).toBe("2 năm");
+      expect(normalizeDurationText({ durationText: "36 tháng" })).toBe("3 năm");
+
+      // 1 năm / 01 năm / 02 năm
+      expect(normalizeDurationText({ durationText: "01 năm" })).toBe("1 năm");
+      expect(normalizeDurationText({ durationText: "1 năm" })).toBe("1 năm");
+      expect(normalizeDurationText({ durationText: "02 năm" })).toBe("2 năm");
+      expect(normalizeDurationText({ durationText: "2 năm" })).toBe("2 năm");
+
+      // 6 tháng / 06 tháng / 3 tháng
+      expect(normalizeDurationText({ durationText: "06 tháng" })).toBe("6 tháng");
+      expect(normalizeDurationText({ durationText: "6 tháng" })).toBe("6 tháng");
+      expect(normalizeDurationText({ durationText: "3 tháng" })).toBe("3 tháng");
+      expect(normalizeDurationText({ durationText: "18 tháng" })).toBe("18 tháng");
+
+      // Phrases with text around duration
+      expect(
+        normalizeDurationText({
+          durationText: "Hợp đồng có thời hạn 01 (một) năm kể từ ngày ký",
+        }),
+      ).toBe("1 năm");
+      expect(
+        normalizeDurationText({
+          durationText: "Thời hạn thực hiện hợp đồng là 06 (sáu) tháng",
+        }),
+      ).toBe("6 tháng");
+    });
+
+    it("handles open-ended / indefinite contract terms", () => {
+      expect(normalizeDurationText({ durationText: "Không xác định thời hạn" })).toBe(
+        "Không xác định thời hạn",
+      );
+      expect(normalizeDurationText({ durationText: "Vô thời hạn" })).toBe(
+        "Không xác định thời hạn",
+      );
+      expect(normalizeDurationText({ durationText: "không thời hạn" })).toBe(
+        "Không xác định thời hạn",
+      );
+    });
+
+    it("calculates duration from signedDate and expiryDate when durationText is empty", () => {
+      expect(
+        normalizeDurationText({
+          durationText: "",
+          signedDate: "2025-12-20",
+          expiryDate: "2026-12-20",
+        }),
+      ).toBe("1 năm");
+
+      expect(
+        normalizeDurationText({
+          durationText: "",
+          signedDate: "2025-12-20",
+          expiryDate: "2027-12-20",
+        }),
+      ).toBe("2 năm");
+
+      expect(
+        normalizeDurationText({
+          durationText: "",
+          signedDate: "2025-12-20",
+          expiryDate: "2026-06-20",
+        }),
+      ).toBe("6 tháng");
+    });
+
+    it("extractDatesFromText correctly parses multiple date formats", () => {
+      expect(extractDatesFromText("Từ ngày 20/12/2025 đến ngày 20/12/2026")).toEqual([
+        "2025-12-20",
+        "2026-12-20",
+      ]);
+      expect(extractDatesFromText("2025-01-01 đến 2025-06-30")).toEqual([
+        "2025-01-01",
+        "2025-06-30",
+      ]);
+    });
+
+    it("calculateDurationBetweenDates calculates exact contract intervals", () => {
+      expect(calculateDurationBetweenDates("2025-12-20", "2026-12-20")).toBe("1 năm");
+      expect(calculateDurationBetweenDates("2025-12-20", "2026-12-19")).toBe("1 năm");
+      expect(calculateDurationBetweenDates("2025-01-01", "2025-12-31")).toBe("1 năm");
+      expect(calculateDurationBetweenDates("2025-12-20", "2026-06-20")).toBe("6 tháng");
+      expect(calculateDurationBetweenDates("2025-12-20", "2027-12-20")).toBe("2 năm");
+      expect(calculateDurationBetweenDates("2025-12-20", "2028-12-20")).toBe("3 năm");
+    });
+  });
 });
+
