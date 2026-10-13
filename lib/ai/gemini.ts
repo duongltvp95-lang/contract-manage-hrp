@@ -34,10 +34,10 @@ Hãy đọc kỹ tài liệu hợp đồng đính kèm và trích xuất các th
 - durationText: Thời hạn của hợp đồng ghi dạng chữ (ví dụ: "12 tháng", "2 năm", "Không xác định thời hạn", để trống "" nếu không có)
 - companyName: Tên công ty nội bộ của chúng tôi (dù hợp đồng ghi là Bên A hay Bên B).
   QUY TẮC QUAN TRỌNG: Chúng tôi có 2 công ty nội bộ trên hệ thống:
-  1) "CÔNG TY TNHH HR PARTNER VIỆT NAM" (viết tắt là HR VN)
-  2) "CÔNG TY TNHH HR PARTNER" (viết tắt là HRP)
+  1) "CÔNG TY TNHH HRP VIỆT NAM" (quy ước viết tắt là HRP)
+  2) "CÔNG TY TNHH HR PARTNER VIỆT NAM" (quy ước viết tắt là HR VN)
   Bất kể hợp đồng ghi công ty của chúng tôi là Bên A hay Bên B, hãy điền tên công ty của chúng tôi vào "companyName". TUYỆT ĐỐI KHÔNG ĐIỀN VÀO "partnerName"!
-- partnerName: Tên công ty/pháp nhân ĐỐI TÁC BÊN NGOÀI (bên còn lại trong hợp đồng giao dịch với HR Partner / HR Partner Việt Nam, dù là Bên A hay Bên B). TUYỆT ĐỐI KHÔNG điền HR Partner hay HR Partner Việt Nam vào đây.
+- partnerName: Tên công ty/pháp nhân ĐỐI TÁC BÊN NGOÀI (bên còn lại trong hợp đồng giao dịch với công ty của chúng tôi, dù là Bên A hay Bên B). TUYỆT ĐỐI KHÔNG điền HRP, HRP Việt Nam, HR VN hay HR Partner Việt Nam vào đây.
 - partnerTaxCode: Mã số thuế của ĐỐI TÁC BÊN NGOÀI nếu có trong hợp đồng (chuỗi số, ví dụ: "0101234567", để trống "" nếu không có)
 - partnerAddress: Địa chỉ trụ sở của ĐỐI TÁC BÊN NGOÀI nếu có trong hợp đồng (để trống "" nếu không có)
 - summary: Tóm tắt ngắn gọn nội dung và phạm vi hợp đồng trong 1-2 câu tiếng Việt.

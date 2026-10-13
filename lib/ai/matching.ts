@@ -100,52 +100,46 @@ export function findBestMatchingPartner(
 
 /**
  * Checks if a company name belongs to one of our internal companies:
+ * - CÔNG TY TNHH HRP VIỆT NAM (HRP)
  * - CÔNG TY TNHH HR PARTNER VIỆT NAM (HR VN)
- * - CÔNG TY TNHH HR PARTNER (HRP)
  */
 export function isInternalCompany(name: string | undefined | null): boolean {
   if (!name || !name.trim()) return false;
-  const normalized = normalizeVietnameseText(name);
-
-  // Exact abbreviations
-  if (normalized === "hrp" || normalized === "hr vn") return true;
-
-  // Contains HR Partner / HRPartner
-  if (normalized.includes("hr partner") || normalized.includes("hrpartner")) return true;
-
-  // Contains HR VN / HR Viet Nam
-  if (normalized.includes("hr vn") || normalized.includes("hr viet nam")) return true;
-
-  return false;
+  return resolveInternalCompanyKey(name) !== null;
 }
 
 /**
  * Resolves which of our 2 internal companies ("HR VN" or "HRP") a given name refers to.
+ * Quy ước mới:
+ * - CÔNG TY TNHH HRP VIỆT NAM -> "HRP"
+ * - CÔNG TY TNHH HR PARTNER VIỆT NAM -> "HR VN"
  */
 export function resolveInternalCompanyKey(name: string | undefined | null): "HR VN" | "HRP" | null {
   if (!name || !name.trim()) return null;
   const normalized = normalizeVietnameseText(name);
 
-  if (
-    normalized.includes("viet nam") ||
-    normalized.includes("hr vn") ||
-    normalized === "hr vn"
-  ) {
-    if (
-      normalized.includes("hr partner") ||
-      normalized.includes("hrpartner") ||
-      normalized.includes("hr vn") ||
-      normalized.includes("hr viet nam")
-    ) {
-      return "HR VN";
-    }
+  // 1. Matches HRP:
+  // "CÔNG TY TNHH HRP VIỆT NAM", "HRP VIỆT NAM", "HRP", "CÔNG TY TNHH HRP", "CONG TY TNHH HRP VIET NAM"
+  if (/\bhrp\b/.test(normalized)) {
+    return "HRP";
   }
 
+  // 2. Matches HR VN:
+  // "CÔNG TY TNHH HR PARTNER VIỆT NAM", "HR PARTNER VIỆT NAM", "HR VN", "HR VIỆT NAM", "CONG TY TNHH HR PARTNER VIET NAM"
   if (
-    normalized === "hrp" ||
-    normalized.includes("hr partner") ||
-    normalized.includes("hrpartner")
+    normalized === "hr vn" ||
+    /\bhr vn\b/.test(normalized) ||
+    normalized.includes("hr viet nam") ||
+    (
+      (normalized.includes("hr partner") || normalized.includes("hrpartner")) &&
+      (normalized.includes("viet nam") || /\bvn\b/.test(normalized))
+    )
   ) {
+    return "HR VN";
+  }
+
+  // 3. Fallback compatibility for "HR Partner" without "Việt Nam":
+  if (normalized.includes("hr partner") || normalized.includes("hrpartner")) {
     return "HRP";
   }
 
