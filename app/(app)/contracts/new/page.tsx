@@ -22,7 +22,7 @@ async function NewContractContent() {
   const partners = await searchPartners("");
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-8">
+    <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6 md:p-8">
       <div>
         <h1 className="text-2xl font-bold">Thêm hợp đồng</h1>
         <p className="text-muted-foreground">
@@ -45,7 +45,7 @@ async function NewContractContent() {
 export default function NewContractPage() {
   return (
     <Suspense
-      fallback={<div className="p-8 text-muted-foreground">Đang tải...</div>}
+      fallback={<div className="p-4 sm:p-6 md:p-8 text-muted-foreground">Đang tải...</div>}
     >
       <NewContractContent />
     </Suspense>

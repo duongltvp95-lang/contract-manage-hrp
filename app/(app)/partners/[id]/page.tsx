@@ -185,7 +185,7 @@ export default async function PartnerDetailPage({
   const [loaded, rawSearchParams] = await Promise.all([loadPartner(params), searchParams]);
 
   return (
-    <div className="space-y-6 p-8">
+    <div className="space-y-6 p-4 sm:p-6 md:p-8">
       <header className="flex flex-wrap items-start gap-3">
         <Button variant="ghost" size="sm" asChild>
           <Link href="/partners">

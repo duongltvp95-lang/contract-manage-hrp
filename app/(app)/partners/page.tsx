@@ -31,7 +31,7 @@ async function PartnersContent({
   });
 
   return (
-    <div className="space-y-6 p-8">
+    <div className="space-y-6 p-4 sm:p-6 md:p-8">
       <PageHeader />
 
       {result.ok ? (
@@ -71,7 +71,7 @@ function PageHeader() {
 /** Doubles as the Suspense fallback, so the page never jumps (plan section 81). */
 function PartnersFallback() {
   return (
-    <div className="space-y-6 p-8">
+    <div className="space-y-6 p-4 sm:p-6 md:p-8">
       <PageHeader />
       <PartnersTableSkeleton />
     </div>

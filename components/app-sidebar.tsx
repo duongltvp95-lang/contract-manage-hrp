@@ -24,6 +24,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { createClient } from "@/lib/supabase/client";
 
@@ -47,6 +48,7 @@ const items: { title: string; url: string; icon: typeof FileText; admin?: boolea
 export function AppSidebar() {
   const router = useRouter();
   const pathname = usePathname();
+  const { isMobile, setOpenMobile } = useSidebar();
   const [accountLabel, setAccountLabel] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [accentColor, setAccentColor] = useState<string | null>(null);
@@ -130,6 +132,9 @@ export function AppSidebar() {
                     <SidebarMenuButton
                       asChild
                       isActive={pathname.startsWith(item.url)}
+                      onClick={() => {
+                        if (isMobile) setOpenMobile(false);
+                      }}
                       className="rounded-lg transition-colors hover:bg-gray-100 data-[active=true]:bg-primary/10 data-[active=true]:text-primary data-[active=true]:font-semibold data-[active=true]:hover:bg-primary/10"
                     >
                       <Link href={item.url}>

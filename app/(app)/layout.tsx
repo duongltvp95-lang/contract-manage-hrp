@@ -17,10 +17,24 @@ export default function AppLayout({
   return (
     <SidebarProvider>
       <AppSidebar />
-      <main className="flex-1 bg-background">
-        <SidebarTrigger />
-        {children}
-      </main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Thanh điều hướng cố định trên thiết bị di động */}
+        <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b bg-background/95 px-4 backdrop-blur md:hidden">
+          <div className="flex items-center gap-2.5">
+            <SidebarTrigger className="h-9 w-9" />
+            <span className="text-sm font-semibold text-foreground">Quản lý hợp đồng</span>
+          </div>
+        </header>
+
+        {/* Nút bật/tắt sidebar trên desktop */}
+        <div className="hidden md:flex items-center px-4 py-2">
+          <SidebarTrigger />
+        </div>
+
+        <main className="flex-1 bg-background min-w-0">
+          {children}
+        </main>
+      </div>
     </SidebarProvider>
   );
 }

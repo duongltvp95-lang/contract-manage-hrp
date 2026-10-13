@@ -48,7 +48,7 @@ async function ContractsContent({
   });
 
   return (
-    <div className="space-y-6 p-8">
+    <div className="space-y-6 p-4 sm:p-6 md:p-8">
       <PageHeader />
 
       <ContractsTabs scope={scope} canDelete={canDelete} query={query} />
@@ -161,7 +161,7 @@ function PageHeader() {
 /** Doubles as the Suspense fallback, so the page never jumps (plan section 81). */
 function ContractsFallback() {
   return (
-    <div className="space-y-6 p-8">
+    <div className="space-y-6 p-4 sm:p-6 md:p-8">
       <PageHeader />
       <div className="h-9 w-full max-w-sm rounded-md bg-muted" />
       <ContractsTableSkeleton />
