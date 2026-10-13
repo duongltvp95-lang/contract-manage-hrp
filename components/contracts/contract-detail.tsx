@@ -14,7 +14,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { formatDateOnly, formatDateTime } from "@/lib/format";
+import { formatDateOnly, formatDateTime, formatDuration } from "@/lib/format";
 import { partnerDisplayName } from "@/lib/partner-display";
 import type { PartnerRow } from "@/lib/services/partners";
 import type { ViewUrl } from "@/lib/view-url";
@@ -79,7 +79,7 @@ export function ContractDetail({
   const fields: [string, string][] = [
     ["Số hợp đồng", contract.contract_number ?? "—"],
     ["Ngày ký", formatDateOnly(contract.signed_date)],
-    ["Thời hạn", contract.duration_text ?? "—"],
+    ["Thời hạn", formatDuration(contract.duration_text, contract.signed_date, contract.expiry_date)],
     ["Ngày hết hạn", formatDateOnly(contract.expiry_date)],
     // The linked partner's name wins; the free-text column is what an older
     // contract still shows (feature round 2).

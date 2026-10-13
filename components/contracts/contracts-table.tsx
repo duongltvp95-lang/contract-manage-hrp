@@ -28,7 +28,7 @@ import {
   type ContractsQuery,
   type SortField,
 } from "@/lib/contracts-query";
-import { formatDateOnly, formatDateTime } from "@/lib/format";
+import { formatDateOnly, formatDateTime, formatDuration } from "@/lib/format";
 import { partnerDisplayName } from "@/lib/partner-display";
 import type { ContractListItem } from "@/lib/services/contracts";
 
@@ -191,7 +191,7 @@ export function ContractsTable({
                 <TableCell>{formatDateOnly(row.signed_date)}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1.5">
-                    <span>{row.duration_text ?? "—"}</span>
+                    <span>{formatDuration(row.duration_text, row.signed_date, row.expiry_date)}</span>
                     {isExpired && (
                       <Badge
                         variant="outline"

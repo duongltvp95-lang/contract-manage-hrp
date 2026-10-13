@@ -5,6 +5,7 @@ import {
   formatBytes,
   formatDateOnly,
   formatDateTime,
+  formatDuration,
   formatExpiryHint,
 } from "@/lib/format";
 
@@ -89,5 +90,46 @@ describe("formatExpiryHint", () => {
 
   it("shows an em dash when there is no expiry date", () => {
     expect(formatExpiryHint(null, today)).toBe("—");
+  });
+});
+
+describe("formatDuration", () => {
+  it("normalizes date range strings to simple duration terms", () => {
+    expect(
+      formatDuration("Từ ngày 02 tháng 01 năm 2026 đến ngày 30 tháng 12 năm 2026"),
+    ).toBe("1 năm");
+    expect(
+      formatDuration("Từ 15/01/2026 đến hết ngày 14/01/2027"),
+    ).toBe("1 năm");
+    expect(
+      formatDuration("Từ ngày 20/12/2025 đến 20/12/2026"),
+    ).toBe("1 năm");
+  });
+
+  it("handles explicit year / month numbers", () => {
+    expect(formatDuration("01 năm")).toBe("1 năm");
+    expect(formatDuration("1 năm")).toBe("1 năm");
+    expect(formatDuration("2 năm")).toBe("2 năm");
+    expect(formatDuration("12 tháng")).toBe("1 năm");
+    expect(formatDuration("24 tháng")).toBe("2 năm");
+    expect(formatDuration("6 tháng")).toBe("6 tháng");
+    expect(formatDuration("06 tháng")).toBe("6 tháng");
+    expect(formatDuration("3 tháng")).toBe("3 tháng");
+  });
+
+  it("handles indefinite durations", () => {
+    expect(formatDuration("Không xác định thời hạn")).toBe("Không xác định thời hạn");
+    expect(formatDuration("Vô thời hạn")).toBe("Không xác định thời hạn");
+  });
+
+  it("calculates from signedDate and expiryDate when durationText is missing", () => {
+    expect(formatDuration(null, "2026-01-15", "2027-01-14")).toBe("1 năm");
+    expect(formatDuration(null, "2026-01-01", "2026-07-01")).toBe("6 tháng");
+  });
+
+  it("returns em dash for empty or unparsable values", () => {
+    expect(formatDuration(null)).toBe("—");
+    expect(formatDuration("")).toBe("—");
+    expect(formatDuration(undefined)).toBe("—");
   });
 });
