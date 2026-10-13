@@ -5,8 +5,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   CreateUserSchema,
   DeleteUserSchema,
+  ResetUserPasswordSchema,
   UpdateUserSchema,
   type DeleteUserInput,
+  type ResetUserPasswordInput,
   type UpdateUserInput,
   type UserRole,
 } from "@schemas/user";
@@ -920,3 +922,107 @@ export async function deleteUser(
 
   return ok({ deletedUserId: userId });
 }
+
+export type ResetUserPasswordResult = {
+  userId: string;
+  email: string | null;
+  message: string;
+};
+
+/**
+ * Đặt lại mật khẩu cho người dùng / quản trị viên khác bởi Admin.
+ *
+ * Quy tắc bảo vệ:
+ * 1. Chỉ người dùng có vai trò admin mới được phép đặt lại mật khẩu.
+ * 2. Phải thuộc cùng tổ chức (organization_id).
+ * 3. Bảo vệ Owner: Tài khoản Quản trị viên tối cao (duongltvp95@gmail.com)
+ *    không ai được phép reset mật khẩu ngoại trừ chính duongltvp95@gmail.com.
+ * 4. Quản trị viên duongltvp95@gmail.com có toàn quyền đặt lại mật khẩu cho tất cả
+ *    người dùng và quản trị viên khác trong hệ thống.
+ */
+export async function resetUserPassword(
+  input: ResetUserPasswordInput,
+  loggedInUserId: string,
+): Promise<ServiceResult<ResetUserPasswordResult>> {
+  const parsed = ResetUserPasswordSchema.safeParse(input);
+  if (!parsed.success) {
+    return err(
+      "validation",
+      parsed.error.issues[0]?.message ?? "Dữ liệu không hợp lệ",
+      parsed.error.issues.map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message,
+      })),
+    );
+  }
+
+  const admin = await requireAdmin();
+  if (!admin.ok) return admin;
+
+  const { userId, password } = parsed.data;
+  const service = createAdminClient();
+
+  // 1. Kiểm tra tài khoản đích có tồn tại trong cùng tổ chức không
+  const { data: existing, error: existingError } = await service
+    .from("profiles")
+    .select("id, role, is_active, organization_id")
+    .eq("id", userId)
+    .eq("organization_id", admin.data.organizationId)
+    .maybeSingle();
+
+  if (existingError) {
+    return dbError("resetUserPassword", existingError);
+  }
+  if (!existing) {
+    return err("not_found", "Không tìm thấy người dùng trong tổ chức");
+  }
+
+  // 2. Bảo vệ Owner: Không admin nào được phép reset mật khẩu của Owner duongltvp95@gmail.com
+  let targetEmail: string | null = null;
+  try {
+    const { data: targetAuth } = await service.auth.admin.getUserById(userId);
+    targetEmail = targetAuth?.user?.email ?? null;
+  } catch {
+    // ignore
+  }
+
+  if (isOwnerUserId(userId) || isOwnerEmail(targetEmail)) {
+    if (!isOwnerUserId(loggedInUserId)) {
+      return err(
+        "forbidden",
+        "Chỉ Quản trị viên tối cao mới có quyền đặt lại mật khẩu cho tài khoản này",
+      );
+    }
+  }
+
+  // 3. Cập nhật mật khẩu trong auth.users bằng Admin client
+  const { error: updateAuthError } = await service.auth.admin.updateUserById(userId, {
+    password,
+  });
+
+  if (updateAuthError) {
+    return dbError("resetUserPassword", updateAuthError);
+  }
+
+  // 4. Ghi audit log
+  try {
+    await recordAudit({
+      organizationId: admin.data.organizationId,
+      actorId: loggedInUserId,
+      actorRole: "admin",
+      action: "update_profile",
+      targetKind: "user",
+      targetId: userId,
+      metadata: { action: "reset_password", email: targetEmail },
+    });
+  } catch {
+    // swallowed by design
+  }
+
+  return ok({
+    userId,
+    email: targetEmail,
+    message: "Đặt lại mật khẩu thành công",
+  });
+}
+

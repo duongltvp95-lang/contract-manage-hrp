@@ -91,3 +91,17 @@ export const DeleteUserSchema = z.object({
 });
 
 export type DeleteUserInput = z.infer<typeof DeleteUserSchema>;
+
+/**
+ * Đặt lại mật khẩu người dùng / quản trị viên bởi Admin.
+ */
+export const ResetUserPasswordSchema = z.object({
+  userId: z.uuid({ message: "ID người dùng không hợp lệ" }),
+  password: z
+    .string()
+    .min(6, "Mật khẩu phải có ít nhất 6 ký tự")
+    .max(100, "Mật khẩu tối đa 100 ký tự"),
+});
+
+export type ResetUserPasswordInput = z.infer<typeof ResetUserPasswordSchema>;
+

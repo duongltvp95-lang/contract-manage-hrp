@@ -3,11 +3,13 @@
 import {
   createUser,
   deleteUser,
+  resetUserPassword,
   updateUser,
   type CreatedUser,
   type ManagedUser,
+  type ResetUserPasswordResult,
 } from "@/lib/services/users";
-import type { DeleteUserInput } from "@schemas/user";
+import type { DeleteUserInput, ResetUserPasswordInput } from "@schemas/user";
 import { updateProfile, type ProfileSummary } from "@/lib/services/profiles";
 import { authorized, fromService, type ActionResult } from "@/lib/server-action";
 
@@ -103,3 +105,21 @@ export async function deleteUserAction(
 
   return fromService(result);
 }
+
+/**
+ * Đặt lại mật khẩu người dùng / quản trị viên.
+ */
+export async function resetUserPasswordAction(
+  input: unknown,
+): Promise<ActionResult<ResetUserPasswordResult>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  const result = await resetUserPassword(
+    input as ResetUserPasswordInput,
+    access.user.id,
+  );
+
+  return fromService(result);
+}
+

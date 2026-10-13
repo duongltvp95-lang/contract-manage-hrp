@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CreateUserSchema,
   DeleteUserSchema,
+  ResetUserPasswordSchema,
   UpdateUserSchema,
   USER_ROLE_LABELS,
   USER_ROLES,
@@ -192,4 +193,36 @@ describe("DeleteUserSchema", () => {
     ).toBe(false);
   });
 });
+
+describe("ResetUserPasswordSchema", () => {
+  const userId = "495eb514-82d9-4969-a610-760947a0a79d";
+
+  it("accepts a valid password and uuid", () => {
+    const parsed = ResetUserPasswordSchema.safeParse({
+      userId,
+      password: "StrongPassword123!",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects password shorter than 6 characters", () => {
+    const parsed = ResetUserPasswordSchema.safeParse({
+      userId,
+      password: "12345",
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues[0]?.message).toContain("ít nhất 6 ký tự");
+    }
+  });
+
+  it("rejects non-uuid userId", () => {
+    const parsed = ResetUserPasswordSchema.safeParse({
+      userId: "invalid-id",
+      password: "StrongPassword123!",
+    });
+    expect(parsed.success).toBe(false);
+  });
+});
+
 

@@ -1,10 +1,11 @@
 "use client";
 
-import { Trash2, UserCog } from "lucide-react";
+import { KeyRound, Trash2, UserCog } from "lucide-react";
 
 import { isOwnerEmail, isOwnerUserId } from "@/lib/owner";
 import { DeleteUserDialog } from "@/components/settings/delete-user-dialog";
 import { EditUserDialog } from "@/components/settings/edit-user-dialog";
+import { ResetPasswordDialog } from "@/components/settings/reset-password-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -39,6 +40,43 @@ export function UserRowActions({
             </Button>
           }
         />
+        {isOwner && !isSelf ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled
+                data-testid="user-reset-password-button-owner"
+                aria-label="Không thể đặt lại mật khẩu của Quản trị viên tối cao"
+              >
+                <KeyRound className="h-4 w-4 text-muted-foreground/50" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Không thể đặt lại mật khẩu của Quản trị viên tối cao</TooltipContent>
+          </Tooltip>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <ResetPasswordDialog
+                  user={user}
+                  trigger={
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      data-testid="user-reset-password-button"
+                      aria-label="Đặt lại mật khẩu"
+                    >
+                      <KeyRound className="h-4 w-4 text-primary" />
+                    </Button>
+                  }
+                />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Đặt lại mật khẩu</TooltipContent>
+          </Tooltip>
+        )}
         {isOwner ? (
           <Tooltip>
             <TooltipTrigger asChild>
