@@ -4,73 +4,112 @@
 
 @layer base {
   :root {
-    --background: 210 20% 98%;
-    --foreground: 222 47% 11%;
+    /* Nền và Bề mặt - Slate-50 (#F8FAFC) & Pure White (#FFFFFF) */
+    --background: 210 40% 98%;
+    --foreground: 222 47% 17%;
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 222 47% 17%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-    --primary: 158 64% 38%;
+    --popover-foreground: 222 47% 17%;
+
+    /* Màu chủ đạo - Indigo-900 (#312E81) & Indigo-700 (#4338CA) */
+    --primary: 244 47% 34%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 20% 96%;
-    --secondary-foreground: 222 47% 15%;
-    --muted: 210 20% 96%;
+
+    /* Nền phụ & Hover Menu - Indigo-50 (#EEF2FF) */
+    --secondary: 226 100% 97%;
+    --secondary-foreground: 244 47% 34%;
+    --muted: 210 40% 96%;
     --muted-foreground: 215 16% 47%;
-    --accent: 158 64% 96%;
-    --accent-foreground: 158 64% 25%;
-    --destructive: 0 84.2% 60.2%;
+    --accent: 226 100% 97%;
+    --accent-foreground: 244 47% 34%;
+
+    /* Màu cảnh báo & hủy - Brand Red (#DC2626) */
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 98%;
+
+    /* Đường viền Slate-200 (#E2E8F0) & Ring Indigo */
     --border: 214 32% 91%;
     --input: 214 32% 91%;
-    --ring: 158 64% 45%;
-    --chart-1: 158 64% 38%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
+    --ring: 244 47% 34%;
+
+    /* Charts & Visuals */
+    --chart-1: 244 47% 34%;
+    --chart-2: 217 91% 60%;
+    --chart-3: 25 95% 53%;
+    --chart-4: 142 71% 45%;
+    --chart-5: 0 72% 51%;
     --radius: 0.75rem;
+
+    /* Sidebar mặc định - Pure White & Indigo Accent */
     --sidebar-background: 0 0% 100%;
-    --sidebar-foreground: 222 47% 20%;
-    --sidebar-primary: 158 64% 38%;
+    --sidebar-foreground: 222 47% 17%;
+    --sidebar-primary: 244 47% 34%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 158 64% 96%;
-    --sidebar-accent-foreground: 158 64% 25%;
+    --sidebar-accent: 226 100% 97%;
+    --sidebar-accent-foreground: 244 47% 34%;
     --sidebar-border: 214 32% 91%;
-    --sidebar-ring: 158 64% 45%;
+    --sidebar-ring: 244 47% 34%;
+
+    /* Màu cảnh báo chuyên biệt (Alert Warning: #FEFCE8, #FEF08A, #9A3412) */
+    --warning: 54 100% 96%;
+    --warning-border: 53 98% 77%;
+    --warning-foreground: 15 85% 34%;
+
+    /* Màu thương hiệu & Tags (#2563EB, #DC2626, #F97316) */
+    --brand-blue: 217 91% 60%;
+    --brand-red: 0 72% 51%;
+    --brand-orange: 25 95% 53%;
   }
   .dark {
-    --background: 224 35% 8%;
-    --foreground: 210 20% 98%;
-    --card: 224 35% 10%;
-    --card-foreground: 210 20% 98%;
-    --popover: 224 35% 10%;
-    --popover-foreground: 210 20% 98%;
-    --primary: 158 64% 45%;
+    /* Nền Slate-900 (#0F172A) & Bề mặt Slate-800 (#1E293B) */
+    --background: 222 47% 11%;
+    --foreground: 210 40% 98%;
+    --card: 222 47% 14%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222 47% 14%;
+    --popover-foreground: 210 40% 98%;
+
+    /* Màu chủ đạo Indigo-500 sáng nổi bật trên nền tối */
+    --primary: 239 84% 67%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 224 25% 16%;
-    --secondary-foreground: 210 20% 98%;
-    --muted: 224 25% 16%;
+
+    --secondary: 222 47% 18%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 222 47% 18%;
     --muted-foreground: 215 20% 65%;
-    --accent: 158 64% 15%;
-    --accent-foreground: 158 64% 75%;
+    --accent: 244 47% 25%;
+    --accent-foreground: 226 100% 97%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
-    --border: 224 25% 18%;
-    --input: 224 25% 18%;
-    --ring: 158 64% 50%;
-    --chart-1: 158 64% 45%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
-    --sidebar-background: 224 35% 7%;
-    --sidebar-foreground: 210 20% 90%;
-    --sidebar-primary: 158 64% 45%;
+    --border: 222 47% 20%;
+    --input: 222 47% 20%;
+    --ring: 239 84% 67%;
+    --chart-1: 239 84% 67%;
+    --chart-2: 217 91% 60%;
+    --chart-3: 25 95% 53%;
+    --chart-4: 142 71% 45%;
+    --chart-5: 0 72% 51%;
+
+    /* Sidebar Dark */
+    --sidebar-background: 222 47% 9%;
+    --sidebar-foreground: 210 40% 90%;
+    --sidebar-primary: 239 84% 67%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 158 64% 14%;
-    --sidebar-accent-foreground: 158 64% 75%;
-    --sidebar-border: 224 25% 16%;
-    --sidebar-ring: 158 64% 50%;
+    --sidebar-accent: 244 47% 20%;
+    --sidebar-accent-foreground: 226 100% 97%;
+    --sidebar-border: 222 47% 18%;
+    --sidebar-ring: 239 84% 67%;
+
+    /* Màu cảnh báo Dark */
+    --warning: 54 40% 15%;
+    --warning-border: 53 50% 25%;
+    --warning-foreground: 43 96% 64%;
+
+    /* Màu thương hiệu Dark */
+    --brand-blue: 217 91% 65%;
+    --brand-red: 0 72% 60%;
+    --brand-orange: 25 95% 60%;
   }
 
   /* Explicit blue preset override */
@@ -149,9 +188,24 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground antialiased selection:bg-emerald-500/20 selection:text-emerald-800 dark:selection:text-emerald-200;
+    @apply bg-background text-foreground antialiased selection:bg-indigo-500/20 selection:text-indigo-900 dark:selection:text-indigo-200;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
+}
+
+/* Helper utilities mapped to the design system */
+.bg-app {
+  background-color: hsl(var(--background));
+}
+
+.bg-surface {
+  background-color: hsl(var(--card));
+}
+
+.alert-warning {
+  background-color: hsl(var(--warning));
+  border: 1px solid hsl(var(--warning-border));
+  color: hsl(var(--warning-foreground));
 }
 
 /* Minimalist sleek scrollbar */
