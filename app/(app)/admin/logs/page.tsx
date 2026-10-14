@@ -5,6 +5,7 @@ import { LogsFilterSchema } from "@schemas/audit-log";
 
 import { LogsExportButton } from "@/components/admin/logs-export-button";
 import { LogsFilterForm } from "@/components/admin/logs-filter-form";
+import { LogsPagination } from "@/components/admin/logs-pagination";
 import { LogsTable } from "@/components/admin/logs-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -101,9 +102,11 @@ async function AdminLogsContent({
         </CardContent>
       </Card>
 
-      <p className="text-xs text-muted-foreground" data-testid="logs-pagination">
-        Trang {filter.page} / {totalPages}
-      </p>
+      <LogsPagination
+        filter={filter}
+        total={total}
+        totalPages={totalPages}
+      />
     </div>
   );
 }

@@ -10,7 +10,7 @@ export const RATE_LIMIT_WINDOW_SECONDS = 60;
 export const RATE_LIMIT_MAX_REQUESTS = 60;
 
 /** One bucket per endpoint, so hammering the viewer cannot lock out uploading. */
-export type RateLimitBucket = "files:upload-url" | "files:view-url";
+export type RateLimitBucket = "files:upload-url" | "files:view-url" | "ai:upload-url";
 
 export type RateLimitVerdict = {
   allowed: boolean;

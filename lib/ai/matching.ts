@@ -1,3 +1,5 @@
+import { HRP_COMPANY_ID, HR_VN_COMPANY_ID } from "@/lib/companies";
+
 /**
  * Normalizes Vietnamese string by removing diacritics, extra spaces, and common legal entity prefixes.
  */
@@ -194,10 +196,10 @@ export function findBestMatchingCompany(
     if (matched) return matched;
 
     if (resolvedKey === "HR VN") {
-      return { id: "00000000-0000-4000-8000-000000000002", name: "HR VN" };
+      return { id: HR_VN_COMPANY_ID, name: "HR VN" };
     }
     if (resolvedKey === "HRP") {
-      return { id: "00000000-0000-4000-8000-000000000001", name: "HRP" };
+      return { id: HRP_COMPANY_ID, name: "HRP" };
     }
   }
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { partnerCompanyRowsAction } from "@/app/(app)/partners/actions";
 import type { Company } from "@/lib/services/partners";
+import { isInternalCompanyId, getInternalCompanyName } from "@/lib/companies";
 
 /**
  * Custom hook to fetch and synchronize linked companies for the selected partner.
@@ -68,9 +69,7 @@ export function usePartnerCompanies({
           extraCompanyRef.current?.id || defaultCompanyIdRef.current;
 
         const currentId = currentCompanyIdRef.current;
-        const isInternalCompany =
-          currentId === "00000000-0000-4000-8000-000000000001" ||
-          currentId === "00000000-0000-4000-8000-000000000002";
+        const isInternalCompany = isInternalCompanyId(currentId);
 
         // Chỉ reset về "" nếu công ty đang chọn KHÔNG thuộc next, KHÔNG phải targetCompany, VÀ KHÔNG phải công ty nội bộ
         if (
@@ -120,15 +119,10 @@ export function usePartnerCompanies({
     }
 
     const currentId = currentCompanyId;
-    const isInternalCompany =
-      currentId === "00000000-0000-4000-8000-000000000001" ||
-      currentId === "00000000-0000-4000-8000-000000000002";
+    const isInternalCompany = isInternalCompanyId(currentId);
 
     if (currentId && isInternalCompany) {
-      const internalName =
-        currentId === "00000000-0000-4000-8000-000000000002"
-          ? "HR VN"
-          : "HRP";
+      const internalName = getInternalCompanyName(currentId) || "HR VN";
       if (!next.some((row) => row.id === currentId)) {
         next = [...next, { id: currentId, name: internalName }];
       }

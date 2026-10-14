@@ -1,6 +1,7 @@
 import "server-only";
 
 import { redirect } from "next/navigation";
+import { cache } from "react";
 
 import { createClient } from "@/lib/supabase/server";
 import { hasEnvVars } from "@/lib/utils";
@@ -53,7 +54,7 @@ type ProfileRow = {
  * Route handlers should use this so they can answer 401 / 403 instead of an
  * HTML redirect, which is what a page-level guard would produce.
  */
-export async function resolveAccess(): Promise<AccessResult> {
+export const resolveAccess = cache(async (): Promise<AccessResult> => {
   if (!hasEnvVars) {
     return { status: "unauthenticated" };
   }
@@ -96,7 +97,7 @@ export async function resolveAccess(): Promise<AccessResult> {
       sidebarColor: profile.sidebar_color ?? null,
     },
   };
-}
+});
 
 /** Convenience wrapper for code that only needs "is there a usable user?". */
 export async function getCurrentUser(): Promise<CurrentUser | null> {

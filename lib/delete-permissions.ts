@@ -1,5 +1,7 @@
 import "server-only";
 
+import { OWNER_EMAIL } from "@/lib/owner";
+
 /**
  * Delete permissions — round 19.
  *
@@ -11,7 +13,7 @@ import "server-only";
  * should be able to read.
  */
 
-const DEFAULT_DELETE_ADMINS = ["duongltvp95@gmail.com"];
+const DEFAULT_DELETE_ADMINS = [OWNER_EMAIL];
 
 function readDeleteAdminEmails(): string[] {
   const raw = process.env.DELETE_ADMIN_EMAILS;

@@ -6,8 +6,10 @@
  * is permitted to edit this account's role, deactivate it, or delete it.
  */
 
-export const OWNER_EMAIL = "duongltvp95@gmail.com";
-export const OWNER_USER_ID = "495eb514-82d9-4969-a610-760947a0a79d";
+export const OWNER_EMAIL =
+  process.env.OWNER_EMAIL?.trim().toLowerCase() || "duongltvp95@gmail.com";
+export const OWNER_USER_ID =
+  process.env.OWNER_USER_ID?.trim() || "495eb514-82d9-4969-a610-760947a0a79d";
 
 export function isOwnerEmail(email?: string | null): boolean {
   if (!email) return false;

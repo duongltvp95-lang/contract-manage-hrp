@@ -30,11 +30,9 @@ import { dbError, err, ok, type ServiceResult } from "./types";
  * (`resolveAccess()`); the client never supplies it. RLS enforces the same rule
  * at the database level, so this is a second, explicit line of defence — the
  * same arrangement `contracts.ts` uses.
- *
- * There is deliberately no `deletePartner()`. Partners are referenced by
- * contracts, the database revokes DELETE from `authenticated`, and no DELETE
- * policy exists. If a partner ever needs to be removed it will be an owner
- * decision with the referencing contracts in view, not a service function.
+ * Round 19 & 24 introduced `deletePartner()` and bulk `deletePartners()`, which
+ * are strictly restricted to the Owner (`canDeleteEntities()`). Deleting a partner
+ * requires that all referenced contracts are deleted first.
  *
  * Round 2 part 3 added two OPTIONAL fields — `address` and `tax_code` — per
  * the Owner decision. The service writes them when present and leaves them

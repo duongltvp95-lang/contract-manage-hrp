@@ -15,8 +15,10 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
  *     account while public sign-up is deliberately disabled.
  *
  * Every caller must authorize the *human* first. The service-role client is not
- * an authorization mechanism — it is an escalation, and `services/users.ts` is
- * the only place allowed to use it.
+ * an authorization mechanism — it is an escalation, used for:
+ *   - User management and Auth Admin API (`services/users.ts`);
+ *   - INSERT-only audit log records (`services/audit-logs.ts`);
+ *   - Owner-restricted delete cascades and unarchive (`services/contracts.ts`, `services/partners.ts`).
  */
 
 /**

@@ -20,6 +20,7 @@ import {
 } from "@/app/(app)/contracts/actions";
 import { putFileWithProgress, type PendingFile } from "@/lib/upload";
 import { formatDateOnly } from "@/lib/format";
+import { isInternalCompanyId, getInternalCompanyName } from "@/lib/companies";
 import { DateField } from "@/components/contracts/date-field";
 import { ContractCompanyField } from "@/components/contracts/contract-company-field";
 import { ContractFileAttachments } from "@/components/contracts/contract-file-attachments";
@@ -161,10 +162,7 @@ export function ContractForm({
 
   const handleResetCompany = useCallback(() => {
     const current = form.getValues("companyId");
-    if (
-      current === "00000000-0000-4000-8000-000000000001" ||
-      current === "00000000-0000-4000-8000-000000000002"
-    ) {
+    if (isInternalCompanyId(current)) {
       return;
     }
     form.setValue("companyId", "", { shouldDirty: false, shouldValidate: false });
@@ -362,11 +360,8 @@ export function ContractForm({
       if (data.matchedCompanyId) {
         const companyName =
           data.matchedCompanyName ||
-          (data.matchedCompanyId === "00000000-0000-4000-8000-000000000002"
-            ? "HR VN"
-            : data.matchedCompanyId === "00000000-0000-4000-8000-000000000001"
-              ? "HRP"
-              : "HR VN");
+          getInternalCompanyName(data.matchedCompanyId) ||
+          "HR VN";
 
         setExtraCompany({
           id: data.matchedCompanyId,

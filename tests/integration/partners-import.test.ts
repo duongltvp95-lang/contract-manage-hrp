@@ -466,7 +466,7 @@ suite("partner import — merge (round 25)", () => {
     expect(data).toHaveLength(1);
   }, 120_000);
 
-  it("two rows sharing only the address merge", async () => {
+  it("two rows sharing only the address do not merge (keep separate)", async () => {
     const sharedAddress = `Địa chỉ X ${stamp}`;
     const buffer = await buildWorkbook([
       [`${TEST_PREFIX}Chung địa chỉ A ${stamp}`, sharedAddress, `11${numericStamp}`],
@@ -475,16 +475,16 @@ suite("partner import — merge (round 25)", () => {
 
     const result = await postImport("import", orgA.cookie, buffer);
     const report = result.body as ImportReport;
-    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 1 });
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 0 });
 
     const { data } = await admin
       .from("partners")
       .select("id")
       .eq("address", sharedAddress);
-    expect(data).toHaveLength(1);
+    expect(data).toHaveLength(2);
   }, 120_000);
 
-  it("two rows sharing only the region merge (stronger keys differ)", async () => {
+  it("two rows sharing only the region do not merge (stronger keys differ)", async () => {
     const sharedRegion = `Vùng ${stamp}`;
     const buffer = await buildWorkbookWithHeaders(
       ["Tên đối tác", "Khu vực", "Mã số thuế"],
@@ -496,13 +496,13 @@ suite("partner import — merge (round 25)", () => {
 
     const result = await postImport("import", orgA.cookie, buffer);
     const report = result.body as ImportReport;
-    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 1 });
+    expect(report.summary).toEqual({ total: 2, ok: 2, failed: 0, updated: 0 });
 
     const { data } = await admin
       .from("partners")
       .select("id")
       .eq("region", sharedRegion);
-    expect(data).toHaveLength(1);
+    expect(data).toHaveLength(2);
   }, 120_000);
 
   it("rows that share nothing stay separate", async () => {

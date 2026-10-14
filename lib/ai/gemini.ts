@@ -203,6 +203,7 @@ export async function extractContractFromBuffer({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(15_000),
       });
 
       if (response.ok) {
@@ -267,8 +268,15 @@ export async function extractContractFromBuffer({
       // Other client error (e.g. 400 or 401)
       return err("validation", `AI lỗi (${response.status}): ${lastError}`);
     } catch (networkError) {
-      lastError = networkError instanceof Error ? networkError.message : "Lỗi kết nối mạng";
-      console.warn(`[ai:gemini] Model ${model} gặp lỗi mạng: ${lastError}. Đang chuyển fallback...`);
+      const isTimeout =
+        networkError instanceof Error &&
+        (networkError.name === "TimeoutError" || networkError.message.includes("timeout"));
+      lastError = isTimeout
+        ? `Quá thời gian chờ phản hồi (15s) từ model ${model}`
+        : networkError instanceof Error
+          ? networkError.message
+          : "Lỗi kết nối mạng";
+      console.warn(`[ai:gemini] Model ${model} gặp lỗi: ${lastError}. Đang chuyển fallback...`);
     }
   }
 

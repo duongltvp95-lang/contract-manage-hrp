@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { authorized } from "@/lib/server-action";
+import { guardFileApiRequest } from "@/lib/api-guard";
 import { createUploadUrl } from "@/lib/r2/presign";
 import { resolveMimeType } from "@/lib/ai/gemini";
 
@@ -9,12 +9,11 @@ const MAX_AI_TEMP_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25 MB
  * POST /api/ai/upload-url
  * Issues a presigned PUT URL directly to Cloudflare R2 for AI document analysis.
  * Bypasses Vercel's 4.5 MB request payload limit completely.
+ * Protected with authentication, account status check, and rate limiting.
  */
 export async function POST(request: NextRequest) {
-  const access = await authorized();
-  if (!access.ok) {
-    return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
-  }
+  const guard = await guardFileApiRequest("ai:upload-url");
+  if (!guard.ok) return guard.response;
 
   let body: { filename?: string; mimeType?: string; fileSize?: number };
   try {
@@ -36,11 +35,14 @@ export async function POST(request: NextRequest) {
 
   const fileId = crypto.randomUUID();
   const safeFilename = filename.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
-  const objectKey = `ai-temp/${access.user.organizationId}/${fileId}/${safeFilename}`;
+  const objectKey = `ai-temp/${guard.user.organizationId}/${fileId}/${safeFilename}`;
 
   try {
     const uploadUrl = await createUploadUrl(objectKey, resolvedMime);
-    return NextResponse.json({ uploadUrl, objectKey, mimeType: resolvedMime }, { status: 200 });
+    return NextResponse.json(
+      { uploadUrl, objectKey, mimeType: resolvedMime },
+      { status: 200, headers: guard.headers },
+    );
   } catch (error) {
     console.error("[api:ai/upload-url] presign error:", error);
     return NextResponse.json(

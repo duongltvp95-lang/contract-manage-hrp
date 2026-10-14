@@ -3,6 +3,7 @@
 import type { Control } from "react-hook-form";
 import type { CreateContractInput } from "@schemas/contract";
 import type { Company } from "@/lib/services/partners";
+import { getInternalCompanyName } from "@/lib/companies";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -75,11 +76,7 @@ export function ContractCompanyField({
 
         const currentCompanyLabel =
           companyRows.find((c) => c.id === field.value)?.name ||
-          (field.value === "00000000-0000-4000-8000-000000000002"
-            ? "HR VN"
-            : field.value === "00000000-0000-4000-8000-000000000001"
-              ? "HRP"
-              : undefined);
+          getInternalCompanyName(field.value);
 
         return (
           <FormItem>
