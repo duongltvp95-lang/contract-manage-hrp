@@ -55,37 +55,93 @@ async function SettingsContent() {
       : null;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
+    <div className="space-y-6 p-4 sm:p-6 md:p-8">
       <header className="space-y-1">
-        <h1 className="text-2xl font-bold">Cài đặt</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Cài đặt</h1>
         <p className="text-sm text-muted-foreground">
-          Hồ sơ, tổ chức và bảo mật tài khoản.
+          Hồ sơ cá nhân, đơn vị tổ chức và bảo mật tài khoản.
         </p>
       </header>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Hồ sơ cá nhân</CardTitle>
-          <CardDescription>Sửa tên hiển thị của bạn.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ProfileForm
-            initialFullName={user.fullName ?? ""}
-            email={user.email}
-            role={user.role}
-          />
-        </CardContent>
-      </Card>
+      <div className="grid gap-6 lg:grid-cols-12">
+        <div className="lg:col-span-7">
+          <Card className="h-full flex flex-col justify-between">
+            <CardHeader>
+              <CardTitle>Hồ sơ cá nhân</CardTitle>
+              <CardDescription>Sửa tên hiển thị và xem thông tin tài khoản của bạn.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex-1">
+              <ProfileForm
+                initialFullName={user.fullName ?? ""}
+                email={user.email}
+                role={user.role}
+              />
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="lg:col-span-5 flex flex-col gap-6">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle>Tổ chức</CardTitle>
+              <CardDescription>
+                Thông tin đơn vị quản lý hợp đồng.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              {organization.ok ? (
+                <div className="rounded-lg border bg-muted/30 p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Tên đơn vị:</span>
+                    <span className="font-semibold text-foreground" data-testid="organization-name">
+                      {organization.data.name}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground">Mã tổ chức:</span>
+                    <span className="font-mono text-xs text-muted-foreground bg-background px-2 py-0.5 rounded border">
+                      {organization.data.id}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <Alert variant="destructive">
+                  <AlertTitle>Không đọc được thông tin tổ chức</AlertTitle>
+                  <AlertDescription>{organization.message}</AlertDescription>
+                </Alert>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle>Bảo mật & Đăng nhập</CardTitle>
+              <CardDescription>Đổi mật khẩu truy cập và kết thúc phiên làm việc.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <Button variant="outline" asChild className="h-10 justify-center">
+                  <Link href="/auth/update-password" data-testid="change-password-link">
+                    <KeyRound className="mr-2 h-4 w-4" />
+                    Đổi mật khẩu
+                  </Link>
+                </Button>
+                <LogoutButton variant="outline" className="h-10 justify-center" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
 
       {isAdmin ? (
-        <Card data-testid="user-management-section">
-          <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+        <Card data-testid="user-management-section" className="w-full">
+          <CardHeader className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
             <div className="space-y-1.5">
               <CardTitle>Quản lý người dùng</CardTitle>
               <CardDescription>
                 Thêm tài khoản cho tổ chức. Hệ thống hỗ trợ{" "}
-                <strong>vô hiệu hoá</strong> (giữ row) và{" "}
-                <strong>xoá hẳn</strong> user (chỉ quản trị viên, không thể
+                <strong className="text-foreground">vô hiệu hoá</strong> (giữ row) và{" "}
+                <strong className="text-foreground">xoá hẳn</strong> user (chỉ quản trị viên, không thể
                 xoá chính mình hoặc quản trị viên cuối cùng của tổ chức).
               </CardDescription>
             </div>
@@ -121,58 +177,6 @@ async function SettingsContent() {
           </CardContent>
         </Card>
       ) : null}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Tổ chức</CardTitle>
-          <CardDescription>
-            Thông tin tổ chức chỉ được hiển thị ở Wave 1.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-1 text-sm">
-          {organization.ok ? (
-            <>
-              <p className="font-medium" data-testid="organization-name">
-                {organization.data.name}
-              </p>
-              <p className="text-muted-foreground">
-                Mã tổ chức:{" "}
-                <span className="font-mono text-xs">{organization.data.id}</span>
-              </p>
-            </>
-          ) : (
-            <Alert variant="destructive">
-              <AlertTitle>Không đọc được thông tin tổ chức</AlertTitle>
-              <AlertDescription>{organization.message}</AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Bảo mật</CardTitle>
-          <CardDescription>Đổi mật khẩu đăng nhập của bạn.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button variant="outline" asChild>
-            <Link href="/auth/update-password" data-testid="change-password-link">
-              <KeyRound className="mr-2 h-4 w-4" />
-              Đổi mật khẩu
-            </Link>
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Phiên đăng nhập</CardTitle>
-          <CardDescription>Đăng xuất khỏi thiết bị này.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <LogoutButton />
-        </CardContent>
-      </Card>
     </div>
   );
 }
@@ -187,14 +191,22 @@ export default function SettingsPage() {
 
 function SettingsSkeleton() {
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
+    <div className="space-y-6 p-4 sm:p-6 md:p-8">
       <div className="space-y-2">
-        <Skeleton className="h-8 w-32" />
-        <Skeleton className="h-4 w-64" />
+        <Skeleton className="h-8 w-36" />
+        <Skeleton className="h-4 w-72" />
       </div>
-      <Skeleton className="h-64" />
-      <Skeleton className="h-32" />
-      <Skeleton className="h-32" />
+      <div className="grid gap-6 lg:grid-cols-12">
+        <div className="lg:col-span-7">
+          <Skeleton className="h-[360px] w-full rounded-xl" />
+        </div>
+        <div className="lg:col-span-5 flex flex-col gap-6">
+          <Skeleton className="h-[160px] w-full rounded-xl" />
+          <Skeleton className="h-[160px] w-full rounded-xl" />
+        </div>
+      </div>
+      <Skeleton className="h-[280px] w-full rounded-xl" />
     </div>
   );
 }
+

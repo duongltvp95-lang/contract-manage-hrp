@@ -11,6 +11,7 @@ import { UpdateProfileSchema, type UpdateProfileInput } from "@schemas/profile";
 
 import { updateProfileAction } from "@/app/(app)/settings/actions";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Form,
@@ -72,22 +73,23 @@ export function ProfileForm({
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
         <FormField
           control={form.control}
           name="fullName"
           render={({ field }) => (
-            <FormItem>
-              <FormLabel>Họ và tên</FormLabel>
+            <FormItem className="space-y-1.5">
+              <FormLabel className="text-sm font-medium">Họ và tên</FormLabel>
               <FormControl>
                 <Input
                   placeholder="VD: Nguyễn Văn A"
                   disabled={pending}
                   data-testid="profile-full-name"
+                  className="h-10"
                   {...field}
                 />
               </FormControl>
-              <FormDescription>
+              <FormDescription className="text-xs text-muted-foreground">
                 Tên này hiển thị trên thanh điều hướng và trang tổng quan.
               </FormDescription>
               <FormMessage />
@@ -95,20 +97,44 @@ export function ProfileForm({
           )}
         />
 
-        <div className="space-y-1">
-          <p className="text-sm font-medium">Email</p>
-          <p className="text-sm text-muted-foreground" data-testid="profile-email">
-            {email ?? "—"}
-          </p>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium leading-none">
+            Email tài khoản
+          </label>
+          <div className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-muted/40 px-3 py-2 text-sm">
+            <span data-testid="profile-email" className="font-medium text-foreground">
+              {email ?? "—"}
+            </span>
+            <span className="text-xs rounded px-2 py-0.5 bg-background border text-muted-foreground font-medium">
+              Chỉ đọc
+            </span>
+          </div>
           <p className="text-xs text-muted-foreground">
-            Email không sửa được ở đây vì thuộc tài khoản đăng nhập.
+            Email liên kết với tài khoản Supabase Auth dùng để đăng nhập hệ thống.
           </p>
         </div>
 
-        <div className="space-y-1">
-          <p className="text-sm font-medium">Vai trò</p>
-          <p className="text-sm text-muted-foreground">
-            {role === "admin" ? "Quản trị viên" : "Người dùng"}
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium leading-none">
+            Vai trò hệ thống
+          </label>
+          <div className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-muted/40 px-3 py-2 text-sm">
+            <div className="flex items-center gap-2">
+              <Badge
+                variant={role === "admin" ? "default" : "secondary"}
+                className="font-medium"
+              >
+                {role === "admin" ? "Quản trị viên" : "Người dùng"}
+              </Badge>
+              <span className="text-xs text-muted-foreground hidden sm:inline">
+                {role === "admin"
+                  ? "Toàn quyền quản trị và phân quyền tổ chức"
+                  : "Xem và thao tác các hợp đồng được giao"}
+              </span>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Vai trò xác định phạm vi phân quyền và các chức năng được phép truy cập.
           </p>
         </div>
 
@@ -119,11 +145,19 @@ export function ProfileForm({
           </Alert>
         )}
 
-        <Button type="submit" disabled={pending} data-testid="profile-submit">
-          {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Lưu thay đổi
-        </Button>
+        <div className="pt-1">
+          <Button
+            type="submit"
+            disabled={pending}
+            data-testid="profile-submit"
+            className="h-10 px-5 font-medium"
+          >
+            {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Lưu thay đổi
+          </Button>
+        </div>
       </form>
     </Form>
   );
 }
+
