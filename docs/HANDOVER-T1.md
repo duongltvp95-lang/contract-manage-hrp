@@ -2,7 +2,7 @@
 
 > Tài liệu dành cho **T1 mới** tiếp quản. Đọc hết trước khi ra quyết định hay giao việc.
 >
-> **Lần cập nhật: 2026-10-10** — đã đối chiếu lại toàn bộ với codebase + dữ liệu thật.
+> **Lần cập nhật: 2026-10-15** — đã đối chiếu lại toàn bộ với codebase + dữ liệu thật sau Round 39.
 > File này **không** chứa mật khẩu / PAT / `service_role` / R2 secret.
 
 ---
@@ -11,8 +11,10 @@
 
 - **App**: quản lý hợp đồng + danh bạ đối tác cho **HRP / HR VN**.
 - **Production**: `https://cm.hrpartner.vn` (chính, đã nối xong) + `https://contract-manage-hrp.vercel.app` (auto-deploy từ `main`).
-- **Git**: `main` = `b74faa7` (**round 32 đã merge**), `origin/main` đồng bộ `0 0`, working tree **sạch**.
-- **Trạng thái**: Wave 1 + **round 2 → 32 đều đã merge & deploy**. **KHÔNG còn task nào dở.**
+- **Git**: `main` = Round 39 đã merge và deploy, `origin/main` đồng bộ `0 0`, working tree **sạch hoàn toàn**.
+- **Trạng thái**: Wave 1 + **round 2 → 39 đều đã merge & deploy**. **KHÔNG còn task nào dở.**
+- **Kiểm thử**: **343 Unit tests (28 test files - 100% pass)**, 27 Integration test files, 18 E2E spec files, 30 migrations đã áp dụng.
+- **An ninh & Bảo vệ**: CSP headers, Rate limit đăng nhập 5 lần khóa 15p + thử tối đa 1 tài khoản khác, 2FA Owner, Audit log 18 hành động (gồm export partners), CI auto-deploy guard.
 - **Việc đầu tiên khi tiếp quản**: đọc §1–§4, rồi chờ Owner giao round tiếp theo.
 - **Quy tắc bắt buộc**: `.cursor/rules/agent-working-rules.mdc` (10 điều) — đọc trước khi code.
 

@@ -1,5 +1,36 @@
 import type { NextConfig } from "next";
 
+const isDev = process.env.NODE_ENV !== "production";
+
+// Whitelist nguồn kết nối cho Development (Supabase CLI local, HMR websockets)
+const localConnectOrigins = isDev
+  ? " http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*"
+  : "";
+const localImgOrigins = isDev ? " http://localhost:* http://127.0.0.1:*" : "";
+
+/**
+ * Chính sách script-src:
+ * - 'unsafe-eval': Chỉ cho phép trong Development (cần thiết cho Turbopack HMR / Fast Refresh và sourcemaps).
+ *   Ở Production, loại bỏ 'unsafe-eval' để chặn hoàn toàn các vector tấn công eval-based XSS.
+ * - 'unsafe-inline': Cần thiết cho Next.js App Router chèn inline hydration data / RSC payload script.
+ */
+const scriptSrcDirective = isDev
+  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+  : "script-src 'self' 'unsafe-inline'";
+
+const cspHeaderValue = [
+  "default-src 'self'",
+  scriptSrcDirective,
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  `img-src 'self' data: blob: https://*.supabase.co https://*.r2.cloudflarestorage.com${localImgOrigins}`,
+  `connect-src 'self' https://*.supabase.co https://*.r2.cloudflarestorage.com wss://*.supabase.co${localConnectOrigins}`,
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join("; ");
+
 const nextConfig: NextConfig = {
   cacheComponents: true,
 
@@ -47,18 +78,7 @@ const nextConfig: NextConfig = {
           },
           {
             key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-              "font-src 'self' https://fonts.gstatic.com data:",
-              "img-src 'self' data: blob: https://*.supabase.co https://*.r2.cloudflarestorage.com",
-              "connect-src 'self' https://*.supabase.co https://*.r2.cloudflarestorage.com wss://*.supabase.co",
-              "frame-ancestors 'none'",
-              "object-src 'none'",
-              "base-uri 'self'",
-              "form-action 'self'",
-            ].join("; "),
+            value: cspHeaderValue,
           },
         ],
       },
