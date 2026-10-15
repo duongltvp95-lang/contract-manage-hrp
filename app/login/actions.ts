@@ -3,12 +3,12 @@
 import { createClient } from "@/lib/supabase/server";
 import {
   calculateRemainingAttempts,
+  canAttemptLoginWithEmail,
   formatRemainingAttemptsMessage,
   LOGIN_ATTEMPTS_COOKIE,
   LOGIN_LOCKOUT_WINDOW_SECONDS,
-  MAX_LOGIN_ATTEMPTS,
-  parseAttemptsRecord,
-  type LoginAttemptsRecord,
+  parseLockoutSession,
+  type LockoutSessionState,
 } from "@/lib/login-attempts";
 
 export type LoginActionResult =
@@ -28,42 +28,68 @@ async function safeGetCookieStore() {
   }
 }
 
-async function getStoredAttempts(email: string): Promise<number> {
+async function getStoredLockoutSession(): Promise<LockoutSessionState> {
   const store = await safeGetCookieStore();
-  if (!store) return 0;
-  const record = parseAttemptsRecord(store.get(LOGIN_ATTEMPTS_COOKIE)?.value);
-  if (!record) return 0;
-  if (record.email === email.toLowerCase()) {
-    return record.count;
-  }
-  return 0;
+  if (!store) return {};
+  const raw = store.get(LOGIN_ATTEMPTS_COOKIE)?.value;
+  return parseLockoutSession(raw) || {};
 }
 
-async function recordFailedAttempt(email: string): Promise<number> {
+async function saveStoredLockoutSession(session: LockoutSessionState): Promise<void> {
   const store = await safeGetCookieStore();
-  const current = await getStoredAttempts(email);
-  const next = current + 1;
+  if (!store) return;
+  try {
+    store.set(LOGIN_ATTEMPTS_COOKIE, JSON.stringify(session), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: LOGIN_LOCKOUT_WINDOW_SECONDS,
+    });
+  } catch {
+    // Bỏ qua nếu môi trường không cho phép ghi cookie
+  }
+}
 
-  if (store) {
-    const record: LoginAttemptsRecord = {
-      email: email.toLowerCase(),
-      count: next,
-      expiresAt: Date.now() + LOGIN_LOCKOUT_WINDOW_SECONDS * 1000,
-    };
-    try {
-      store.set(LOGIN_ATTEMPTS_COOKIE, JSON.stringify(record), {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        path: "/",
-        maxAge: LOGIN_LOCKOUT_WINDOW_SECONDS,
-      });
-    } catch {
-      // Bỏ qua nếu môi trường không cho phép ghi cookie
+async function recordFailedAttemptSession(
+  email: string,
+): Promise<{ remaining: number; isAlternate: boolean; session: LockoutSessionState }> {
+  const session = await getStoredLockoutSession();
+  const lowerEmail = email.toLowerCase();
+  const now = Date.now();
+
+  // Kiểm tra xem đây có phải là tài khoản phụ (alternate) khi tài khoản chính đang bị khóa không
+  const isAlternate = Boolean(
+    session.lockedEmail &&
+    session.lockedUntil &&
+    session.lockedUntil > now &&
+    session.lockedEmail.toLowerCase() !== lowerEmail,
+  );
+
+  if (isAlternate) {
+    session.alternateEmail = lowerEmail;
+    const nextAlt = (session.alternateCount || 0) + 1;
+    session.alternateCount = nextAlt;
+    const remaining = calculateRemainingAttempts(nextAlt);
+    if (remaining <= 0) {
+      session.alternateLockedUntil = now + LOGIN_LOCKOUT_WINDOW_SECONDS * 1000;
     }
+    await saveStoredLockoutSession(session);
+    return { remaining, isAlternate: true, session };
   }
 
-  return next;
+  // Đây là tài khoản chính
+  const isSamePrimary = session.primaryEmail?.toLowerCase() === lowerEmail;
+  const nextCount = isSamePrimary ? (session.primaryCount || 0) + 1 : 1;
+  session.primaryEmail = lowerEmail;
+  session.primaryCount = nextCount;
+  const remaining = calculateRemainingAttempts(nextCount);
+  if (remaining <= 0) {
+    session.lockedEmail = lowerEmail;
+    session.lockedUntil = now + LOGIN_LOCKOUT_WINDOW_SECONDS * 1000;
+  }
+  await saveStoredLockoutSession(session);
+  return { remaining, isAlternate: false, session };
 }
 
 async function clearStoredAttempts(): Promise<void> {
@@ -84,7 +110,8 @@ async function clearStoredAttempts(): Promise<void> {
  * 1. Đặt Cookie xác thực qua HTTP `Set-Cookie` Header trực tiếp, khắc phục hoàn toàn
  *    vấn đề Safari / iOS WebKit ITP giới hạn hoặc chặn cookie ghi từ client-side `document.cookie`.
  * 2. Theo dõi số lần đăng nhập thất bại và cảnh báo số lần thử còn lại (giới hạn 5 lần).
- * 3. Tự động chuẩn hoá email (trim trailing whitespace do bàn phím iPhone tự gợi ý, lowercase).
+ * 3. Hỗ trợ chính sách: nếu 1 tài khoản bị khóa, chỉ cho phép thử tối đa 1 tài khoản khác.
+ * 4. Tự động chuẩn hoá email (trim trailing whitespace do bàn phím iPhone tự gợi ý, lowercase).
  */
 export async function loginAction(payload: {
   email: string;
@@ -100,13 +127,13 @@ export async function loginAction(payload: {
     };
   }
 
-  // 1. Kiểm tra giới hạn số lần thử hiện tại
-  const previousAttempts = await getStoredAttempts(email);
-  if (previousAttempts >= MAX_LOGIN_ATTEMPTS) {
+  // 1. Kiểm tra chính sách giới hạn phiên (nếu tài khoản chính bị khóa, chỉ cho phép thử 1 tài khoản khác)
+  const session = await getStoredLockoutSession();
+  const allowedCheck = canAttemptLoginWithEmail(session, email);
+  if (!allowedCheck.allowed) {
     return {
       success: false,
-      error:
-        "Bạn đã nhập sai quá 5 lần. Tài khoản tạm thời bị giới hạn đăng nhập. Vui lòng thử lại sau 15 phút hoặc sử dụng tính năng 'Quên mật khẩu'.",
+      error: allowedCheck.message,
       remainingAttempts: 0,
     };
   }
@@ -165,12 +192,10 @@ export async function loginAction(payload: {
           (error as { status?: number }).status === 400);
 
       if (isInvalidCredentials) {
-        const currentFailed = await recordFailedAttempt(email);
-        const remaining = calculateRemainingAttempts(currentFailed);
-
+        const { remaining, isAlternate } = await recordFailedAttemptSession(email);
         return {
           success: false,
-          error: formatRemainingAttemptsMessage(remaining),
+          error: formatRemainingAttemptsMessage(remaining, isAlternate),
           remainingAttempts: remaining,
         };
       }
@@ -183,13 +208,12 @@ export async function loginAction(payload: {
       }
 
       // Đối với các lỗi khác, vẫn tính là 1 lần thử sai nếu trạng thái là 4xx
-      const currentFailed = await recordFailedAttempt(email);
-      const remaining = calculateRemainingAttempts(currentFailed);
+      const { remaining, isAlternate } = await recordFailedAttemptSession(email);
       return {
         success: false,
         error: error.message
           ? `${error.message}. Bạn còn ${remaining} lần thử.`
-          : formatRemainingAttemptsMessage(remaining),
+          : formatRemainingAttemptsMessage(remaining, isAlternate),
         remainingAttempts: remaining,
       };
     }
