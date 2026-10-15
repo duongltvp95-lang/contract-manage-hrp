@@ -67,7 +67,7 @@ Browser → Next.js (Vercel, region icn1/Seoul) → Supabase (Auth + PostgreSQL 
 `organizations` · `profiles` (role admin/user + `is_tombstone` + 3 cột màu) · `companies` ·
 `partners` · `partner_companies` (junction nhiều–nhiều) · `contracts` · `contract_files` ·
 `audit_logs` · `rate_limit_counters`.
-Tổng **24 migration** trong `supabase/migrations/`.
+Tổng **30 migration** trong `supabase/migrations/`.
 
 ---
 
@@ -77,9 +77,9 @@ Tổng **24 migration** trong `supabase/migrations/`.
 
 Auth, tổ chức, CRUD hợp đồng + upload R2, dashboard, settings. 3 lỗ hổng bảo mật đã vá.
 
-### ✅ Round 2 → 32 — ĐÃ XONG HẾT, đã merge & deploy
+### ✅ Round 2 → 39 — ĐÃ XONG HẾT, đã merge & deploy
 
-Tóm tắt 31 round (chi tiết ở `docs/handovers/HANDOVER-NEXT-AI-2026-10-10.md` §6):
+Tóm tắt các round chính:
 
 | Nhóm | Nội dung |
 |---|---|
@@ -94,22 +94,23 @@ Tóm tắt 31 round (chi tiết ở `docs/handovers/HANDOVER-NEXT-AI-2026-10-10.
 | **R26–R28** | Cột Tên viết tắt · fix lỗi "không lưu được" (Alert + Thử lại) · bộ lọc Số hợp đồng |
 | **R29–R31** | Form tay check trùng MST **theo công ty** · bộ lọc trực tiếp trong header cột · bảng responsive |
 | **R32** | Combobox ở form hợp đồng hiện **badge công ty liên kết** (HRP/HR VN/cả hai) |
+| **R33–R37** | Tách hook `usePartnerTableFilters` / `usePartnerSelection` · Popover multi-select lọc cột kiểu Excel · Liên kết `contracts.company_id` |
+| **R38** | Bảng màu mới Slate & Indigo · Rate limit 5 lần sai khóa 15p + cơ chế thử tối đa 1 tài khoản khác · Cảnh báo tiếng Việt rõ ràng |
+| **R39** | Security Headers & CSP phân tách Dev/Prod · Audit log `export_partners` · Auto-deploy guard trong CI · Script `fix-workspace-acl.ps1` · Tài liệu 2FA `docs/SETUP-2FA.md` |
 
 ### 📦 Git hiện tại — đã đồng bộ, KHÔNG có task merge nào dở
 
 ```
-b74faa7  feat(partners): merge round 32 — partner combobox companies and verification   ← main, origin/main
-71789fc  docs: them tai lieu ban giao duan round 32 snapshot 2026-10-10
-5e1e269  feat: add script to verify remaining E2E partner count in Supabase
-6ba1073  feat(partners): checkpoint round 32 — refactor combobox + tách PartnerOptionRow
-36239fa  feat(partners): checkpoint round 32 — gộp 5 file revert + 2 file mới
-a0e2cda  feat(partners): company-scoped tax code check and responsive table columns (round 29+31)
+faa3492  chore(security): toi uu CSP cho dev va prod, dong bo HANDOVER-T1 va tao SETUP-2FA guide   ← main, origin/main
+6478d63  fix(ops): toi uu script fix-workspace-acl.ps1 ho tro takeown
+04b3aaf  feat(security): bo sung CSP headers, audit export doi tac, auto-deploy guard va cap nhat handover T2
+7b704a6  feat(auth): ho tro dang nhap toi da 1 tai khoan khac khi tai khoan chinh bi khoa 15 phut
+b67eea5  fix(auth): khoa cung nut dang nhap sau 5 lan sai kem countdown 15 phut va luu localStorage
 ```
 
 - `git rev-list --left-right --count origin/main...main` → `0  0`
-- Branch `feat/partner-combobox-companies` **đã được merge** (vẫn còn local, có thể xoá cho gọn nếu Owner muốn).
-- Working tree **sạch hoàn toàn** — không có file untracked (`.codegraph/` đã vào `.gitignore`).
-- **2 commit checkpoint tiếng Anh đã được reword thành tiếng Việt** (xem 5.1e/5.1f — xử lý xong).
+- Working tree **sạch hoàn toàn**.
+- Hướng dẫn 2FA chi tiết: `docs/SETUP-2FA.md` (công cụ kiểm tra `scripts/verify-2fa-status.mjs`).
 
 ### ✅ Các mục "dở dang" trong handover cũ — ĐÃ ĐÓNG
 
