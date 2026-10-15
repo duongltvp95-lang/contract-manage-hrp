@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { PARTNER_STATUS_LABELS } from "@schemas/partner";
 
 import { getCurrentUser } from "@/lib/auth";
+import { recordAudit } from "@/lib/services/audit-logs";
 import { listPartners, type PartnerWithCount } from "@/lib/services/partners";
 
 /**
@@ -39,6 +40,20 @@ export async function GET(request: NextRequest) {
   const rows = status
     ? list.data.filter((row) => row.status === status)
     : list.data;
+
+  // Ghi nhận nhật ký kiểm toán hành động xuất danh bạ đối tác (P1)
+  void recordAudit({
+    organizationId: user.organizationId,
+    actorId: user.id,
+    actorRole: user.role,
+    action: "export_partners",
+    targetKind: "partner",
+    targetId: null,
+    metadata: {
+      count: rows.length,
+      statusFilter: status ?? "all",
+    },
+  });
 
   const body = await formatXlsx(rows);
 

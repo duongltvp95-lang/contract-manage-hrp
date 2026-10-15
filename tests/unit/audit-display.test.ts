@@ -120,6 +120,9 @@ describe("formatAuditSentence", () => {
     expect(say("unarchive_contract", { contractNumber: "HD-001" })).toBe(
       'Khương Văn Đường đã bỏ lưu trữ hợp đồng “HD-001”',
     );
+    expect(say("export_partners", { count: 144 })).toBe(
+      "Khương Văn Đường đã xuất danh bạ đối tác",
+    );
   });
 
   it("uses a neutral subject when the actor name is missing", () => {

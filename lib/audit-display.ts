@@ -163,6 +163,8 @@ function sentenceFor(action: AuditAction, meta: Record<string, unknown>): string
       return quoted("xoá người dùng", text(meta.fullName) || text(meta.name));
     case "export_logs":
       return "xuất nhật ký";
+    case "export_partners":
+      return "xuất danh bạ đối tác";
     default:
       return `thực hiện “${AUDIT_ACTION_LABELS[action] ?? action}”`;
   }
