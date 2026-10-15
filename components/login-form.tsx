@@ -24,12 +24,14 @@ export function LoginForm({
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [remainingAttempts, setRemainingAttempts] = useState<number | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
+    setRemainingAttempts(undefined);
 
     const cleanEmail = email.trim();
     if (!cleanEmail || !password) {
@@ -46,6 +48,7 @@ export function LoginForm({
 
       if (!res.success) {
         setError(res.error);
+        setRemainingAttempts(res.remainingAttempts);
         setIsLoading(false);
         return;
       }
@@ -126,8 +129,32 @@ export function LoginForm({
                 </div>
               </div>
               {error && (
-                <div className="rounded-md bg-destructive/15 p-3 text-sm text-destructive border border-destructive/20 font-medium">
-                  {error}
+                <div
+                  role="alert"
+                  className={cn(
+                    "rounded-md p-3 text-sm border font-medium flex items-start gap-2.5",
+                    remainingAttempts !== undefined && remainingAttempts > 0
+                      ? "bg-amber-500/10 border-amber-500/30 text-amber-900 dark:text-amber-200"
+                      : "bg-destructive/15 border-destructive/20 text-destructive",
+                  )}
+                >
+                  <div className="space-y-1 w-full">
+                    <p>{error}</p>
+                    {remainingAttempts !== undefined &&
+                      remainingAttempts <= 2 &&
+                      remainingAttempts > 0 && (
+                        <p className="text-xs font-normal">
+                          Gợi ý:{" "}
+                          <Link
+                            href="/auth/forgot-password"
+                            className="font-semibold underline underline-offset-2 hover:opacity-80"
+                          >
+                            Bấm vào đây để đặt lại mật khẩu
+                          </Link>{" "}
+                          trước khi tài khoản bị khóa.
+                        </p>
+                      )}
+                  </div>
                 </div>
               )}
               <Button type="submit" className="w-full" disabled={isLoading}>
