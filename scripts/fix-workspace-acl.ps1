@@ -2,33 +2,33 @@
 #
 # Script gỡ bỏ ACL Deny trên các thư mục .next, .next-test, .next-e2e (P0)
 # Giúp Next.js dev server, build và test suite chạy mượt mà không bị lỗi EPERM.
-#
-# Cách sử dụng trong PowerShell:
-#   .\scripts\fix-workspace-acl.ps1
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " [HRP Contract Manager] Khởi chạy gỡ ACL Deny thư mục .next" -ForegroundColor Cyan
+Write-Host " [HRP Contract Manager] Khoi chay go ACL Deny thu muc .next" -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 $targets = @(".next", ".next-test", ".next-e2e")
 
 foreach ($dir in $targets) {
     if (Test-Path $dir) {
-        Write-Host "[+] Đang xử lý quyền cho: $dir ..." -ForegroundColor Yellow
+        Write-Host "[+] Dang xu ly quyen cho: $dir ..." -ForegroundColor Yellow
         try {
-            # Gỡ bỏ các cờ Deny (nếu có)
-            & icacls "$dir" /remove:d Everyone /T /C | Out-Null
-            & icacls "$dir" /grant "${env:USERNAME}:(F)" /T /C | Out-Null
+            # Chiếm quyền sở hữu nếu bị lệch user SID
+            & takeown /F "$dir" /R /D Y 2>$null | Out-Null
             
-            # Dọn dẹp thư mục cũ để tạo mới hoàn toàn sạch sẽ
+            # Gỡ bỏ các cờ Deny và cấp Full Control
+            & icacls "$dir" /remove:d Everyone /T /C 2>$null | Out-Null
+            & icacls "$dir" /grant "${env:USERNAME}:(F)" /T /C 2>$null | Out-Null
+            
+            # Dọn dẹp thư mục để tạo mới sạch sẽ
             Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Host "[OK] Đã dọn dẹp và cấp quyền sạch cho: $dir" -ForegroundColor Green
+            Write-Host "[OK] Da don dep va cap quyen sach cho: $dir" -ForegroundColor Green
         } catch {
-            Write-Warning "[-] Không thể xóa hoàn toàn $dir: $_"
+            Write-Warning "[-] Khong the don dep $dir : $($_.Exception.Message)"
         }
     } else {
-        Write-Host "[i] Thư mục $dir không tồn tại hoặc đã được dọn sạch." -ForegroundColor Gray
+        Write-Host "[i] Thu muc $dir khong ton tai (da duoc don sach se)." -ForegroundColor Gray
     }
 }
 
-Write-Host "`n[HOÀN TẤT] Hệ thống đã sẵn sàng cho dev/build/test!" -ForegroundColor Green
+Write-Host "`n[HOAN TAT] He thong da sach se va san sang cho dev/build/test!" -ForegroundColor Green
