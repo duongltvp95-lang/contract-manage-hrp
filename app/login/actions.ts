@@ -146,16 +146,25 @@ export async function loginAction(payload: {
         return {
           success: false,
           error:
-            "Bạn đã vượt quá số lần thử đăng nhập cho phép (5 lần). Vui lòng thử lại sau ít phút hoặc sử dụng tính năng 'Quên mật khẩu'.",
+            "Bạn đã vượt quá số lần thử đăng nhập cho phép (5 lần). Vui lòng thử lại sau 15 phút hoặc sử dụng tính năng 'Quên mật khẩu'.",
           remainingAttempts: 0,
         };
       }
 
       // Xử lý sai email hoặc mật khẩu -> đếm và cảnh báo số lần còn lại
-      if (
-        msg.includes("invalid login credentials") ||
-        msg.includes("invalid_grant")
-      ) {
+      const errCode = (error as { code?: string }).code;
+      const isInvalidCredentials =
+        errCode === "invalid_credentials" ||
+        errCode === "invalid_grant" ||
+        msg.includes("invalid") ||
+        msg.includes("credentials") ||
+        msg.includes("grant") ||
+        msg.includes("password") ||
+        msg.includes("user not found") ||
+        (typeof (error as { status?: number }).status === "number" &&
+          (error as { status?: number }).status === 400);
+
+      if (isInvalidCredentials) {
         const currentFailed = await recordFailedAttempt(email);
         const remaining = calculateRemainingAttempts(currentFailed);
 
@@ -173,9 +182,15 @@ export async function loginAction(payload: {
         };
       }
 
+      // Đối với các lỗi khác, vẫn tính là 1 lần thử sai nếu trạng thái là 4xx
+      const currentFailed = await recordFailedAttempt(email);
+      const remaining = calculateRemainingAttempts(currentFailed);
       return {
         success: false,
-        error: error.message || "Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.",
+        error: error.message
+          ? `${error.message}. Bạn còn ${remaining} lần thử.`
+          : formatRemainingAttemptsMessage(remaining),
+        remainingAttempts: remaining,
       };
     }
 
