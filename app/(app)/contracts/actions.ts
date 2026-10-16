@@ -1,7 +1,5 @@
 "use server";
 
-export const maxDuration = 60;
-
 import { CompleteUploadSchema, type CompleteUploadInput } from "@schemas/file";
 
 import {
