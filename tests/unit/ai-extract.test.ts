@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExtractedContractSchema } from "@schemas/contract";
 import {
   calculateDurationBetweenDates,
@@ -344,6 +344,160 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
       expect(calculateDurationBetweenDates("2025-12-20", "2026-06-20")).toBe("6 tháng");
       expect(calculateDurationBetweenDates("2025-12-20", "2027-12-20")).toBe("2 năm");
       expect(calculateDurationBetweenDates("2025-12-20", "2028-12-20")).toBe("3 năm");
+    });
+  });
+
+  describe("extractContractFromBuffer — fallback chain & retry behavior", () => {
+    const originalFetch = global.fetch;
+    const originalEnv = process.env.GEMINI_API_KEY;
+
+    const mockOkResponse = (overrides: Partial<Record<string, unknown>> = {}) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    contractNumber: "12/2026/HĐKT",
+                    signedDate: "2026-03-15",
+                    expiryDate: "2027-03-15",
+                    durationText: "1 năm",
+                    partnerName: "Công ty Cổ phần Sao Mai",
+                    partnerTaxCode: "0101234567",
+                    partnerAddress: "Hà Nội",
+                    companyName: "CÔNG TY TNHH HRP VIỆT NAM",
+                    summary: "Cung cấp phần mềm",
+                    ...overrides,
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+
+    const mockErrorResponse = (status: number, message: string) => ({
+      ok: false,
+      status,
+      json: async () => ({ error: { message, status: String(status) } }),
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+      if (originalEnv === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = originalEnv;
+      vi.restoreAllMocks();
+    });
+
+    it("returns success on first model when API responds OK", async () => {
+      process.env.GEMINI_API_KEY = "test-key";
+      const fetchMock = vi.fn().mockResolvedValue(mockOkResponse());
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      const { extractContractFromBuffer } = await import("@/lib/ai/gemini");
+      const result = await extractContractFromBuffer({
+        buffer: Buffer.from("fake-pdf"),
+        mimeType: "application/pdf",
+        filename: "hop-dong.pdf",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      if (result.ok) {
+        expect(result.data.contractNumber).toBe("12/2026/HĐKT");
+        expect(result.data.partnerName).toBe("Công ty Cổ phần Sao Mai");
+      }
+    });
+
+    it("falls back to next model when first returns 503 (overloaded)", async () => {
+      process.env.GEMINI_API_KEY = "test-key";
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(mockErrorResponse(503, "The model is overloaded. Please try again later."))
+        .mockResolvedValueOnce(mockOkResponse({ contractNumber: "99/2026/HĐKT" }));
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      const { extractContractFromBuffer } = await import("@/lib/ai/gemini");
+      const result = await extractContractFromBuffer({
+        buffer: Buffer.from("fake-pdf"),
+        mimeType: "application/pdf",
+        filename: "hop-dong.pdf",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      if (result.ok) {
+        expect(result.data.contractNumber).toBe("99/2026/HĐKT");
+      }
+    });
+
+    it("falls back through all 3 models on cascading 503 errors and returns friendly error", async () => {
+      process.env.GEMINI_API_KEY = "test-key";
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(mockErrorResponse(503, "The model is overloaded. Please try again later."))
+        .mockResolvedValueOnce(mockErrorResponse(503, "The model is overloaded. Please try again later."))
+        .mockResolvedValueOnce(mockErrorResponse(503, "The model is overloaded. Please try again later."));
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      const { extractContractFromBuffer } = await import("@/lib/ai/gemini");
+      const result = await extractContractFromBuffer({
+        buffer: Buffer.from("fake-pdf"),
+        mimeType: "application/pdf",
+        filename: "hop-dong.pdf",
+      });
+
+      // Quan trọng: vẫn phải thử đủ 3 model thay vì dừng ở 2 (đây là điểm cải tiến chính)
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        // Phải có message thân thiện bằng tiếng Việt khi server quá tải
+        expect(result.message).toMatch(/quá tải/i);
+      }
+    });
+
+    it("does NOT fall back on 400 (client error) — returns immediately", async () => {
+      process.env.GEMINI_API_KEY = "test-key";
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(mockErrorResponse(400, "Invalid request: bad API key format"));
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      const { extractContractFromBuffer } = await import("@/lib/ai/gemini");
+      const result = await extractContractFromBuffer({
+        buffer: Buffer.from("fake-pdf"),
+        mimeType: "application/pdf",
+        filename: "hop-dong.pdf",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      if (!result.ok) {
+        expect(result.message).toContain("AI lỗi (400)");
+      }
+    });
+
+    it("returns validation error when GEMINI_API_KEY is missing", async () => {
+      delete process.env.GEMINI_API_KEY;
+      const fetchMock = vi.fn();
+      global.fetch = fetchMock as unknown as typeof fetch;
+
+      const { extractContractFromBuffer } = await import("@/lib/ai/gemini");
+      const result = await extractContractFromBuffer({
+        buffer: Buffer.from("fake-pdf"),
+        mimeType: "application/pdf",
+        filename: "hop-dong.pdf",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+      if (!result.ok) {
+        expect(result.message).toMatch(/GEMINI_API_KEY/);
+      }
     });
   });
 });

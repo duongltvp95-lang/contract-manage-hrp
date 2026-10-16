@@ -168,8 +168,14 @@ export async function extractContractFromBuffer({
   const base64Data = buffer.toString("base64");
   let lastError = "Không thể kết nối tới dịch vụ AI Google Gemini.";
 
-  // Chỉ thử tối đa 2 models nhanh nhất để đảm bảo tổng thời gian không vượt quá giới hạn 60s của Vercel Serverless
-  const models = getGeminiModels().slice(0, 2);
+  // Cấu hình fallback chain:
+  // - Thử tất cả model trong getGeminiModels() (3 model) thay vì chỉ 2 model đầu.
+  // - Timeout mỗi model là 12s để dù cả 3 model đều phản hồi chậm cũng không vượt quá
+  //   ngưỡng 60s của Vercel Serverless (3 × 12s = 36s overhead tối đa).
+  // - Lỗi 503/404/429 (quá tải / model không khả dụng / rate-limit) sẽ chuyển model ngay
+  //   mà không cần đợi hết timeout.
+  const models = getGeminiModels();
+  const PER_MODEL_TIMEOUT_MS = 12_000;
 
   for (const model of models) {
     const startTime = Date.now();
@@ -203,7 +209,7 @@ export async function extractContractFromBuffer({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(24_000),
+        signal: AbortSignal.timeout(PER_MODEL_TIMEOUT_MS),
       });
 
       if (response.ok) {
@@ -272,7 +278,7 @@ export async function extractContractFromBuffer({
         networkError instanceof Error &&
         (networkError.name === "TimeoutError" || networkError.message.includes("timeout"));
       lastError = isTimeout
-        ? `Quá thời gian chờ phản hồi (24s) từ model ${model}`
+        ? `Quá thời gian chờ phản hồi (${PER_MODEL_TIMEOUT_MS / 1000}s) từ model ${model}`
         : networkError instanceof Error
           ? networkError.message
           : "Lỗi kết nối mạng";
@@ -280,9 +286,13 @@ export async function extractContractFromBuffer({
     }
   }
 
-  const friendlyError = lastError.toLowerCase().includes("high demand")
-    ? "Hệ thống Google Gemini hiện đang quá tải truy vấn tạm thời. Bạn vui lòng bấm nút trích xuất lại sau vài giây."
-    : lastError;
+  const friendlyError =
+    lastError.toLowerCase().includes("high demand") ||
+    lastError.toLowerCase().includes("overloaded") ||
+    lastError.toLowerCase().includes("unavailable") ||
+    lastError.toLowerCase().includes("try again later")
+      ? "Hệ thống Google Gemini hiện đang quá tải truy vấn tạm thời. Bạn vui lòng bấm nút trích xuất lại sau vài giây."
+      : lastError;
 
   return err("validation", `Trích xuất AI thất bại: ${friendlyError}`);
 }
