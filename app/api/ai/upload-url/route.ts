@@ -1,4 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
+
+export const maxDuration = 60;
 import { guardFileApiRequest } from "@/lib/api-guard";
 import { createUploadUrl } from "@/lib/r2/presign";
 import { resolveMimeType } from "@/lib/ai/gemini";

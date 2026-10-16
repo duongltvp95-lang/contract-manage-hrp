@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, ImageIcon } from "lucide-react";
+import { FileText, ImageIcon, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -29,11 +29,15 @@ export function DocumentSelector({
   selectedId,
   onSelect,
   disabled,
+  onAddFile,
+  onDeleteFile,
 }: {
   files: SelectableFile[];
   selectedId: string | null;
   onSelect: (fileId: string) => void;
   disabled?: boolean;
+  onAddFile?: () => void;
+  onDeleteFile?: (file: SelectableFile) => void;
 }) {
   if (files.length === 0) {
     return null;
@@ -44,13 +48,27 @@ export function DocumentSelector({
 
   return (
     <ScrollArea className="w-full lg:w-56 lg:shrink-0 lg:border-r">
-      <div className="p-2" data-testid="document-selector">
+      <div className="p-2 space-y-2" data-testid="document-selector">
+        {onAddFile && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="w-full justify-center gap-1.5 text-xs font-medium"
+            onClick={onAddFile}
+            disabled={disabled}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Thêm tài liệu
+          </Button>
+        )}
         <FileGroup
           label="Tài liệu"
           files={documents}
           selectedId={selectedId}
           onSelect={onSelect}
           disabled={disabled}
+          onDeleteFile={onDeleteFile}
         />
         <FileGroup
           label="Phụ lục hợp đồng"
@@ -58,6 +76,7 @@ export function DocumentSelector({
           selectedId={selectedId}
           onSelect={onSelect}
           disabled={disabled}
+          onDeleteFile={onDeleteFile}
         />
       </div>
     </ScrollArea>
@@ -70,12 +89,14 @@ function FileGroup({
   selectedId,
   onSelect,
   disabled,
+  onDeleteFile,
 }: {
   label: string;
   files: SelectableFile[];
   selectedId: string | null;
   onSelect: (fileId: string) => void;
   disabled?: boolean;
+  onDeleteFile?: (file: SelectableFile) => void;
 }) {
   if (files.length === 0) {
     return null;
@@ -92,7 +113,7 @@ function FileGroup({
           const active = file.id === selectedId;
 
           return (
-            <li key={file.id}>
+            <li key={file.id} className="group relative flex items-center">
               <Button
                 type="button"
                 variant={active ? "secondary" : "ghost"}
@@ -102,6 +123,7 @@ function FileGroup({
                 onClick={() => onSelect(file.id)}
                 className={cn(
                   "h-auto w-full justify-start gap-2 px-2 py-2 text-left",
+                  onDeleteFile && "pr-8",
                   active && "ring-1 ring-ring",
                 )}
               >
@@ -113,6 +135,23 @@ function FileGroup({
                   </span>
                 </span>
               </Button>
+              {onDeleteFile && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={disabled}
+                  aria-label={`Xoá ${file.original_filename}`}
+                  title="Xoá tệp này"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteFile(file);
+                  }}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 focus:opacity-100"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              )}
             </li>
           );
         })}

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MIN_REFRESH_DELAY_MS,
   REFRESH_MARGIN_MS,
+  formatPdfErrorMessage,
   isImageMime,
   isPdfMime,
   msUntilRefresh,
@@ -69,5 +70,35 @@ describe("mime helpers", () => {
     expect(isImageMime("image/png")).toBe(true);
     expect(isImageMime("image/jpeg")).toBe(true);
     expect(isImageMime("application/pdf")).toBe(false);
+  });
+});
+
+describe("formatPdfErrorMessage", () => {
+  it("handles 404 missing object errors gracefully", () => {
+    const raw =
+      'Unexpected server response (404) while retrieving PDF "https://example.r2.cloudflarestorage.com/file.pdf?sig=123"';
+    const message = formatPdfErrorMessage(raw);
+    expect(message).toContain("404");
+    expect(message).not.toContain("https://");
+    expect(message).not.toContain("sig=123");
+  });
+
+  it("handles 403 forbidden or expired signature errors", () => {
+    const raw = "Unexpected server response (403) while retrieving PDF";
+    const message = formatPdfErrorMessage(raw);
+    expect(message).toContain("403");
+  });
+
+  it("handles CORS errors", () => {
+    const raw = "CORS policy blocked access";
+    const message = formatPdfErrorMessage(raw);
+    expect(message).toContain("CORS");
+  });
+
+  it("masks presigned URLs from arbitrary error messages", () => {
+    const raw = "Custom error from https://r2.cloudflarestorage.com/key?token=secret";
+    const message = formatPdfErrorMessage(raw);
+    expect(message).not.toContain("https://");
+    expect(message).not.toContain("token=secret");
   });
 });

@@ -1,5 +1,7 @@
 "use server";
 
+export const maxDuration = 60;
+
 import { CompleteUploadSchema, type CompleteUploadInput } from "@schemas/file";
 
 import {
@@ -13,7 +15,11 @@ import {
   type BulkDeleteItem,
   type ContractRow,
 } from "@/lib/services/contracts";
-import { completeUpload, type ContractFileRow } from "@/lib/services/files";
+import {
+  completeUpload,
+  deleteContractFile,
+  type ContractFileRow,
+} from "@/lib/services/files";
 import { deleteObject, getObjectBuffer } from "@/lib/r2/objects";
 import {
   authorized,
@@ -136,6 +142,23 @@ export async function completeUploadAction(
   return fromService(result);
 }
 
+export async function deleteContractFileAction(
+  fileId: unknown,
+): Promise<ActionResult<{ id: string; contractId: string }>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  if (typeof fileId !== "string" || fileId.length === 0) {
+    return validationFailure("Thiếu thông tin tệp", [
+      { path: "fileId", message: "Không xác định được tệp cần xoá" },
+    ]);
+  }
+
+  return fromService(
+    await deleteContractFile(fileId, access.user.organizationId),
+  );
+}
+
 /** Round 19 — hard-delete a contract (owner-email-gated in the service). */
 export async function deleteContractAction(
   id: unknown,
@@ -200,170 +223,182 @@ export async function unarchiveContractAction(
 export async function extractContractAction(
   formData: FormData,
 ): Promise<ActionResult<ExtractedContractResult>> {
-  const access = await authorized();
-  if (!access.ok) return access.result;
+  try {
+    const access = await authorized();
+    if (!access.ok) return access.result;
 
-  const objectKey = formData.get("objectKey");
-  let buffer: Buffer;
-  let filename = "document.pdf";
-  let mimeType = "application/pdf";
+    const objectKey = formData.get("objectKey");
+    let buffer: Buffer;
+    let filename = "document.pdf";
+    let mimeType = "application/pdf";
 
-  if (typeof objectKey === "string" && objectKey.length > 0) {
-    const expectedPrefix = `ai-temp/${access.user.organizationId}/`;
-    if (!objectKey.startsWith(expectedPrefix)) {
-      return validationFailure("objectKey không hợp lệ", [
-        { path: "objectKey", message: "Tệp không thuộc tổ chức của bạn" },
-      ]);
-    }
-
-    const downloaded = await getObjectBuffer(objectKey);
-    await deleteObject(objectKey).catch(() => {});
-
-    if (!downloaded) {
-      return validationFailure("Không tìm thấy tệp", [
-        { path: "objectKey", message: "Không thể đọc tệp từ kho lưu trữ đám mây" },
-      ]);
-    }
-
-    buffer = downloaded;
-    filename = (formData.get("filename") as string) || "document.pdf";
-    mimeType = (formData.get("mimeType") as string) || "application/pdf";
-  } else {
-    const file = formData.get("file");
-    if (!file || !(file instanceof File)) {
-      return validationFailure("Tệp không hợp lệ", [
-        { path: "file", message: "Vui lòng chọn tệp hợp đồng để trích xuất" },
-      ]);
-    }
-
-    const arrayBuffer = await file.arrayBuffer();
-    buffer = Buffer.from(arrayBuffer);
-    filename = file.name;
-    mimeType = file.type;
-  }
-
-  const extractionResult = await extractContractFromBuffer({
-    buffer,
-    mimeType,
-    filename,
-  });
-
-  if (!extractionResult.ok) {
-    return fromService(extractionResult);
-  }
-
-  const extracted = extractionResult.data;
-
-  // Chuẩn hóa thời hạn hợp đồng thành số tháng hoặc năm (ví dụ: "6 tháng", "1 năm", "2 năm")
-  extracted.durationText = normalizeDurationText({
-    durationText: extracted.durationText,
-    signedDate: extracted.signedDate,
-    expiryDate: extracted.expiryDate,
-  });
-
-  // Phân định quy cách rõ ràng giữa Công ty nội bộ (HRP / HR VN) và Đối tác:
-  // Nếu thấy 1 trong 2 công ty của chúng ta (bất kể hợp đồng ghi Bên A hay Bên B) -> điền vào companyName.
-  // Bên còn lại là công ty khác -> đó chính là partnerName!
-  const reconciled = reconcileContractParties({
-    partnerName: extracted.partnerName,
-    companyName: extracted.companyName,
-  });
-  extracted.partnerName = reconciled.partnerName;
-  extracted.companyName = reconciled.companyName;
-
-  // Tìm kiếm đối tác và công ty tương đồng trong tổ chức hiện tại
-  const searchTerm = extracted.partnerName ? cleanEntityName(extracted.partnerName) : "";
-  let partnersRes = await searchPartners(searchTerm);
-  if ((!partnersRes.ok || partnersRes.data.length === 0) && searchTerm !== "") {
-    partnersRes = await searchPartners("");
-  }
-  const companiesRes = await listCompanies({
-    organizationId: access.user.organizationId,
-  });
-
-  const partners = partnersRes.ok ? partnersRes.data : [];
-  const companies = companiesRes.ok ? companiesRes.data : [];
-
-  let matchedPartner = findBestMatchingPartner(extracted.partnerName, partners);
-  const matchedCompany = findBestMatchingCompany(extracted.companyName, companies);
-
-  let isNewPartner = false;
-  const trimmedPartnerName = extracted.partnerName?.trim() ?? "";
-
-  // Nếu trong danh bạ chưa có đối tác này, AI đọc được tên đối tác và TUYỆT ĐỐI không phải công ty nội bộ:
-  // Tự động tạo mới đối tác vào hệ thống
-  if (
-    !matchedPartner &&
-    trimmedPartnerName.length > 0 &&
-    !isInternalCompany(trimmedPartnerName)
-  ) {
-    const targetCompanyIds = matchedCompany?.id
-      ? [matchedCompany.id]
-      : companies.length > 0
-        ? [companies[0].id]
-        : [];
-
-    if (targetCompanyIds.length > 0) {
-      let taxCode = extracted.partnerTaxCode?.trim() || "";
-      if (!/^\d{10}(-\d{3})?$/.test(taxCode)) {
-        taxCode = "";
+    if (typeof objectKey === "string" && objectKey.length > 0) {
+      const expectedPrefix = `ai-temp/${access.user.organizationId}/`;
+      if (!objectKey.startsWith(expectedPrefix)) {
+        return validationFailure("objectKey không hợp lệ", [
+          { path: "objectKey", message: "Tệp không thuộc tổ chức của bạn" },
+        ]);
       }
 
-      let createRes = await createPartner(
-        {
-          name: trimmedPartnerName,
-          taxCode: taxCode || undefined,
-          address: extracted.partnerAddress?.trim() || undefined,
-          companyIds: targetCompanyIds,
-        },
-        { organizationId: access.user.organizationId },
-      );
+      const downloaded = await getObjectBuffer(objectKey);
+      await deleteObject(objectKey).catch(() => {});
 
-      // Nếu tạo với taxCode/address bị lỗi, fallback tạo với name + companyIds
-      if (!createRes.ok) {
-        createRes = await createPartner(
+      if (!downloaded) {
+        return validationFailure("Không tìm thấy tệp", [
+          { path: "objectKey", message: "Không thể đọc tệp từ kho lưu trữ đám mây" },
+        ]);
+      }
+
+      buffer = downloaded;
+      filename = (formData.get("filename") as string) || "document.pdf";
+      mimeType = (formData.get("mimeType") as string) || "application/pdf";
+    } else {
+      const file = formData.get("file");
+      if (!file || !(file instanceof File)) {
+        return validationFailure("Tệp không hợp lệ", [
+          { path: "file", message: "Vui lòng chọn tệp hợp đồng để trích xuất" },
+        ]);
+      }
+
+      const arrayBuffer = await file.arrayBuffer();
+      buffer = Buffer.from(arrayBuffer);
+      filename = file.name;
+      mimeType = file.type;
+    }
+
+    const extractionResult = await extractContractFromBuffer({
+      buffer,
+      mimeType,
+      filename,
+    });
+
+    if (!extractionResult.ok) {
+      return fromService(extractionResult);
+    }
+
+    const extracted = extractionResult.data;
+
+    // Chuẩn hóa thời hạn hợp đồng thành số tháng hoặc năm (ví dụ: "6 tháng", "1 năm", "2 năm")
+    extracted.durationText = normalizeDurationText({
+      durationText: extracted.durationText,
+      signedDate: extracted.signedDate,
+      expiryDate: extracted.expiryDate,
+    });
+
+    // Phân định quy cách rõ ràng giữa Công ty nội bộ (HRP / HR VN) và Đối tác:
+    // Nếu thấy 1 trong 2 công ty của chúng ta (bất kể hợp đồng ghi Bên A hay Bên B) -> điền vào companyName.
+    // Bên còn lại là công ty khác -> đó chính là partnerName!
+    const reconciled = reconcileContractParties({
+      partnerName: extracted.partnerName,
+      companyName: extracted.companyName,
+    });
+    extracted.partnerName = reconciled.partnerName;
+    extracted.companyName = reconciled.companyName;
+
+    // Tìm kiếm đối tác và công ty tương đồng trong tổ chức hiện tại
+    const searchTerm = extracted.partnerName ? cleanEntityName(extracted.partnerName) : "";
+    let partnersRes = await searchPartners(searchTerm);
+    if ((!partnersRes.ok || partnersRes.data.length === 0) && searchTerm !== "") {
+      partnersRes = await searchPartners("");
+    }
+    const companiesRes = await listCompanies({
+      organizationId: access.user.organizationId,
+    });
+
+    const partners = partnersRes.ok ? partnersRes.data : [];
+    const companies = companiesRes.ok ? companiesRes.data : [];
+
+    let matchedPartner = findBestMatchingPartner(extracted.partnerName, partners);
+    const matchedCompany = findBestMatchingCompany(extracted.companyName, companies);
+
+    let isNewPartner = false;
+    const trimmedPartnerName = extracted.partnerName?.trim() ?? "";
+
+    // Nếu trong danh bạ chưa có đối tác này, AI đọc được tên đối tác và TUYỆT ĐỐI không phải công ty nội bộ:
+    // Tự động tạo mới đối tác vào hệ thống
+    if (
+      !matchedPartner &&
+      trimmedPartnerName.length > 0 &&
+      !isInternalCompany(trimmedPartnerName)
+    ) {
+      const targetCompanyIds = matchedCompany?.id
+        ? [matchedCompany.id]
+        : companies.length > 0
+          ? [companies[0].id]
+          : [];
+
+      if (targetCompanyIds.length > 0) {
+        let taxCode = extracted.partnerTaxCode?.trim() || "";
+        if (!/^\d{10}(-\d{3})?$/.test(taxCode)) {
+          taxCode = "";
+        }
+
+        let createRes = await createPartner(
           {
             name: trimmedPartnerName,
+            taxCode: taxCode || undefined,
+            address: extracted.partnerAddress?.trim() || undefined,
             companyIds: targetCompanyIds,
           },
           { organizationId: access.user.organizationId },
         );
-      }
 
-      if (createRes.ok) {
-        matchedPartner = {
-          id: createRes.data.id,
-          name: createRes.data.name,
-        };
-        isNewPartner = true;
+        // Nếu tạo với taxCode/address bị lỗi, fallback tạo với name + companyIds
+        if (!createRes.ok) {
+          createRes = await createPartner(
+            {
+              name: trimmedPartnerName,
+              companyIds: targetCompanyIds,
+            },
+            { organizationId: access.user.organizationId },
+          );
+        }
+
+        if (createRes.ok) {
+          matchedPartner = {
+            id: createRes.data.id,
+            name: createRes.data.name,
+          };
+          isNewPartner = true;
+        }
       }
     }
+
+    const duplicate = extracted.contractNumber
+      ? await findDuplicateContract({
+          contractNumber: extracted.contractNumber,
+          signedDate: extracted.signedDate,
+          expiryDate: extracted.expiryDate,
+          organizationId: access.user.organizationId,
+        })
+      : null;
+
+    const result: ExtractedContractResult = {
+      ...extracted,
+      matchedPartnerId: matchedPartner?.id ?? null,
+      matchedPartnerName: matchedPartner?.name ?? null,
+      matchedCompanyId: matchedCompany?.id ?? null,
+      matchedCompanyName: matchedCompany?.name ?? null,
+      isNewPartner,
+      isDuplicate: Boolean(duplicate),
+      duplicateContractId: duplicate?.id ?? null,
+    };
+
+    return {
+      ok: true,
+      data: result,
+    };
+  } catch (error) {
+    console.error("[extractContractAction] error:", error);
+    return {
+      ok: false,
+      code: "internal_error",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Hệ thống gặp sự cố trong quá trình phân tích tài liệu bằng AI.",
+    };
   }
-
-  const duplicate = extracted.contractNumber
-    ? await findDuplicateContract({
-        contractNumber: extracted.contractNumber,
-        signedDate: extracted.signedDate,
-        expiryDate: extracted.expiryDate,
-        organizationId: access.user.organizationId,
-      })
-    : null;
-
-  const result: ExtractedContractResult = {
-    ...extracted,
-    matchedPartnerId: matchedPartner?.id ?? null,
-    matchedPartnerName: matchedPartner?.name ?? null,
-    matchedCompanyId: matchedCompany?.id ?? null,
-    matchedCompanyName: matchedCompany?.name ?? null,
-    isNewPartner,
-    isDuplicate: Boolean(duplicate),
-    duplicateContractId: duplicate?.id ?? null,
-  };
-
-  return {
-    ok: true,
-    data: result,
-  };
 }
 
 /**

@@ -1,5 +1,7 @@
 import { Suspense } from "react";
 
+export const maxDuration = 60;
+
 import { MAX_UPLOAD_SIZE_MB } from "@schemas/file";
 
 import { ContractForm } from "@/components/contracts/contract-form";

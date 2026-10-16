@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Suspense } from "react";
 
+export const maxDuration = 60;
+
 import { ContractDetail } from "@/components/contracts/contract-detail";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";

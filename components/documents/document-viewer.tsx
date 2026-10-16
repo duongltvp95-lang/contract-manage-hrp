@@ -1,16 +1,21 @@
 "use client";
 
-import { FileQuestion, Loader2 } from "lucide-react";
+import { FileQuestion, Loader2, Upload } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
+import { deleteContractFileAction } from "@/app/(app)/contracts/actions";
 import { DocumentSelector, type SelectableFile } from "@/components/documents/document-selector";
 import { ImageViewer } from "@/components/documents/image-viewer";
 import { PdfPanel } from "@/components/documents/pdf-panel";
+import { UploadContractFileDialog } from "@/components/documents/upload-contract-file-dialog";
 import { ViewerErrorBoundary } from "@/components/documents/viewer-error-boundary";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/shared/empty-state";
 import {
+  formatPdfErrorMessage,
   isImageMime,
   isPdfMime,
   msUntilRefresh,
@@ -39,21 +44,50 @@ import {
 const MAX_AUTO_RETRIES = 2;
 
 export function DocumentViewer({
+  contractId,
   files,
   initialViewUrl = null,
   initialSelectedId = null,
 }: {
+  contractId?: string;
   files: SelectableFile[];
   /** Signed server-side when the detail page opens — plan section 59. */
   initialViewUrl?: ViewUrl | null;
   /** `?file=<id>` deep link, validated by the page. */
   initialSelectedId?: string | null;
 }) {
+  const router = useRouter();
   const firstId = initialSelectedId ?? files[0]?.id ?? null;
 
   const [selectedId, setSelectedId] = useState<string | null>(firstId);
   const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [replacingFile, setReplacingFile] = useState<{ id: string; name: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDeleteFile = async (file: SelectableFile) => {
+    if (!contractId) return;
+    const confirmed = window.confirm(
+      `Bạn có chắc chắn muốn xoá tệp "${file.original_filename}" khỏi hợp đồng này không?`,
+    );
+    if (!confirmed) return;
+
+    setIsDeleting(true);
+    try {
+      const res = await deleteContractFileAction(file.id);
+      if (!res.ok) {
+        toast.error(res.message);
+        return;
+      }
+      toast.success(`Đã xoá tệp "${file.original_filename}"`);
+      router.refresh();
+    } catch {
+      toast.error("Không thể xoá tệp. Vui lòng thử lại.");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   /**
    * The URL, together with which file and which attempt it was minted for.
@@ -127,12 +161,35 @@ export function DocumentViewer({
 
   if (files.length === 0) {
     return (
-      <EmptyState
-        icon={<FileQuestion className="h-6 w-6" />}
-        title="Chưa có tài liệu đính kèm"
-        description="Hợp đồng này chưa có tệp nào được tải lên. Wave 1 chỉ tải tệp lên khi tạo hợp đồng mới."
-        className="h-full"
-      />
+      <div className="flex h-full min-h-[28rem] flex-col items-center justify-center rounded-xl border bg-card p-6 shadow-sm">
+        <EmptyState
+          icon={<FileQuestion className="h-6 w-6" />}
+          title="Chưa có tài liệu đính kèm"
+          description="Hợp đồng này chưa có tệp nào được tải lên hoặc các tệp đã bị xoá."
+          className="border-0 shadow-none"
+        />
+        {contractId && (
+          <Button
+            type="button"
+            className="mt-4"
+            onClick={() => {
+              setReplacingFile(null);
+              setUploadModalOpen(true);
+            }}
+          >
+            <Upload className="mr-1.5 h-4 w-4" />
+            Tải lên tài liệu
+          </Button>
+        )}
+        {contractId && (
+          <UploadContractFileDialog
+            contractId={contractId}
+            open={uploadModalOpen}
+            onOpenChange={setUploadModalOpen}
+            onSuccess={() => router.refresh()}
+          />
+        )}
+      </div>
     );
   }
 
@@ -142,7 +199,16 @@ export function DocumentViewer({
         files={files}
         selectedId={selectedId}
         onSelect={selectFile}
-        disabled={loading}
+        disabled={loading || isDeleting}
+        onAddFile={
+          contractId
+            ? () => {
+                setReplacingFile(null);
+                setUploadModalOpen(true);
+              }
+            : undefined
+        }
+        onDeleteFile={contractId ? handleDeleteFile : undefined}
       />
 
       <div className="min-h-0 min-w-0 flex-1">
@@ -151,15 +217,30 @@ export function DocumentViewer({
             <Alert variant="destructive">
               <AlertTitle>Không xem được tài liệu</AlertTitle>
               <AlertDescription className="space-y-3">
-                <p>{error}</p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleSignatureExpired}
-                >
-                  Thử lại
-                </Button>
+                <p>{formatPdfErrorMessage(error)}</p>
+                <div className="flex flex-wrap gap-2">
+                  {contractId && selected && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        setReplacingFile({ id: selected.id, name: selected.original_filename });
+                        setUploadModalOpen(true);
+                      }}
+                    >
+                      <Upload className="mr-1.5 h-4 w-4" />
+                      Tải lên tệp thay thế
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSignatureExpired}
+                  >
+                    Thử lại
+                  </Button>
+                </div>
               </AlertDescription>
             </Alert>
           </div>
@@ -173,6 +254,14 @@ export function DocumentViewer({
             <PdfPanel
               url={current.viewUrl}
               onSignatureExpired={handleSignatureExpired}
+              onUploadReplacement={
+                contractId && selected
+                  ? () => {
+                      setReplacingFile({ id: selected.id, name: selected.original_filename });
+                      setUploadModalOpen(true);
+                    }
+                  : undefined
+              }
             />
           </ViewerErrorBoundary>
         ) : isImageMime(selected.mime_type) ? (
@@ -183,6 +272,17 @@ export function DocumentViewer({
           </div>
         )}
       </div>
+
+      {contractId && (
+        <UploadContractFileDialog
+          contractId={contractId}
+          open={uploadModalOpen}
+          onOpenChange={setUploadModalOpen}
+          replacingFileId={replacingFile?.id}
+          replacingFileName={replacingFile?.name}
+          onSuccess={() => router.refresh()}
+        />
+      )}
     </div>
   );
 }

@@ -167,6 +167,7 @@ export function ContractDetail({
             </Alert>
           )}
           <DocumentViewer
+            contractId={contract.id}
             files={files}
             initialViewUrl={initialViewUrl}
             initialSelectedId={initialSelectedId}

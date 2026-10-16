@@ -271,9 +271,11 @@ export function ContractForm({
     try {
       const formData = new FormData();
 
-      // Nếu tệp lớn hơn 3.5 MB (như tệp 5 MB), tải trực tiếp lên Cloudflare R2
+      // Nếu tệp lớn hơn 1 MB, tải trực tiếp lên Cloudflare R2
       // để vượt qua giới hạn payload 4.5 MB của Vercel Serverless
-      if (fileItem.file.size > 3.5 * 1024 * 1024) {
+      if (fileItem.file.size > 1 * 1024 * 1024) {
+        toast.loading("Đang chuẩn bị tải tệp lên máy chủ...", { id: "ai-extract" });
+
         const presignRes = await fetch("/api/ai/upload-url", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -303,6 +305,9 @@ export function ContractForm({
 
         await putFileWithProgress(uploadUrl, fileItem.file, {
           contentType: targetMime,
+          onProgress: (p) => {
+            toast.loading(`Đang tải tệp lên: ${p.percent}%...`, { id: "ai-extract" });
+          },
         });
 
         formData.append("objectKey", objectKey);
@@ -312,6 +317,7 @@ export function ContractForm({
         formData.append("file", fileItem.file);
       }
 
+      toast.loading("AI đang đọc và trích xuất thông tin hợp đồng...", { id: "ai-extract" });
       const result = await extractContractAction(formData);
 
       if (!result.ok) {
@@ -422,10 +428,21 @@ export function ContractForm({
             : "Đã phân tích xong nội dung tệp đính kèm.",
       });
     } catch (err) {
+      console.error("[handleExtractAi] error:", err);
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      const isFetchErr =
+        rawMsg.toLowerCase().includes("fetch") ||
+        rawMsg.toLowerCase().includes("network") ||
+        rawMsg.toLowerCase().includes("timeout");
+      const userFriendlyMsg = isFetchErr
+        ? "Kết nối tới máy chủ AI bị gián đoạn hoặc xử lý tệp lớn quá thời gian chờ. Bạn vui lòng thử lại hoặc tải tệp có dung lượng gọn hơn."
+        : rawMsg || "Vui lòng thử lại sau.";
       toast.error("Trích xuất AI gặp sự cố", {
-        description: err instanceof Error ? err.message : "Vui lòng thử lại sau.",
+        description: userFriendlyMsg,
+        duration: 8000,
       });
     } finally {
+      toast.dismiss("ai-extract");
       setIsExtractingAi(false);
     }
   }

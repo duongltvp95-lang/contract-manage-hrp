@@ -83,3 +83,27 @@ export function isImageMime(mimeType: string): boolean {
 export function isPdfMime(mimeType: string): boolean {
   return mimeType === "application/pdf";
 }
+
+/**
+ * Localizes PDF.js load errors and strips any presigned URLs containing access keys or signatures.
+ */
+export function formatPdfErrorMessage(rawMessage?: string): string {
+  if (!rawMessage) return "Không tải được tệp PDF.";
+
+  if (rawMessage.includes("404")) {
+    return "Tài liệu không tồn tại trên hệ thống lưu trữ đám mây (mã lỗi 404). Tệp có thể đã bị xóa hoặc quy tắc vòng đời lưu trữ (Lifecycle Rule) trên Cloudflare R2 đã tự động dọn dẹp.";
+  }
+  if (rawMessage.includes("403")) {
+    return "Liên kết xem tài liệu đã hết hạn hoặc không có quyền truy cập (mã lỗi 403). Vui lòng bấm 'Thử lại' để làm mới liên kết.";
+  }
+  if (/CORS/i.test(rawMessage)) {
+    return "Không thể kết nối đến máy chủ lưu trữ tài liệu (lỗi CORS). Vui lòng kiểm tra lại cấu hình CORS trên Cloudflare R2.";
+  }
+  if (/Invalid PDF|FormatError|MissingPDF/i.test(rawMessage)) {
+    return "Tệp tài liệu bị hỏng hoặc định dạng không hợp lệ.";
+  }
+
+  // Strip presigned query parameters or URLs so keys and signatures are never shown in UI
+  const sanitized = rawMessage.replace(/https?:\/\/[^\s"]+/g, "[liên kết]");
+  return `Không tải được tệp PDF: ${sanitized}`;
+}

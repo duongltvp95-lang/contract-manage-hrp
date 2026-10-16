@@ -7,10 +7,9 @@ import { normalizeDurationText } from "@/lib/ai/matching";
 function getGeminiModels(): string[] {
   const envModel = process.env.GEMINI_MODEL?.trim();
   const defaults = [
+    "gemini-3-flash-preview",
     "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-3.8-flash",
-    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
   ];
   if (envModel && !defaults.includes(envModel)) {
     return [envModel, ...defaults];
@@ -169,7 +168,8 @@ export async function extractContractFromBuffer({
   const base64Data = buffer.toString("base64");
   let lastError = "Không thể kết nối tới dịch vụ AI Google Gemini.";
 
-  const models = getGeminiModels();
+  // Chỉ thử tối đa 2 models nhanh nhất để đảm bảo tổng thời gian không vượt quá giới hạn 60s của Vercel Serverless
+  const models = getGeminiModels().slice(0, 2);
 
   for (const model of models) {
     const startTime = Date.now();
@@ -203,7 +203,7 @@ export async function extractContractFromBuffer({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(24_000),
       });
 
       if (response.ok) {
@@ -272,7 +272,7 @@ export async function extractContractFromBuffer({
         networkError instanceof Error &&
         (networkError.name === "TimeoutError" || networkError.message.includes("timeout"));
       lastError = isTimeout
-        ? `Quá thời gian chờ phản hồi (15s) từ model ${model}`
+        ? `Quá thời gian chờ phản hồi (24s) từ model ${model}`
         : networkError instanceof Error
           ? networkError.message
           : "Lỗi kết nối mạng";
@@ -280,5 +280,9 @@ export async function extractContractFromBuffer({
     }
   }
 
-  return err("validation", `Trích xuất AI thất bại: ${lastError}`);
+  const friendlyError = lastError.toLowerCase().includes("high demand")
+    ? "Hệ thống Google Gemini hiện đang quá tải truy vấn tạm thời. Bạn vui lòng bấm nút trích xuất lại sau vài giây."
+    : lastError;
+
+  return err("validation", `Trích xuất AI thất bại: ${friendlyError}`);
 }

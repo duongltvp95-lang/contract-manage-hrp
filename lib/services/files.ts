@@ -396,3 +396,48 @@ export async function getFileViewUrl(
     expiresAt: new Date(Date.now() + VIEW_URL_TTL_SECONDS * 1000).toISOString(),
   });
 }
+
+/**
+ * Deletes a contract file from both R2 storage and the `contract_files` table.
+ */
+export async function deleteContractFile(
+  fileId: string,
+  organizationId: string,
+): Promise<ServiceResult<{ id: string; contractId: string }>> {
+  const supabase = await createClient();
+
+  const { data, error: findError } = await supabase
+    .from("contract_files")
+    .select("id, contract_id, object_key, organization_id")
+    .eq("id", fileId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (findError) {
+    return dbError("deleteContractFile", findError);
+  }
+
+  if (!data) {
+    return err("forbidden", "Tệp không tồn tại hoặc không thuộc tổ chức của bạn");
+  }
+
+  const file = data as { id: string; contract_id: string; object_key: string };
+
+  try {
+    await deleteObject(file.object_key);
+  } catch {
+    // If the object is already missing from R2 (e.g. 404), proceed with row deletion
+  }
+
+  const { error: deleteError } = await supabase
+    .from("contract_files")
+    .delete()
+    .eq("id", fileId)
+    .eq("organization_id", organizationId);
+
+  if (deleteError) {
+    return dbError("deleteContractFile", deleteError);
+  }
+
+  return ok({ id: file.id, contractId: file.contract_id });
+}

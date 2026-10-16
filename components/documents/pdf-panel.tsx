@@ -7,6 +7,7 @@ import {
   Maximize2,
   RotateCcw,
   RotateCw,
+  Upload,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -16,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { formatPdfErrorMessage } from "@/lib/view-url";
 
 /**
  * PDF viewer — plan sections 56, 57.
@@ -55,9 +57,11 @@ type UrlScoped<T> = { url: string; value: T };
 export function PdfPanel({
   url,
   onSignatureExpired,
+  onUploadReplacement,
 }: {
   url: string;
   onSignatureExpired: () => void;
+  onUploadReplacement?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -258,16 +262,32 @@ export function PdfPanel({
 
       <div className="min-h-0 flex-1 overflow-auto bg-muted/40 p-4">
         {error ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-            <p className="text-sm text-destructive">{error}</p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onSignatureExpired}
-            >
-              Tải lại
-            </Button>
+          <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+            <div className="max-w-md space-y-2">
+              <p className="font-semibold text-destructive">Không thể hiển thị tài liệu</p>
+              <p className="text-sm text-muted-foreground">{formatPdfErrorMessage(error)}</p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {onUploadReplacement && (
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  onClick={onUploadReplacement}
+                >
+                  <Upload className="mr-1.5 h-4 w-4" />
+                  Tải lên tệp thay thế
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onSignatureExpired}
+              >
+                Thử tải lại
+              </Button>
+            </div>
           </div>
         ) : (
           <PdfCanvas
