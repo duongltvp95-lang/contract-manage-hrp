@@ -21,6 +21,7 @@ import {
 import { putFileWithProgress, type PendingFile } from "@/lib/upload";
 import { formatDateOnly } from "@/lib/format";
 import { isInternalCompanyId, getInternalCompanyName } from "@/lib/companies";
+import { clientLog } from "@/lib/ai/log-client";
 import { DateField } from "@/components/contracts/date-field";
 import { ContractCompanyField } from "@/components/contracts/contract-company-field";
 import { ContractFileAttachments } from "@/components/contracts/contract-file-attachments";
@@ -428,7 +429,9 @@ export function ContractForm({
             : "Đã phân tích xong nội dung tệp đính kèm.",
       });
     } catch (err) {
-      console.error("[handleExtractAi] error:", err);
+      clientLog.error("handleExtractAi thất bại", {
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
       const rawMsg = err instanceof Error ? err.message : String(err);
       const isFetchErr =
         rawMsg.toLowerCase().includes("fetch") ||
