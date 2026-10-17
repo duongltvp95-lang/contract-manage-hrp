@@ -36,6 +36,7 @@ Trong đó **chặng 3 + base64 của chặng 4** là thừa — file không bao
 - **REUSE FIRST** (rule §3): tận dụng `getObjectBuffer` hiện có ở `lib/r2/objects.ts`; tận dụng `extractContractFromBuffer` signature hiện tại (mở rộng, không phá).
 - **Backward compatible**: giữ `inlineData` làm fallback khi không có `geminiFileName` (dùng cho test mock).
 - **Cleanup bắt buộc**: file Gemini có TTL 48h, **phải xoá sau khi extract** (kể cả khi extract fail) — đặt trong `finally`. Nếu xoá fail → log warn, KHÔNG chặn nghiệp vụ.
+- **B9 (gộp từ báo cáo 2026-10-17)**: thay thế 4 chỗ `console.log/warn` thẳng trong `lib/ai/gemini.ts` (dòng ~170, 226, 257, 281) bằng logger có cấu trúc `lib/ai/log.ts` (xem chi tiết ở `docs/plan/g2-gemini-files-api.md` mục 10).
 - **KHÔNG đổi UI** ở `components/contracts/contract-form.tsx` — chỉ phần server đổi. User experience giữ nguyên.
 - **KHÔNG push tự động** (rule §5 mục 4). Commit lên branch `feat/ai-gemini-files-api` rồi dừng.
 - **Tiếng Việt 100%** trong UI, log, commit message, báo cáo (rule §1).
@@ -95,6 +96,8 @@ export async function extractContractFromBuffer(
 
 Theo §3.2 của kế hoạch: nếu có `geminiFileName` thì body dùng `fileData.fileUri`; nếu không thì fallback `inlineData` base64 (giữ nguyên code hiện tại).
 
+**Đồng thời (B9)**: thay thế 4 chỗ `console.log/warn` ở dòng ~170, 226, 257, 281 bằng `aiLog` (xem `docs/plan/g2-gemini-files-api.md` §10.3 bảng ánh xạ chính xác). Tạo `lib/ai/log.ts` trước.
+
 **KHÔNG thay đổi**: signature `Promise<ServiceResult<ExtractedContract>>`, tên function, prompt, fallback chain 3 model × 12s.
 
 #### 3.3 Sửa `extractContractAction` ở `app/(app)/contracts/actions.ts`
@@ -118,6 +121,12 @@ Thêm vào `tests/unit/ai-extract.test.ts` theo §4.1 của kế hoạch:
 | `extractContractFromBuffer dùng fileData khi có URI` | Body có `fileData.fileUri`, KHÔNG có `inlineData` |
 | `extractContractFromBuffer fallback inlineData khi không có URI` | Body giống code cũ |
 | `extractContractFromBuffer không để rò rỉ file khi parse fail` | `deleteGeminiFile` được gọi dù extract fail (mock verify) |
+
+**Bổ sung B9 (2 test cho logger)**:
+| Test case | Verify |
+|---|---|
+| `aiLog.info ghi ra stdout với JSON hợp lệ` | Mock `console.log`, gọi `aiLog.info("test", { model: "x" })` → output có `"level":"info"`, `"scope":"ai:gemini"`, `"model":"x"` |
+| `aiLog.error đi ra stderr, không ra stdout` | Mock `console.error` + `console.log`, gọi `aiLog.error(...)` → chỉ `console.error` được gọi |
 
 #### 4.2 Integration test (KHÔNG BẮT BUỘC — chỉ chạy nếu `GEMINI_API_KEY` SET)
 
@@ -196,7 +205,9 @@ G2 hoàn thành khi **TẤT CẢ** điều kiện sau đều đúng:
 - [ ] `pnpm build` PASS
 - [ ] `pnpm test --run` PASS (gồm 5 test mới ở §4.1)
 - [ ] `pnpm test:e2e` PASS (giữ nguyên specs)
-- [ ] File `lib/ai/gemini-files.ts` được tạo với 2 function: `uploadToGeminiFiles`, `deleteGeminiFile`
+- [ ] `lib/ai/gemini-files.ts` được tạo với 2 function: `uploadToGeminiFiles`, `deleteGeminiFile`
+- [ ] `lib/ai/log.ts` được tạo với logger `aiLog.info/warn/error` (B9)
+- [ ] 4 chỗ `console.log/warn` ở `lib/ai/gemini.ts` đã được thay bằng `aiLog` (B9)
 - [ ] `extractContractFromBuffer` chấp nhận cả 2 dạng input (backward-compat)
 - [ ] `extractContractAction` cleanup Gemini file trong `finally` (verify được trong test)
 - [ ] Báo cáo 5 mục đầy đủ + bằng chứng test pass

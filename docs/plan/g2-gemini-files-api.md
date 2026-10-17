@@ -288,11 +288,96 @@ Nếu G2 fail trên production:
 - [ ] Tạo module `lib/ai/gemini-files.ts`
 - [ ] Refactor `lib/ai/gemini.ts` theo mục 3.2
 - [ ] Refactor `extractContractAction` theo mục 3.3
+- [ ] **Thay thế 4 chỗ `console.log/warn` thẳng trong `lib/ai/gemini.ts` (dòng ~170, 226, 257, 281) bằng logger có cấu trúc** — xem mục 10
 - [ ] Viết unit test theo mục 4.1
 - [ ] Viết integration test theo mục 4.2 (nếu có key thật, skip nếu không)
 - [ ] Chạy gate mục 4.3
 - [ ] Báo cáo 5 mục
 - [ ] **KHÔNG push** — đợi Owner duyệt
+
+---
+
+## 10. Bổ sung logging có cấu trúc (B9 — gộp vào G2 theo yêu cầu Owner 2026-10-17)
+
+### 10.1 Vấn đề
+
+Hiện `lib/ai/gemini.ts` có **4 chỗ `console.log/warn`** rải rác, không qua logger có cấu trúc:
+
+| Dòng | Code hiện tại |
+|---|---|
+| ~170 | `console.log("[ai:gemini] Đang trích xuất với model: ${model}...");` |
+| ~226 | `console.warn("[ai:gemini] Model ${model} trả về nội dung rỗng. Fallback...");` |
+| ~257 | `console.error("[ai:gemini] Parse error on model ${model}:", rawText, parseErr);` |
+| ~281 | `console.warn("[ai:gemini] Model ${model} gặp lỗi: ${lastError}. Đang chuyển fallback...");` |
+
+Theo review `docs/REVIEW-2026-10-11.md` §2.3, dự án chưa có thư viện logging/observability (Datadog, Sentry, OpenTelemetry). Trong khi chờ tool tập trung, cần **một helper logger nhẹ** ở `lib/ai/log.ts` để:
+- Có **prefix thống nhất** (`[ai:gemini]`) — tìm nhanh trong Vercel logs.
+- Có **level** (`info`/`warn`/`error`) — filter được trên Vercel (production chỉ `warn`+`error`).
+- Có **timestamp chuẩn ISO** + optional `model`/`durationMs` fields — dễ grep, dễ parse.
+
+### 10.2 Module mới: `lib/ai/log.ts` (~30 dòng)
+
+```ts
+import "server-only";
+
+type Level = "info" | "warn" | "error";
+
+function emit(level: Level, message: string, context?: Record<string, unknown>) {
+  const payload = {
+    ts: new Date().toISOString(),
+    level,
+    scope: "ai:gemini",
+    message,
+    ...context,
+  };
+  // Ghi ra stdout/stderr — Vercel logs tự pickup, JSON.stringify để parse được.
+  const line = JSON.stringify(payload);
+  if (level === "error") console.error(line);
+  else if (level === "warn") console.warn(line);
+  else console.log(line);
+}
+
+export const aiLog = {
+  info: (message: string, context?: Record<string, unknown>) => emit("info", message, context),
+  warn: (message: string, context?: Record<string, unknown>) => emit("warn", message, context),
+  error: (message: string, context?: Record<string, unknown>) => emit("error", message, context),
+};
+```
+
+### 10.3 Thay thế ở `lib/ai/gemini.ts`
+
+| Vị trí | Trước | Sau |
+|---|---|---|
+| `gemini.ts:170` | `console.log("[ai:gemini] Đang trích xuất với model: ${model}...");` | `aiLog.info("Đang trích xuất với model", { model });` |
+| `gemini.ts:226` | `console.warn(... "trả về nội dung rỗng...")` | `aiLog.warn("Model trả về nội dung rỗng", { model });` |
+| `gemini.ts:257` | `console.error("[ai:gemini] Parse error on model X:", rawText, parseErr)` | `aiLog.error("Parse JSON thất bại", { model, rawTextSnippet: rawText.slice(0, 200), errorMessage: String(parseErr) });` |
+| `gemini.ts:281` | `console.warn(... "gặp lỗi: ...")` | `aiLog.warn("Model gặp lỗi, chuyển fallback", { model, lastError, elapsedMs: Date.now() - startTime });` |
+
+### 10.4 Lợi ích
+
+- Vercel logs sẽ có line JSON parseable (`{"ts":"...","level":"warn","scope":"ai:gemini","model":"gemini-3-flash-preview",...}`) → dễ tìm khi debug.
+- Khi sau này thêm Sentry/Datadog, chỉ cần đổi `emit()` thành `Sentry.captureMessage()` hoặc tương đương — **không phải sửa 4 chỗ gọi**.
+- Tương thích rule §2 (không in credential): các call site không truyền `apiKey` vào context.
+
+### 10.5 Test
+
+Thêm 2 test ở `tests/unit/ai-extract.test.ts`:
+
+| Test | Verify |
+|---|---|
+| `aiLog.info ghi ra stdout với JSON hợp lệ` | Mock `console.log`, gọi `aiLog.info("test", { model: "x" })` → output có chứa `"level":"info"`, `"scope":"ai:gemini"`, `"model":"x"` |
+| `aiLog.error đi ra stderr, không ra stdout` | Mock `console.error` + `console.log`, gọi `aiLog.error(...)` → chỉ `console.error` được gọi |
+
+### 10.6 Effort bổ sung
+
+| Task | Thời gian |
+|---|---|
+| Tạo `lib/ai/log.ts` | 15 phút |
+| Thay 4 chỗ ở `gemini.ts` | 20 phút |
+| 2 unit test | 20 phút |
+| **Tổng bổ sung** | **~55 phút** |
+
+→ Tổng G2 + B9 ước tính: **~6 giờ** (thay vì 5 giờ).
 
 ---
 
