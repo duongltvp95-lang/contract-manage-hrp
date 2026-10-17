@@ -18,7 +18,7 @@ import {
   deleteContractFile,
   type ContractFileRow,
 } from "@/lib/services/files";
-import { deleteObject, getObjectBuffer } from "@/lib/r2/objects";
+import { deleteObject, getObjectBuffer, headObject } from "@/lib/r2/objects";
 import {
   authorized,
   fromService,
@@ -223,6 +223,9 @@ export async function unarchiveContractAction(
 export async function extractContractAction(
   formData: FormData,
 ): Promise<ActionResult<ExtractedContractResult>> {
+  const actionStartTime = Date.now();
+  const TOTAL_ACTION_BUDGET_MS = 48_000; // 48s: chừa tối thiểu 12s biên an toàn trước 60s của Vercel
+
   // G2 v2: khai báo ngoài try để finally có thể truy cập cleanup.
   let geminiFileName: string | null = null;
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -241,6 +244,25 @@ export async function extractContractAction(
       if (!objectKey.startsWith(expectedPrefix)) {
         return validationFailure("objectKey không hợp lệ", [
           { path: "objectKey", message: "Tệp không thuộc tổ chức của bạn" },
+        ]);
+      }
+
+      // Kiểm tra Content-Length thực tế bằng HEAD trước khi tải toàn bộ object vào bộ nhớ
+      const head = await headObject(objectKey);
+      if (!head.exists || head.contentLength === null) {
+        await deleteObject(objectKey).catch(() => {});
+        return validationFailure("Không tìm thấy tệp", [
+          { path: "objectKey", message: "Không thể đọc tệp từ kho lưu trữ đám mây" },
+        ]);
+      }
+
+      if (head.contentLength > MAX_AI_FILE_SIZE_BYTES) {
+        await deleteObject(objectKey).catch(() => {});
+        return validationFailure("Dung lượng tệp quá lớn", [
+          {
+            path: "file",
+            message: "Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI.",
+          },
         ]);
       }
 
@@ -264,20 +286,26 @@ export async function extractContractAction(
         ]);
       }
 
+      // Kiểm tra kích thước trước khi convert sang ArrayBuffer trong bộ nhớ
+      if (file.size > MAX_AI_FILE_SIZE_BYTES) {
+        return validationFailure("Dung lượng tệp quá lớn", [
+          {
+            path: "file",
+            message: "Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI.",
+          },
+        ]);
+      }
+
       const arrayBuffer = await file.arrayBuffer();
       buffer = Buffer.from(arrayBuffer);
       filename = file.name;
       mimeType = file.type;
     }
 
-    if (buffer.length > MAX_AI_FILE_SIZE_BYTES) {
-      return validationFailure("Dung lượng tệp quá lớn", [
-        {
-          path: "file",
-          message: "Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI.",
-        },
-      ]);
-    }
+    // Tính toán ngân sách thời gian còn lại cho khâu AI
+    const elapsedSoFar = Date.now() - actionStartTime;
+    // Dành 4 giây cuối cho DB partner search và cleanup
+    const remainingAiBudgetMs = Math.max(8_000, TOTAL_ACTION_BUDGET_MS - elapsedSoFar - 4_000);
 
     // Chọn chiến lược gửi cho Gemini theo dung lượng:
     // - Tệp >= 2 MB: Tải lên Gemini Files API để tránh body base64 quá lớn làm nghẽn mạng/timeout khi retry.
@@ -290,6 +318,7 @@ export async function extractContractAction(
         mimeType,
         filename,
         apiKey,
+        timeoutMs: Math.min(12_000, Math.floor(remainingAiBudgetMs / 2)),
       });
       if (uploadRes.ok) {
         geminiFileName = uploadRes.data.name;
@@ -304,12 +333,16 @@ export async function extractContractAction(
       }
     }
 
+    const postUploadElapsed = Date.now() - actionStartTime;
+    const remainingExtractBudgetMs = Math.max(6_000, TOTAL_ACTION_BUDGET_MS - postUploadElapsed - 4_000);
+
     const extractionResult = await extractContractFromBuffer({
       buffer,
       mimeType,
       filename,
       geminiFileName: geminiFileUri ? geminiFileName ?? undefined : undefined,
       geminiFileUri: geminiFileUri ?? undefined,
+      remainingBudgetMs: remainingExtractBudgetMs,
     });
 
     if (!extractionResult.ok) {

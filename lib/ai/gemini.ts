@@ -9,8 +9,8 @@ export function getGeminiModels(): string[] {
   const envModel = process.env.GEMINI_MODEL?.trim();
   const defaults = [
     "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-1.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-flash-latest",
   ];
   if (envModel) {
     return [envModel, ...defaults.filter((m) => m !== envModel)];
@@ -194,6 +194,7 @@ export async function extractContractFromBuffer({
   filename = "",
   geminiFileName,
   geminiFileUri,
+  remainingBudgetMs = 32_000,
 }: {
   buffer: Buffer;
   mimeType: string;
@@ -202,6 +203,8 @@ export async function extractContractFromBuffer({
   geminiFileName?: string;
   /** Optional: URI của file đã upload (dùng trong fileData.fileUri) */
   geminiFileUri?: string;
+  /** Ngân sách thời gian tối đa còn lại cho bước extract (ms) */
+  remainingBudgetMs?: number;
 }): Promise<ServiceResult<ExtractedContract>> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
@@ -255,8 +258,24 @@ export async function extractContractFromBuffer({
 
   // Chỉ thử tối đa 2 models nhanh nhất để đảm bảo tổng thời gian không vượt quá giới hạn 60s của Vercel Serverless
   const models = getGeminiModels().slice(0, 2);
+  const startExtractTime = Date.now();
 
   for (const model of models) {
+    const elapsedSoFar = Date.now() - startExtractTime;
+    const remainingTime = remainingBudgetMs - elapsedSoFar;
+
+    // Nếu thời gian còn lại dưới 6 giây, dừng ngay để không vượt quá giới hạn 60s của Vercel
+    if (remainingTime < 6_000) {
+      aiLog.warn("Hết ngân sách thời gian trích xuất AI, dừng fallback", {
+        model,
+        elapsedSoFar,
+        remainingBudgetMs,
+      });
+      lastError = "Quá thời gian thực thi cho phép. Vui lòng bấm trích xuất lại hoặc sử dụng tệp tài liệu ngắn hơn.";
+      break;
+    }
+
+    const modelTimeoutMs = Math.min(15_000, remainingTime);
     const startTime = Date.now();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
@@ -294,7 +313,6 @@ export async function extractContractFromBuffer({
       generationConfig: {
         responseMimeType: "application/json",
         responseSchema: CONTRACT_RESPONSE_SCHEMA,
-        temperature: 0.1,
       },
     };
 
@@ -302,6 +320,7 @@ export async function extractContractFromBuffer({
       aiLog.info("Đang trích xuất với model", {
         model,
         useFilesApi,
+        modelTimeoutMs,
         elapsedMs: Date.now() - startTime,
       });
       const response = await fetch(url, {
@@ -311,7 +330,7 @@ export async function extractContractFromBuffer({
           "x-goog-api-key": apiKey,
         },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(16_000),
+        signal: AbortSignal.timeout(modelTimeoutMs),
       });
 
       if (response.ok) {
@@ -396,7 +415,7 @@ export async function extractContractFromBuffer({
         networkError instanceof Error &&
         (networkError.name === "TimeoutError" || networkError.message.includes("timeout"));
       lastError = isTimeout
-        ? `Quá thời gian chờ phản hồi (16s) từ model ${model}`
+        ? `Quá thời gian chờ phản hồi (${Math.round(modelTimeoutMs / 1000)}s) từ model ${model}`
         : networkError instanceof Error
           ? networkError.message
           : "Lỗi kết nối mạng";

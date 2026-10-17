@@ -98,7 +98,18 @@ describe("G2 v2 — Gemini Files API", () => {
   });
 
   describe("uploadToGeminiFiles", () => {
-    it("gửi multipart/related với boundary đúng", async () => {
+    it("thực hiện quy trình Resumable Upload 2 bước chuẩn của Google", async () => {
+      // Bước 1: Trả về header x-goog-upload-url
+      fetchSpy.mockResolvedValueOnce(
+        new Response(null, {
+          status: 200,
+          headers: {
+            "x-goog-upload-url": "https://upload.google.com/upload-session/xyz",
+          },
+        }),
+      );
+
+      // Bước 2: Nhận dữ liệu upload và trả về metadata của file
       fetchSpy.mockResolvedValueOnce(
         new Response(
           JSON.stringify({
@@ -126,19 +137,24 @@ describe("G2 v2 — Gemini Files API", () => {
         expect(result.data.uri).toContain("files/abc123");
       }
 
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("https://generativelanguage.googleapis.com/upload/v1beta/files");
-      const headers = init.headers as Record<string, string>;
-      expect(headers["x-goog-api-key"]).toBe("test-key");
-      expect(headers["Content-Type"]).toMatch(/^multipart\/related; boundary=/);
-      expect(headers["X-Goog-Upload-Protocol"]).toBe("multipart");
-      // body phải chứa metadata JSON
-      const body = init.body as Buffer;
-      const bodyText = body.toString();
-      expect(bodyText).toContain('"file"');
-      expect(bodyText).toContain('"display_name":"test.pdf"');
-      expect(bodyText).toContain("PDF bytes");
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+      // Kiểm tra Bước 1 (Init session)
+      const [initUrl, initReq] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      expect(initUrl).toBe("https://generativelanguage.googleapis.com/upload/v1beta/files");
+      const initHeaders = initReq.headers as Record<string, string>;
+      expect(initHeaders["x-goog-api-key"]).toBe("test-key");
+      expect(initHeaders["X-Goog-Upload-Protocol"]).toBe("resumable");
+      expect(initHeaders["X-Goog-Upload-Command"]).toBe("start");
+      expect(initHeaders["X-Goog-Upload-Header-Content-Length"]).toBe(String(Buffer.from("PDF bytes").length));
+
+      // Kiểm tra Bước 2 (Binary upload & finalize)
+      const [uploadUrl, uploadReq] = fetchSpy.mock.calls[1] as [string, RequestInit];
+      expect(uploadUrl).toBe("https://upload.google.com/upload-session/xyz");
+      const uploadHeaders = uploadReq.headers as Record<string, string>;
+      expect(uploadHeaders["x-goog-api-key"]).toBe("test-key");
+      expect(uploadHeaders["X-Goog-Upload-Command"]).toBe("upload, finalize");
+      expect(uploadReq.body).toEqual(new Uint8Array(Buffer.from("PDF bytes")));
     });
 
     it("trả về err khi response không ok", async () => {
@@ -343,6 +359,20 @@ describe("G2 v2 — extractContractFromBuffer với 3 nhánh", () => {
     extractPdfSpy.mockRestore();
   });
 
+  it("dừng trích xuất và không gọi model tiếp theo nếu thời gian còn lại dưới 6s", async () => {
+    const result = await extractContractFromBuffer({
+      buffer: Buffer.from("dummy"),
+      mimeType: "image/png",
+      filename: "test.png",
+      remainingBudgetMs: 4_000, // Dưới ngưỡng an toàn 6 giây
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("Quá thời gian thực thi cho phép");
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("từ chối tệp vượt quá 20 MB mà không gọi fetch", async () => {
     const hugeBuffer = Buffer.alloc(MAX_AI_FILE_SIZE_BYTES + 1);
     const result = await extractContractFromBuffer({
@@ -366,19 +396,23 @@ describe("G2 v2 — Cấu hình model & fallback", () => {
     else process.env.GEMINI_MODEL = ORIGINAL_MODEL;
   });
 
-  it("mặc định ưu tiên gemini-3.5-flash-lite ổn định", () => {
+  it("mặc định ưu tiên gemini-3.5-flash-lite ổn định và không chứa model shutdown", () => {
     delete process.env.GEMINI_MODEL;
     const models = getGeminiModels();
     expect(models[0]).toBe("gemini-3.5-flash-lite");
-    expect(models).toContain("gemini-2.5-flash");
+    expect(models).toContain("gemini-2.5-flash-lite");
+    expect(models).toContain("gemini-flash-latest");
+    // Không chứa model đã shutdown/deprecated
+    expect(models).not.toContain("gemini-1.5-flash");
+    expect(models).not.toContain("gemini-2.5-flash");
   });
 
   it("cấu hình GEMINI_MODEL ưu tiên model cấu hình mà không bị trùng lặp", () => {
-    process.env.GEMINI_MODEL = "gemini-2.5-flash";
+    process.env.GEMINI_MODEL = "gemini-2.5-flash-lite";
     const models = getGeminiModels();
-    expect(models[0]).toBe("gemini-2.5-flash");
+    expect(models[0]).toBe("gemini-2.5-flash-lite");
     // Không bị xuất hiện 2 lần
-    expect(models.filter((m) => m === "gemini-2.5-flash")).toHaveLength(1);
+    expect(models.filter((m) => m === "gemini-2.5-flash-lite")).toHaveLength(1);
     expect(models).toContain("gemini-3.5-flash-lite");
   });
 });

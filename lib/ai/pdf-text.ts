@@ -30,25 +30,23 @@ const TIMEOUT_MS = 8_000;
 export async function extractPdfText(buffer: Buffer): Promise<PdfTextResult | null> {
   if (!buffer || buffer.length === 0) return null;
 
-  try {
-    // Dynamic import để tránh bundle pdfjs vào client (lib/ai/gemini.ts chỉ chạy server).
-    // Import từ package root (pdfjs-dist) thay vì deep path để TS dùng types chính thức
-    // (`types/src/pdf.d.ts`) — Vercel/Next build resolve đồng nhất với local, tránh TS2344
-    // do `typeof import("...legacy/build/pdf.mjs")` ở một số môi trường strict.
-    const pdfjs = await import("pdfjs-dist");
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-    // pdfjs v6: cần set workerSrc khi dùng Worker; nếu chạy Node server (không có Worker global)
-    // thì pdfjs fallback chạy fake worker (chậm hơn nhưng vẫn chạy được).
+  try {
+    // Timeout guard — pdfjs không có timeout built-in. Hủy timer ở finally để tránh rò rỉ timer.
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error("PDF parse timeout")), TIMEOUT_MS);
+    });
+
+    // Dynamic import legacy build dành riêng cho môi trường Node.js server, tránh in warning ra stderr
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+
+    // pdfjs v6: cần set workerSrc khi dùng Worker; trên Node server fallback chạy fake worker an toàn.
     try {
       pdfjs.GlobalWorkerOptions.workerSrc = "pdfjs-dist/legacy/build/pdf.worker.mjs";
     } catch {
       // ignore — fallback về fake worker
     }
-
-    // Timeout guard — pdfjs không có timeout built-in.
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("PDF parse timeout")), TIMEOUT_MS);
-    });
 
     const loadPromise = pdfjs.getDocument({
       data: new Uint8Array(buffer),
@@ -87,5 +85,9 @@ export async function extractPdfText(buffer: Buffer): Promise<PdfTextResult | nu
   } catch {
     // Mọi lỗi (timeout, parse fail, worker load fail, import fail) → coi như không trích được.
     return null;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }

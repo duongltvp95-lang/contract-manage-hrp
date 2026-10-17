@@ -37,32 +37,25 @@ export type GeminiFile = {
 };
 
 /**
- * Upload 1 buffer lên Gemini Files API bằng multipart/resumable.
+ * Upload 1 buffer lên Gemini Files API bằng quy trình Resumable Upload chính thức của Google:
+ * 1. POST tới /upload/v1beta/files với X-Goog-Upload-Protocol: resumable, Command: start
+ *    -> Google trả về URL upload trong header `x-goog-upload-url`.
+ * 2. POST trực tiếp nhị phân lên URL nhận được với X-Goog-Upload-Command: upload, finalize.
  *
- * Body multipart/related theo spec:
- * ```
- * --boundary
- * Content-Type: application/json; charset=UTF-8
- *
- * {"file": {"display_name": "filename.pdf"}}
- *
- * --boundary
- * Content-Type: application/pdf
- *
- * <bytes>
- * --boundary--
- * ```
+ * Tham khảo chính thức: https://ai.google.dev/gemini-api/docs/files
  */
 export async function uploadToGeminiFiles({
   buffer,
   mimeType,
   filename,
   apiKey,
+  timeoutMs = UPLOAD_TIMEOUT_MS,
 }: {
   buffer: Buffer;
   mimeType: string;
   filename: string;
   apiKey: string;
+  timeoutMs?: number;
 }): Promise<ServiceResult<GeminiFile>> {
   if (!apiKey) {
     return err("validation", "Thiếu GEMINI_API_KEY khi upload file Gemini.");
@@ -71,53 +64,74 @@ export async function uploadToGeminiFiles({
     return err("validation", "Buffer rỗng — không thể upload lên Gemini Files.");
   }
 
-  const boundary = `----GeminiBoundary${Date.now()}`;
-  const metadata = JSON.stringify({ file: { display_name: filename } });
-
-  // Build multipart body as Buffer (an toàn với mọi mime type, kể cả binary).
-  const encoder = new TextEncoder();
-  const head = encoder.encode(
-    `--${boundary}\r\n` +
-      `Content-Type: application/json; charset=UTF-8\r\n` +
-      `\r\n` +
-      `${metadata}\r\n` +
-      `--${boundary}\r\n` +
-      `Content-Type: ${mimeType}\r\n` +
-      `\r\n`,
-  );
-  const tail = encoder.encode(`\r\n--${boundary}--\r\n`);
-
-  const body = Buffer.concat([head, buffer, tail]);
-
-  const url = UPLOAD_URL;
+  const effectiveTimeout = Math.min(UPLOAD_TIMEOUT_MS, timeoutMs);
+  const startTimeout = Math.min(6_000, effectiveTimeout);
+  const uploadTimeout = Math.max(4_000, effectiveTimeout - 4_000);
 
   try {
-    const response = await fetch(url, {
+    // Bước 1: Khởi tạo phiên upload (resumable start)
+    const initResponse = await fetch(UPLOAD_URL, {
       method: "POST",
       headers: {
-        "Content-Type": `multipart/related; boundary=${boundary}`,
-        "X-Goog-Upload-Protocol": "multipart",
         "x-goog-api-key": apiKey,
+        "X-Goog-Upload-Protocol": "resumable",
+        "X-Goog-Upload-Command": "start",
+        "X-Goog-Upload-Header-Content-Length": String(buffer.length),
+        "X-Goog-Upload-Header-Content-Type": mimeType,
+        "Content-Type": "application/json; charset=UTF-8",
       },
-      body,
-      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+      body: JSON.stringify({ file: { display_name: filename } }),
+      signal: AbortSignal.timeout(startTimeout),
     });
 
-    if (!response.ok) {
-      const errorPayload = (await response.json().catch(() => null)) as {
+    if (!initResponse.ok) {
+      const errorPayload = (await initResponse.json().catch(() => null)) as {
         error?: { message?: string };
       } | null;
-      const message = errorPayload?.error?.message ?? `HTTP ${response.status}`;
-      aiLog.error("Upload Gemini Files thất bại", {
+      const message = errorPayload?.error?.message ?? `HTTP ${initResponse.status}`;
+      aiLog.error("Khởi tạo upload Gemini Files thất bại", {
         filename,
         sizeBytes: buffer.length,
-        statusCode: response.status,
+        statusCode: initResponse.status,
         errorMessage: message,
       });
-      return err("validation", `Upload Gemini Files thất bại: ${message}`);
+      return err("validation", `Khởi tạo upload Gemini Files thất bại: ${message}`);
     }
 
-    const result = (await response.json()) as {
+    const uploadUrl = initResponse.headers.get("x-goog-upload-url");
+    if (!uploadUrl) {
+      aiLog.error("Gemini Files không trả về x-goog-upload-url", { filename });
+      return err("validation", "Gemini Files không trả về URL tải lên resumable.");
+    }
+
+    // Bước 2: Tải dữ liệu nhị phân lên upload URL và finalize
+    const uploadResponse = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": apiKey,
+        "Content-Length": String(buffer.length),
+        "X-Goog-Upload-Offset": "0",
+        "X-Goog-Upload-Command": "upload, finalize",
+      },
+      body: new Uint8Array(buffer),
+      signal: AbortSignal.timeout(uploadTimeout),
+    });
+
+    if (!uploadResponse.ok) {
+      const errorPayload = (await uploadResponse.json().catch(() => null)) as {
+        error?: { message?: string };
+      } | null;
+      const message = errorPayload?.error?.message ?? `HTTP ${uploadResponse.status}`;
+      aiLog.error("Upload dữ liệu Gemini Files thất bại", {
+        filename,
+        sizeBytes: buffer.length,
+        statusCode: uploadResponse.status,
+        errorMessage: message,
+      });
+      return err("validation", `Upload dữ liệu Gemini Files thất bại: ${message}`);
+    }
+
+    const result = (await uploadResponse.json()) as {
       file?: { name?: string; uri?: string; mimeType?: string; sizeBytes?: string };
     };
 
@@ -136,7 +150,7 @@ export async function uploadToGeminiFiles({
       sizeBytes: Number(result.file.sizeBytes ?? buffer.length),
     };
 
-    aiLog.info("Upload Gemini Files thành công", {
+    aiLog.info("Upload Gemini Files thành công (resumable)", {
       filename,
       geminiFileName: file.name,
       sizeBytes: file.sizeBytes,
