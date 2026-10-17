@@ -3,6 +3,7 @@ import "server-only";
 import { type ExtractedContract } from "@schemas/contract";
 import { err, ok, type ServiceResult } from "@/lib/services/types";
 import { normalizeDurationText } from "@/lib/ai/matching";
+import { aiLog } from "@/lib/ai/log";
 
 function getGeminiModels(): string[] {
   const envModel = process.env.GEMINI_MODEL?.trim();
@@ -131,15 +132,25 @@ export function normalizeDateToIso(dateStr?: string): string {
 
 /**
  * Extracts contract metadata and parties from a file buffer using Google Gemini.
+ *
+ * Hỗ trợ 2 luồng (G2 v2):
+ * 1. `geminiFileName` + `geminiFileUri` (ưu tiên) — dùng `fileData`, body nhỏ.
+ * 2. Buffer truyền thống — dùng `inlineData` base64 (fallback cho test/dev không có Files API).
  */
 export async function extractContractFromBuffer({
   buffer,
   mimeType,
   filename = "",
+  geminiFileName,
+  geminiFileUri,
 }: {
   buffer: Buffer;
   mimeType: string;
   filename?: string;
+  /** Optional: tên file đã upload lên Gemini Files API (vd "files/abc123") */
+  geminiFileName?: string;
+  /** Optional: URI của file đã upload (dùng trong fileData.fileUri) */
+  geminiFileUri?: string;
 }): Promise<ServiceResult<ExtractedContract>> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
@@ -165,7 +176,30 @@ export async function extractContractFromBuffer({
     );
   }
 
-  const base64Data = buffer.toString("base64");
+  // Quyết định luồng xử lý:
+  // - Có geminiFileName/Uri (G2 v2 — Files API) → dùng fileData, body vài KB.
+  // - Không có → thử trích text từ PDF (BUG-1 sửa); nếu fail → fallback base64.
+  const useFilesApi = Boolean(geminiFileName && geminiFileUri);
+
+  let base64Data: string | null = null;
+  let pdfTextForModel: string | null = null;
+
+  if (!useFilesApi && resolvedMime === "application/pdf") {
+    try {
+      const { extractPdfText } = await import("@/lib/ai/pdf-text");
+      const pdfResult = await extractPdfText(buffer);
+      if (pdfResult) {
+        pdfTextForModel = pdfResult.text;
+      }
+    } catch {
+      // PDF.js lỗi → fallback xuống luồng base64
+    }
+  }
+
+  if (!useFilesApi && !pdfTextForModel) {
+    base64Data = buffer.toString("base64");
+  }
+
   let lastError = "Không thể kết nối tới dịch vụ AI Google Gemini.";
 
   // Chỉ thử tối đa 2 models nhanh nhất để đảm bảo tổng thời gian không vượt quá giới hạn 60s của Vercel Serverless
@@ -175,22 +209,36 @@ export async function extractContractFromBuffer({
     const startTime = Date.now();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-    const requestBody = {
-      contents: [
-        {
-          parts: [
-            {
-              inlineData: {
-                mimeType: resolvedMime,
-                data: base64Data,
-              },
-            },
-            {
-              text: EXTRACTION_SYSTEM_PROMPT,
-            },
-          ],
+    // Build parts dựa trên luồng đã chọn.
+    const parts: Array<Record<string, unknown>> = [];
+
+    if (useFilesApi) {
+      // Files API: chỉ cần fileData + prompt. Body vài KB.
+      parts.push({
+        fileData: {
+          mimeType: resolvedMime,
+          fileUri: geminiFileUri,
         },
-      ],
+      });
+      parts.push({ text: EXTRACTION_SYSTEM_PROMPT });
+    } else if (pdfTextForModel) {
+      // PDF có text layer: gửi văn bản thuần.
+      parts.push({
+        text: `Đây là nội dung văn bản được trích xuất từ tài liệu PDF:\n\n${pdfTextForModel}\n\n---\nYêu cầu trích xuất thông tin từ nội dung trên:`,
+      });
+    } else {
+      // Fallback: gửi base64 (ảnh hoặc PDF scan).
+      parts.push({
+        inlineData: {
+          mimeType: resolvedMime,
+          data: base64Data!,
+        },
+      });
+      parts.push({ text: EXTRACTION_SYSTEM_PROMPT });
+    }
+
+    const requestBody = {
+      contents: [{ parts }],
       generationConfig: {
         responseMimeType: "application/json",
         temperature: 0.1,
@@ -198,7 +246,11 @@ export async function extractContractFromBuffer({
     };
 
     try {
-      console.log(`[ai:gemini] Đang trích xuất với model: ${model}...`);
+      aiLog.info("Đang trích xuất với model", {
+        model,
+        useFilesApi,
+        elapsedMs: Date.now() - startTime,
+      });
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -217,7 +269,10 @@ export async function extractContractFromBuffer({
 
         const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!rawText) {
-          console.warn(`[ai:gemini] Model ${model} trả về nội dung rỗng. Fallback...`);
+          aiLog.warn("Model trả về nội dung rỗng", {
+            model,
+            elapsedMs: Date.now() - startTime,
+          });
           continue;
         }
 
@@ -245,10 +300,18 @@ export async function extractContractFromBuffer({
             summary: String(parsedJson.summary ?? "").trim(),
           };
 
-          console.log(`[ai:gemini] Trích xuất thành công với model ${model} (${Date.now() - startTime}ms)`);
+          aiLog.info("Trích xuất thành công", {
+            model,
+            elapsedMs: Date.now() - startTime,
+            useFilesApi,
+          });
           return ok(extracted);
         } catch (parseErr) {
-          console.error(`[ai:gemini] Parse error on model ${model}:`, rawText, parseErr);
+          aiLog.error("Parse JSON thất bại", {
+            model,
+            rawTextSnippet: rawText.slice(0, 200),
+            errorMessage: String(parseErr),
+          });
           continue;
         }
       }
@@ -261,7 +324,12 @@ export async function extractContractFromBuffer({
 
       // If the model is 503 (high demand) or 404 (model unavailable) or 429, continue to next fallback model
       if (response.status === 503 || response.status === 404 || response.status === 429) {
-        console.warn(`[ai:gemini] Model ${model} trả về HTTP ${response.status} (${lastError}). Đang chuyển sang model tiếp theo...`);
+        aiLog.warn("Model gặp lỗi HTTP, chuyển fallback", {
+          model,
+          statusCode: response.status,
+          lastError,
+          elapsedMs: Date.now() - startTime,
+        });
         continue;
       }
 
@@ -276,7 +344,11 @@ export async function extractContractFromBuffer({
         : networkError instanceof Error
           ? networkError.message
           : "Lỗi kết nối mạng";
-      console.warn(`[ai:gemini] Model ${model} gặp lỗi: ${lastError}. Đang chuyển fallback...`);
+      aiLog.warn("Model gặp lỗi mạng, chuyển fallback", {
+        model,
+        lastError,
+        elapsedMs: Date.now() - startTime,
+      });
     }
   }
 

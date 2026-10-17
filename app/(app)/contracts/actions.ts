@@ -27,6 +27,8 @@ import {
 } from "@/lib/server-action";
 import type { ExtractedContractResult } from "@schemas/contract";
 import { extractContractFromBuffer } from "@/lib/ai/gemini";
+import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
+import { aiLog } from "@/lib/ai/log";
 import {
   cleanEntityName,
   findBestMatchingCompany,
@@ -221,11 +223,15 @@ export async function unarchiveContractAction(
 export async function extractContractAction(
   formData: FormData,
 ): Promise<ActionResult<ExtractedContractResult>> {
+  // G2 v2: khai báo ngoài try để finally có thể truy cập cleanup.
+  let geminiFileName: string | null = null;
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  const objectKey = formData.get("objectKey");
+
   try {
     const access = await authorized();
     if (!access.ok) return access.result;
 
-    const objectKey = formData.get("objectKey");
     let buffer: Buffer;
     let filename = "document.pdf";
     let mimeType = "application/pdf";
@@ -264,10 +270,35 @@ export async function extractContractAction(
       mimeType = file.type;
     }
 
+    // G2 v2: Ưu tiên upload lên Gemini Files API trước khi gọi generateContent.
+    // Lợi ích: body request nhỏ (vài KB) thay vì inline base64 (vài MB → vài chục MB).
+    let geminiFileUri: string | null = null;
+    if (apiKey) {
+      const uploadRes = await uploadToGeminiFiles({
+        buffer,
+        mimeType,
+        filename,
+        apiKey,
+      });
+      if (uploadRes.ok) {
+        geminiFileName = uploadRes.data.name;
+        geminiFileUri = uploadRes.data.uri;
+      } else {
+        // Upload fail (quota, network, 5xx) → fallback về inlineData base64.
+        // Vẫn có thể trích xuất được, chỉ chậm hơn.
+        aiLog.warn("Upload Gemini Files fail, fallback inlineData", {
+          filename,
+          errorMessage: uploadRes.message,
+        });
+      }
+    }
+
     const extractionResult = await extractContractFromBuffer({
       buffer,
       mimeType,
       filename,
+      geminiFileName: geminiFileUri ? geminiFileName ?? undefined : undefined,
+      geminiFileUri: geminiFileUri ?? undefined,
     });
 
     if (!extractionResult.ok) {
@@ -387,7 +418,9 @@ export async function extractContractAction(
       data: result,
     };
   } catch (error) {
-    console.error("[extractContractAction] error:", error);
+    aiLog.error("extractContractAction thất bại", {
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
     return {
       ok: false,
       code: "internal_error",
@@ -396,6 +429,12 @@ export async function extractContractAction(
           ? error.message
           : "Hệ thống gặp sự cố trong quá trình phân tích tài liệu bằng AI.",
     };
+  } finally {
+    // G2 v2: cleanup Gemini file tạm sau khi extract xong (dù thành công hay fail).
+    // File Gemini có TTL 48h → xoá ngay để tránh tốn quota.
+    if (geminiFileName && apiKey) {
+      await deleteGeminiFile(geminiFileName, apiKey);
+    }
   }
 }
 
