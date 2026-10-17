@@ -230,6 +230,7 @@ export async function extractContractAction(
 ): Promise<ActionResult<ExtractedContractResult>> {
   const actionStartTime = Date.now();
   const TOTAL_ACTION_BUDGET_MS = 48_000; // 48s: chừa tối thiểu 12s biên an toàn trước 60s của Vercel
+  const actionDeadline = actionStartTime + TOTAL_ACTION_BUDGET_MS;
 
   // G2 v2: khai báo ngoài try để finally có thể truy cập cleanup.
   let geminiFileName: string | null = null;
@@ -249,6 +250,16 @@ export async function extractContractAction(
       if (!objectKey.startsWith(expectedPrefix)) {
         return validationFailure("objectKey không hợp lệ", [
           { path: "objectKey", message: "Tệp không thuộc tổ chức của bạn" },
+        ]);
+      }
+
+      if (actionDeadline - Date.now() < 12_000) {
+        await deleteObject(objectKey).catch(() => {});
+        return validationFailure("Hệ thống hết thời gian xử lý", [
+          {
+            path: "file",
+            message: "Quá thời gian xử lý cho phép của hệ thống. Vui lòng thử lại với tệp tài liệu ngắn hơn.",
+          },
         ]);
       }
 
@@ -319,9 +330,16 @@ export async function extractContractAction(
     }
 
     // Tính toán ngân sách thời gian còn lại cho khâu AI
-    const elapsedSoFar = Date.now() - actionStartTime;
-    // Dành 4 giây cuối cho DB partner search và cleanup
-    const remainingAiBudgetMs = Math.max(8_000, TOTAL_ACTION_BUDGET_MS - elapsedSoFar - 4_000);
+    // Dành 5 giây cuối cho DB partner search và cleanup
+    const remainingAiBudgetMs = actionDeadline - Date.now() - 5_000;
+    if (remainingAiBudgetMs < 6_000) {
+      return validationFailure("Hệ thống hết thời gian xử lý", [
+        {
+          path: "file",
+          message: "Quá thời gian xử lý cho phép của hệ thống. Vui lòng thử lại với tệp tài liệu ngắn hơn.",
+        },
+      ]);
+    }
 
     // Chọn chiến lược gửi cho Gemini theo dung lượng:
     // - Tệp >= 2 MB: Tải lên Gemini Files API để tránh body base64 quá lớn làm nghẽn mạng/timeout khi retry.
@@ -334,7 +352,7 @@ export async function extractContractAction(
         mimeType,
         filename,
         apiKey,
-        timeoutMs: Math.min(12_000, Math.floor(remainingAiBudgetMs / 2)),
+        timeoutMs: Math.min(10_000, Math.floor(remainingAiBudgetMs / 2)),
       });
       if (uploadRes.ok) {
         geminiFileName = uploadRes.data.name;
@@ -349,8 +367,20 @@ export async function extractContractAction(
       }
     }
 
-    const postUploadElapsed = Date.now() - actionStartTime;
-    const remainingExtractBudgetMs = Math.max(6_000, TOTAL_ACTION_BUDGET_MS - postUploadElapsed - 4_000);
+    const remainingExtractBudgetMs = actionDeadline - Date.now() - 5_000;
+    if (remainingExtractBudgetMs < 6_000) {
+      if (geminiFileName && apiKey) {
+        const fileToDelete = geminiFileName;
+        geminiFileName = null;
+        await deleteGeminiFile(fileToDelete, apiKey);
+      }
+      return validationFailure("Hệ thống hết thời gian xử lý", [
+        {
+          path: "file",
+          message: "Quá thời gian xử lý cho phép của hệ thống. Vui lòng thử lại với tệp tài liệu ngắn hơn.",
+        },
+      ]);
+    }
 
     const extractionResult = await extractContractFromBuffer({
       buffer,
@@ -360,6 +390,13 @@ export async function extractContractAction(
       geminiFileUri: geminiFileUri ?? undefined,
       remainingBudgetMs: remainingExtractBudgetMs,
     });
+
+    // Dọn dẹp tệp Gemini NGAY LẬP TỨC sau khi trích xuất xong (không chờ các bước DB phía sau)
+    if (geminiFileName && apiKey) {
+      const fileToDelete = geminiFileName;
+      geminiFileName = null; // Tránh dọn dẹp lặp lại ở finally
+      await deleteGeminiFile(fileToDelete, apiKey);
+    }
 
     if (!extractionResult.ok) {
       return fromService(extractionResult);
@@ -404,11 +441,12 @@ export async function extractContractAction(
     const trimmedPartnerName = extracted.partnerName?.trim() ?? "";
 
     // Nếu trong danh bạ chưa có đối tác này, AI đọc được tên đối tác và TUYỆT ĐỐI không phải công ty nội bộ:
-    // Tự động tạo mới đối tác vào hệ thống
+    // Tự động tạo mới đối tác vào hệ thống nếu vẫn còn ít nhất 3s trước deadline
     if (
       !matchedPartner &&
       trimmedPartnerName.length > 0 &&
-      !isInternalCompany(trimmedPartnerName)
+      !isInternalCompany(trimmedPartnerName) &&
+      actionDeadline - Date.now() >= 3_000
     ) {
       const targetCompanyIds = matchedCompany?.id
         ? [matchedCompany.id]

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { OBJECT_KEY_PREFIX, buildObjectKey, isObjectKeyFor, sanitizeFilename } from "@/lib/r2/keys";
 import {
@@ -7,6 +7,7 @@ import {
   VIEW_URL_TTL_MIN_SECONDS,
   VIEW_URL_TTL_SECONDS,
   clampViewTtl,
+  createUploadUrl,
 } from "@/lib/r2/presign";
 
 /**
@@ -205,3 +206,35 @@ describe("presigned URL TTLs (plan section 60)", () => {
     expect(UPLOAD_URL_TTL_SECONDS).toBeLessThanOrEqual(VIEW_URL_TTL_MAX_SECONDS);
   });
 });
+
+describe("createUploadUrl (AWS SigV4 Content-Length binding)", () => {
+  const origEnv = { ...process.env };
+
+  beforeAll(() => {
+    process.env.R2_ACCOUNT_ID = "mock-account";
+    process.env.R2_ENDPOINT = "https://mock-account.r2.cloudflarestorage.com";
+    process.env.R2_BUCKET_NAME = "mock-bucket";
+    process.env.R2_ACCESS_KEY_ID = "mock-access-key";
+    process.env.R2_SECRET_ACCESS_KEY = "mock-secret-access-key";
+  });
+
+  afterAll(() => {
+    process.env = origEnv;
+  });
+
+  it("ký Content-Length vào X-Amz-SignedHeaders khi truyền contentLength", async () => {
+    const url = await createUploadUrl("test-prefix/test.pdf", "application/pdf", 1024);
+    const parsed = new URL(url);
+    const signedHeaders = parsed.searchParams.get("X-Amz-SignedHeaders");
+    expect(signedHeaders).toBe("content-length;host");
+  });
+
+  it("không ký Content-Length khi không truyền contentLength", async () => {
+    const url = await createUploadUrl("test-prefix/test.pdf", "application/pdf");
+    const parsed = new URL(url);
+    const signedHeaders = parsed.searchParams.get("X-Amz-SignedHeaders");
+    expect(signedHeaders).toBe("host");
+    expect(signedHeaders).not.toContain("content-length");
+  });
+});
+

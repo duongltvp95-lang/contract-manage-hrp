@@ -410,25 +410,41 @@ describe("G2 v2 — Cấu hình model & fallback", () => {
     else process.env.GEMINI_MODEL = ORIGINAL_MODEL;
   });
 
-  it("mặc định ưu tiên gemini-3.5-flash-lite ổn định và fallback gemini-3-flash-preview, gemini-flash-latest", () => {
+  it("mặc định ưu tiên gemini-3.5-flash-lite ổn định và fallback gemini-3.8-flash, gemini-flash-latest", () => {
     delete process.env.GEMINI_MODEL;
     const models = getGeminiModels();
     expect(models[0]).toBe("gemini-3.5-flash-lite");
-    expect(models).toContain("gemini-3-flash-preview");
+    expect(models).toContain("gemini-3.8-flash");
     expect(models).toContain("gemini-flash-latest");
-    // Không chứa model đã shutdown/deprecated hoặc restricted
+    // Không chứa model preview hay model đã shutdown/deprecated hoặc restricted
+    expect(models).not.toContain("gemini-3-flash-preview");
     expect(models).not.toContain("gemini-1.5-flash");
     expect(models).not.toContain("gemini-2.5-flash");
     expect(models).not.toContain("gemini-2.5-flash-lite");
   });
 
   it("cấu hình GEMINI_MODEL ưu tiên model cấu hình mà không bị trùng lặp", () => {
-    process.env.GEMINI_MODEL = "gemini-3-flash-preview";
+    process.env.GEMINI_MODEL = "gemini-3.8-flash";
     const models = getGeminiModels();
-    expect(models[0]).toBe("gemini-3-flash-preview");
+    expect(models[0]).toBe("gemini-3.8-flash");
     // Không bị xuất hiện 2 lần
-    expect(models.filter((m) => m === "gemini-3-flash-preview")).toHaveLength(1);
+    expect(models.filter((m) => m === "gemini-3.8-flash")).toHaveLength(1);
     expect(models).toContain("gemini-3.5-flash-lite");
+  });
+});
+
+describe("G2 v2 — Cấu hình MIME & Kích thước", () => {
+  it("ALLOWED_MIME_TYPES chỉ cho phép PDF, JPEG, PNG, WebP", () => {
+    expect(ALLOWED_MIME_TYPES.has("application/pdf")).toBe(true);
+    expect(ALLOWED_MIME_TYPES.has("image/jpeg")).toBe(true);
+    expect(ALLOWED_MIME_TYPES.has("image/png")).toBe(true);
+    expect(ALLOWED_MIME_TYPES.has("image/webp")).toBe(true);
+    expect(ALLOWED_MIME_TYPES.has("application/msword")).toBe(false);
+    expect(ALLOWED_MIME_TYPES.has("text/plain")).toBe(false);
+  });
+
+  it("MAX_AI_FILE_SIZE_BYTES là 20 MB", () => {
+    expect(MAX_AI_FILE_SIZE_BYTES).toBe(20 * 1024 * 1024);
   });
 });
 

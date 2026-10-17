@@ -27,15 +27,30 @@ export type PdfTextResult = {
 const MIN_TEXT_LENGTH = 50; // < 50 ký tự coi như scan
 const TIMEOUT_MS = 8_000;
 
-export async function extractPdfText(buffer: Buffer): Promise<PdfTextResult | null> {
+export async function extractPdfText(
+  buffer: Buffer,
+  timeoutMs: number = TIMEOUT_MS,
+): Promise<PdfTextResult | null> {
   if (!buffer || buffer.length === 0) return null;
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let isCancelled = false;
+  let loadingTask: { destroy?: () => Promise<void> } | undefined;
+  let currentPdf: { destroy?: () => Promise<void> } | undefined;
 
   try {
     // Timeout guard — giới hạn toàn bộ quá trình đọc PDF (bao gồm cả load doc và toàn bộ vòng lặp getTextContent)
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error("PDF parse timeout")), TIMEOUT_MS);
+      timeoutId = setTimeout(() => {
+        isCancelled = true;
+        if (loadingTask && typeof loadingTask.destroy === "function") {
+          loadingTask.destroy().catch(() => {});
+        }
+        if (currentPdf && typeof currentPdf.destroy === "function") {
+          currentPdf.destroy().catch(() => {});
+        }
+        reject(new Error("PDF parse timeout"));
+      }, Math.max(50, timeoutMs));
     });
 
     const parseProcess = async (): Promise<PdfTextResult | null> => {
@@ -49,25 +64,65 @@ export async function extractPdfText(buffer: Buffer): Promise<PdfTextResult | nu
         // ignore — fallback về fake worker
       }
 
-      const pdf = await pdfjs.getDocument({
+      loadingTask = pdfjs.getDocument({
         data: new Uint8Array(buffer),
         useSystemFonts: true,
         disableFontFace: true,
         // Tránh fetch CMaps/font ngoài — chỉ dùng standard fonts built-in.
         verbosity: 0,
+      });
+
+      const pdf = await (loadingTask as {
+        promise: Promise<{
+          numPages: number;
+          getPage: (i: number) => Promise<{
+            getTextContent: () => Promise<{ items: Array<{ str?: string }> }>;
+          }>;
+          destroy?: () => Promise<void>;
+        }>;
       }).promise;
+
+      currentPdf = pdf;
+      if (isCancelled) {
+        if (pdf && typeof pdf.destroy === "function") {
+          pdf.destroy().catch(() => {});
+        }
+        return null;
+      }
 
       const pageTexts: string[] = [];
       const maxPages = Math.min(pdf.numPages, 50); // cap 50 trang
       for (let i = 1; i <= maxPages; i++) {
+        if (isCancelled) {
+          if (pdf && typeof pdf.destroy === "function") {
+            pdf.destroy().catch(() => {});
+          }
+          return null;
+        }
         const page = await pdf.getPage(i);
+        if (isCancelled) {
+          if (pdf && typeof pdf.destroy === "function") {
+            pdf.destroy().catch(() => {});
+          }
+          return null;
+        }
         const content = await page.getTextContent();
+        if (isCancelled) {
+          if (pdf && typeof pdf.destroy === "function") {
+            pdf.destroy().catch(() => {});
+          }
+          return null;
+        }
         const text = content.items
-          .map((item) => ("str" in item ? item.str : ""))
+          .map((item) => ("str" in item && typeof item.str === "string" ? item.str : ""))
           .join(" ");
         if (text.trim()) {
           pageTexts.push(text.trim());
         }
+      }
+
+      if (pdf && typeof pdf.destroy === "function") {
+        pdf.destroy().catch(() => {});
       }
 
       const isTruncated = pdf.numPages > 50;

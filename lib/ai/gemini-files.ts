@@ -65,8 +65,12 @@ export async function uploadToGeminiFiles({
   }
 
   const effectiveTimeout = Math.min(UPLOAD_TIMEOUT_MS, timeoutMs);
-  const startTimeout = Math.min(6_000, effectiveTimeout);
-  const uploadTimeout = Math.max(4_000, effectiveTimeout - 4_000);
+  const uploadDeadline = Date.now() + effectiveTimeout;
+  const timeBeforeStart = uploadDeadline - Date.now();
+  if (timeBeforeStart <= 1_500) {
+    return err("validation", "Không đủ thời gian để upload tệp lên Gemini Files.");
+  }
+  const startTimeout = Math.min(5_000, timeBeforeStart);
 
   try {
     // Bước 1: Khởi tạo phiên upload (resumable start)
@@ -104,6 +108,12 @@ export async function uploadToGeminiFiles({
       return err("validation", "Gemini Files không trả về URL tải lên resumable.");
     }
 
+    const remainingUploadMs = uploadDeadline - Date.now();
+    if (remainingUploadMs <= 1_000) {
+      aiLog.error("Hết ngân sách thời gian khởi tạo upload Gemini Files", { filename });
+      return err("validation", "Quá thời gian khởi tạo tải tệp lên Gemini Files.");
+    }
+
     // Bước 2: Tải dữ liệu nhị phân lên upload URL và finalize
     const uploadResponse = await fetch(uploadUrl, {
       method: "POST",
@@ -114,7 +124,7 @@ export async function uploadToGeminiFiles({
         "X-Goog-Upload-Command": "upload, finalize",
       },
       body: new Uint8Array(buffer),
-      signal: AbortSignal.timeout(uploadTimeout),
+      signal: AbortSignal.timeout(remainingUploadMs),
     });
 
     if (!uploadResponse.ok) {

@@ -9,7 +9,7 @@ export function getGeminiModels(): string[] {
   const envModel = process.env.GEMINI_MODEL?.trim();
   const defaults = [
     "gemini-3.5-flash-lite",
-    "gemini-3-flash-preview",
+    "gemini-3.8-flash",
     "gemini-flash-latest",
   ];
   if (envModel) {
@@ -241,7 +241,8 @@ export async function extractContractFromBuffer({
   if (!useFilesApi && resolvedMime === "application/pdf") {
     try {
       const { extractPdfText } = await import("@/lib/ai/pdf-text");
-      const pdfResult = await extractPdfText(buffer);
+      const pdfTimeout = Math.min(8_000, remainingBudgetMs);
+      const pdfResult = await extractPdfText(buffer, pdfTimeout);
       if (pdfResult) {
         pdfTextForModel = pdfResult.text;
       }
