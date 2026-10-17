@@ -10,7 +10,6 @@ export function getGeminiModels(): string[] {
   const defaults = [
     "gemini-3.5-flash-lite",
     "gemini-3.8-flash",
-    "gemini-flash-latest",
   ];
   if (envModel) {
     return [envModel, ...defaults.filter((m) => m !== envModel)];
@@ -206,6 +205,9 @@ export async function extractContractFromBuffer({
   /** Ngân sách thời gian tối đa còn lại cho bước extract (ms) */
   remainingBudgetMs?: number;
 }): Promise<ServiceResult<ExtractedContract>> {
+  const extractStartTime = Date.now();
+  const extractDeadline = extractStartTime + remainingBudgetMs;
+
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
     return err(
@@ -240,11 +242,15 @@ export async function extractContractFromBuffer({
 
   if (!useFilesApi && resolvedMime === "application/pdf") {
     try {
-      const { extractPdfText } = await import("@/lib/ai/pdf-text");
-      const pdfTimeout = Math.min(8_000, remainingBudgetMs);
-      const pdfResult = await extractPdfText(buffer, pdfTimeout);
-      if (pdfResult) {
-        pdfTextForModel = pdfResult.text;
+      // Dành tối thiểu 6s cho bước gọi model Gemini phía sau
+      const remainingBeforePdf = extractDeadline - Date.now() - 6_000;
+      if (remainingBeforePdf >= 2_000) {
+        const { extractPdfText } = await import("@/lib/ai/pdf-text");
+        const pdfTimeout = Math.min(8_000, remainingBeforePdf);
+        const pdfResult = await extractPdfText(buffer, pdfTimeout);
+        if (pdfResult) {
+          pdfTextForModel = pdfResult.text;
+        }
       }
     } catch {
       // PDF.js lỗi → fallback xuống luồng base64
@@ -257,19 +263,17 @@ export async function extractContractFromBuffer({
 
   let lastError = "Không thể kết nối tới dịch vụ AI Google Gemini.";
 
-  // Thử tối đa 3 models trong danh sách nếu ngân sách thời gian thực tế vẫn còn đủ
+  // Thử tối đa các models trong danh sách nếu ngân sách thời gian thực tế vẫn còn đủ
   const models = getGeminiModels().slice(0, 3);
-  const startExtractTime = Date.now();
 
   for (const model of models) {
-    const elapsedSoFar = Date.now() - startExtractTime;
-    const remainingTime = remainingBudgetMs - elapsedSoFar;
+    const remainingTime = extractDeadline - Date.now();
 
     // Nếu thời gian còn lại dưới 6 giây, dừng ngay để không vượt quá giới hạn 60s của Vercel
     if (remainingTime < 6_000) {
       aiLog.warn("Hết ngân sách thời gian trích xuất AI, dừng fallback", {
         model,
-        elapsedSoFar,
+        elapsedSoFar: Date.now() - extractStartTime,
         remainingBudgetMs,
       });
       lastError = "Quá thời gian thực thi cho phép. Vui lòng bấm trích xuất lại hoặc sử dụng tệp tài liệu ngắn hơn.";

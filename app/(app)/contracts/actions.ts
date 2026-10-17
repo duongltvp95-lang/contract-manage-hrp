@@ -222,6 +222,22 @@ export async function unarchiveContractAction(
   return fromService(await unarchiveContract(id));
 }
 
+async function withIoTimeout<T>(
+  promise: Promise<T>,
+  maxMs: number,
+  fallback: T,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), Math.max(100, maxMs));
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * AI Contract Extractor — trích xuất tự động thông tin từ tệp PDF/ảnh bằng Google Gemini.
  */
@@ -264,7 +280,8 @@ export async function extractContractAction(
       }
 
       // Kiểm tra Content-Length thực tế bằng HEAD trước khi tải toàn bộ object vào bộ nhớ
-      const head = await headObject(objectKey);
+      const headTimeoutMs = Math.min(5_000, Math.max(1_000, actionDeadline - Date.now() - 15_000));
+      const head = await headObject(objectKey, { timeoutMs: headTimeoutMs });
       if (!head.exists || head.contentLength === null) {
         await deleteObject(objectKey).catch(() => {});
         return validationFailure("Không tìm thấy tệp", [
@@ -282,12 +299,34 @@ export async function extractContractAction(
         ]);
       }
 
-      const downloaded = await getObjectBuffer(objectKey);
+      // Kiểm tra lại ngân sách trước khi bắt đầu tải toàn bộ buffer từ R2
+      if (actionDeadline - Date.now() < 12_000) {
+        await deleteObject(objectKey).catch(() => {});
+        return validationFailure("Hệ thống hết thời gian xử lý", [
+          {
+            path: "file",
+            message: "Quá thời gian xử lý cho phép của hệ thống. Vui lòng thử lại với tệp tài liệu ngắn hơn.",
+          },
+        ]);
+      }
+
+      const downloadTimeoutMs = Math.min(10_000, Math.max(1_000, actionDeadline - Date.now() - 10_000));
+      const downloaded = await getObjectBuffer(objectKey, { timeoutMs: downloadTimeoutMs });
       await deleteObject(objectKey).catch(() => {});
 
       if (!downloaded) {
         return validationFailure("Không tìm thấy tệp", [
           { path: "objectKey", message: "Không thể đọc tệp từ kho lưu trữ đám mây" },
+        ]);
+      }
+
+      // Kiểm tra lại ngân sách ngay sau khi tải xong tệp từ R2
+      if (actionDeadline - Date.now() < 10_000) {
+        return validationFailure("Hệ thống hết thời gian xử lý", [
+          {
+            path: "file",
+            message: "Quá thời gian xử lý cho phép của hệ thống. Vui lòng thử lại với tệp tài liệu ngắn hơn.",
+          },
         ]);
       }
 
@@ -422,83 +461,124 @@ export async function extractContractAction(
     extracted.companyName = reconciled.companyName;
 
     // Tìm kiếm đối tác và công ty tương đồng trong tổ chức hiện tại
-    const searchTerm = extracted.partnerName ? cleanEntityName(extracted.partnerName) : "";
-    let partnersRes = await searchPartners(searchTerm);
-    if ((!partnersRes.ok || partnersRes.data.length === 0) && searchTerm !== "") {
-      partnersRes = await searchPartners("");
-    }
-    const companiesRes = await listCompanies({
-      organizationId: access.user.organizationId,
-    });
-
-    const partners = partnersRes.ok ? partnersRes.data : [];
-    const companies = companiesRes.ok ? companiesRes.data : [];
-
-    let matchedPartner = findBestMatchingPartner(extracted.partnerName, partners);
-    const matchedCompany = findBestMatchingCompany(extracted.companyName, companies);
-
+    let matchedPartner: { id: string; name: string } | null = null;
+    let matchedCompany: { id: string; name: string } | null = null;
     let isNewPartner = false;
-    const trimmedPartnerName = extracted.partnerName?.trim() ?? "";
+    let duplicate: Awaited<ReturnType<typeof findDuplicateContract>> = null;
 
-    // Nếu trong danh bạ chưa có đối tác này, AI đọc được tên đối tác và TUYỆT ĐỐI không phải công ty nội bộ:
-    // Tự động tạo mới đối tác vào hệ thống nếu vẫn còn ít nhất 3s trước deadline
-    if (
-      !matchedPartner &&
-      trimmedPartnerName.length > 0 &&
-      !isInternalCompany(trimmedPartnerName) &&
-      actionDeadline - Date.now() >= 3_000
-    ) {
-      const targetCompanyIds = matchedCompany?.id
-        ? [matchedCompany.id]
-        : companies.length > 0
-          ? [companies[0].id]
-          : [];
+    // Chỉ thực hiện các truy vấn DB bổ sung nếu ngân sách còn ít nhất 3 giây
+    if (actionDeadline - Date.now() >= 3_000) {
+      const searchTerm = extracted.partnerName ? cleanEntityName(extracted.partnerName) : "";
+      const remainingForDb = actionDeadline - Date.now() - 1_000;
+      const partnerTimeout = Math.min(2_000, Math.max(300, Math.floor(remainingForDb / 3)));
 
-      if (targetCompanyIds.length > 0) {
-        let taxCode = extracted.partnerTaxCode?.trim() || "";
-        if (!/^\d{10}(-\d{3})?$/.test(taxCode)) {
-          taxCode = "";
-        }
+      let partnersRes = await withIoTimeout(
+        searchPartners(searchTerm),
+        partnerTimeout,
+        { ok: false } as Awaited<ReturnType<typeof searchPartners>>,
+      );
 
-        let createRes = await createPartner(
-          {
-            name: trimmedPartnerName,
-            taxCode: taxCode || undefined,
-            address: extracted.partnerAddress?.trim() || undefined,
-            companyIds: targetCompanyIds,
-          },
-          { organizationId: access.user.organizationId },
+      if (
+        (!partnersRes.ok || partnersRes.data.length === 0) &&
+        searchTerm !== "" &&
+        actionDeadline - Date.now() >= 2_500
+      ) {
+        partnersRes = await withIoTimeout(
+          searchPartners(""),
+          partnerTimeout,
+          { ok: false } as Awaited<ReturnType<typeof searchPartners>>,
         );
+      }
 
-        // Nếu tạo với taxCode/address bị lỗi, fallback tạo với name + companyIds
-        if (!createRes.ok) {
-          createRes = await createPartner(
-            {
-              name: trimmedPartnerName,
-              companyIds: targetCompanyIds,
-            },
-            { organizationId: access.user.organizationId },
+      const companiesRes =
+        actionDeadline - Date.now() >= 2_000
+          ? await withIoTimeout(
+              listCompanies({ organizationId: access.user.organizationId }),
+              partnerTimeout,
+              { ok: false } as Awaited<ReturnType<typeof listCompanies>>,
+            )
+          : ({ ok: false } as Awaited<ReturnType<typeof listCompanies>>);
+
+      const partners = partnersRes.ok ? partnersRes.data : [];
+      const companies = companiesRes.ok ? companiesRes.data : [];
+
+      matchedPartner = findBestMatchingPartner(extracted.partnerName, partners);
+      matchedCompany = findBestMatchingCompany(extracted.companyName, companies);
+
+      const trimmedPartnerName = extracted.partnerName?.trim() ?? "";
+
+      // Nếu trong danh bạ chưa có đối tác này, AI đọc được tên đối tác và TUYỆT ĐỐI không phải công ty nội bộ:
+      // Tự động tạo mới đối tác vào hệ thống nếu vẫn còn ít nhất 2.5s trước deadline
+      if (
+        !matchedPartner &&
+        trimmedPartnerName.length > 0 &&
+        !isInternalCompany(trimmedPartnerName) &&
+        actionDeadline - Date.now() >= 2_500
+      ) {
+        const targetCompanyIds = matchedCompany?.id
+          ? [matchedCompany.id]
+          : companies.length > 0
+            ? [companies[0].id]
+            : [];
+
+        if (targetCompanyIds.length > 0) {
+          let taxCode = extracted.partnerTaxCode?.trim() || "";
+          if (!/^\d{10}(-\d{3})?$/.test(taxCode)) {
+            taxCode = "";
+          }
+
+          let createRes = await withIoTimeout(
+            createPartner(
+              {
+                name: trimmedPartnerName,
+                taxCode: taxCode || undefined,
+                address: extracted.partnerAddress?.trim() || undefined,
+                companyIds: targetCompanyIds,
+              },
+              { organizationId: access.user.organizationId },
+            ),
+            1_500,
+            { ok: false } as Awaited<ReturnType<typeof createPartner>>,
           );
-        }
 
-        if (createRes.ok) {
-          matchedPartner = {
-            id: createRes.data.id,
-            name: createRes.data.name,
-          };
-          isNewPartner = true;
+          // Nếu tạo với taxCode/address bị lỗi, fallback tạo với name + companyIds nếu còn thời gian
+          if (!createRes.ok && actionDeadline - Date.now() >= 2_000) {
+            createRes = await withIoTimeout(
+              createPartner(
+                {
+                  name: trimmedPartnerName,
+                  companyIds: targetCompanyIds,
+                },
+                { organizationId: access.user.organizationId },
+              ),
+              1_500,
+              { ok: false } as Awaited<ReturnType<typeof createPartner>>,
+            );
+          }
+
+          if (createRes.ok) {
+            matchedPartner = {
+              id: createRes.data.id,
+              name: createRes.data.name,
+            };
+            isNewPartner = true;
+          }
         }
       }
-    }
 
-    const duplicate = extracted.contractNumber
-      ? await findDuplicateContract({
-          contractNumber: extracted.contractNumber,
-          signedDate: extracted.signedDate,
-          expiryDate: extracted.expiryDate,
-          organizationId: access.user.organizationId,
-        })
-      : null;
+      if (extracted.contractNumber && actionDeadline - Date.now() >= 1_500) {
+        duplicate = await withIoTimeout(
+          findDuplicateContract({
+            contractNumber: extracted.contractNumber,
+            signedDate: extracted.signedDate,
+            expiryDate: extracted.expiryDate,
+            organizationId: access.user.organizationId,
+          }),
+          1_000,
+          null,
+        );
+      }
+    }
 
     const result: ExtractedContractResult = {
       ...extracted,

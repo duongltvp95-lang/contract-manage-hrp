@@ -410,13 +410,14 @@ describe("G2 v2 — Cấu hình model & fallback", () => {
     else process.env.GEMINI_MODEL = ORIGINAL_MODEL;
   });
 
-  it("mặc định ưu tiên gemini-3.5-flash-lite ổn định và fallback gemini-3.8-flash, gemini-flash-latest", () => {
+  it("mặc định ưu tiên gemini-3.5-flash-lite ổn định và fallback gemini-3.8-flash cố định (GA)", () => {
     delete process.env.GEMINI_MODEL;
     const models = getGeminiModels();
     expect(models[0]).toBe("gemini-3.5-flash-lite");
     expect(models).toContain("gemini-3.8-flash");
-    expect(models).toContain("gemini-flash-latest");
-    // Không chứa model preview hay model đã shutdown/deprecated hoặc restricted
+    expect(models).toHaveLength(2);
+    // Không chứa alias tự đổi mục tiêu, model preview hay model đã shutdown/deprecated/restricted
+    expect(models).not.toContain("gemini-flash-latest");
     expect(models).not.toContain("gemini-3-flash-preview");
     expect(models).not.toContain("gemini-1.5-flash");
     expect(models).not.toContain("gemini-2.5-flash");

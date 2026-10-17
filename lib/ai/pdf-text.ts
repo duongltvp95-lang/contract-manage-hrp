@@ -56,12 +56,19 @@ export async function extractPdfText(
     const parseProcess = async (): Promise<PdfTextResult | null> => {
       // Dynamic import legacy build dành riêng cho môi trường Node.js server, tránh in warning ra stderr
       const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      if (isCancelled) {
+        return null;
+      }
 
       // pdfjs v6: cần set workerSrc khi dùng Worker; trên Node server fallback chạy fake worker an toàn.
       try {
         pdfjs.GlobalWorkerOptions.workerSrc = "pdfjs-dist/legacy/build/pdf.worker.mjs";
       } catch {
         // ignore — fallback về fake worker
+      }
+
+      if (isCancelled) {
+        return null;
       }
 
       loadingTask = pdfjs.getDocument({
