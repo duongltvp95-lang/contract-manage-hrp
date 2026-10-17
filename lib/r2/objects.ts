@@ -54,9 +54,14 @@ export async function headObject(
 }
 
 /** Removes an object. Used to clean up after a failed persist. */
-export async function deleteObject(objectKey: string): Promise<void> {
+export async function deleteObject(
+  objectKey: string,
+  options?: R2RequestOptions,
+): Promise<void> {
+  const signal = options?.abortSignal ?? (options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined);
   await createR2Client().send(
     new DeleteObjectCommand({ Bucket: getR2Bucket(), Key: objectKey }),
+    signal ? { abortSignal: signal } : undefined,
   );
 }
 
@@ -73,19 +78,57 @@ export async function getObjectBuffer(
     );
     if (!result.Body) return null;
 
+    const body = result.Body as {
+      destroy?: (error?: Error) => void;
+      cancel?: () => Promise<void>;
+      transformToByteArray: () => Promise<Uint8Array>;
+    };
+
+    let bodyCleanedUp = false;
+    const cleanupBody = () => {
+      if (bodyCleanedUp) return;
+      bodyCleanedUp = true;
+      try {
+        if (typeof body.destroy === "function") {
+          body.destroy(new Error("R2 stream aborted by client timeout"));
+        } else if (typeof body.cancel === "function") {
+          body.cancel().catch(() => {});
+        }
+      } catch {
+        // ignore
+      }
+    };
+
     if (signal) {
-      if (signal.aborted) return null;
+      if (signal.aborted) {
+        cleanupBody();
+        return null;
+      }
+
       const abortPromise = new Promise<never>((_, reject) => {
-        signal.addEventListener("abort", () => reject(new Error("R2 read aborted")), { once: true });
+        signal.addEventListener(
+          "abort",
+          () => {
+            cleanupBody();
+            reject(new Error("R2 read aborted"));
+          },
+          { once: true },
+        );
       });
-      const byteArray = await Promise.race([
-        result.Body.transformToByteArray(),
-        abortPromise,
-      ]);
-      return Buffer.from(byteArray);
+
+      try {
+        const byteArray = await Promise.race([
+          body.transformToByteArray(),
+          abortPromise,
+        ]);
+        return Buffer.from(byteArray);
+      } catch {
+        cleanupBody();
+        return null;
+      }
     }
 
-    const byteArray = await result.Body.transformToByteArray();
+    const byteArray = await body.transformToByteArray();
     return Buffer.from(byteArray);
   } catch (error) {
     console.error("[r2:getObjectBuffer]", error);

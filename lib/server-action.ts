@@ -17,16 +17,61 @@ export type ActionResult<T> =
 
 export type AccessDenied = { ok: false; result: ActionResult<never> };
 
+export type AuthorizedOptions = {
+  timeoutMs?: number;
+  abortSignal?: AbortSignal;
+};
+
 /**
  * Resolves the caller. On failure the action returns the ready-made result
  * rather than inventing its own message, so "disabled" and "signed out" stay
  * distinguishable everywhere.
  */
-export async function authorized(): Promise<
+export async function authorized(
+  options?: AuthorizedOptions,
+): Promise<
   { ok: true; user: CurrentUser } | AccessDenied
 > {
-  const access = await resolveAccess();
+  const signal = options?.abortSignal ?? (options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined);
+  if (signal?.aborted) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "timeout",
+        message: "Quá thời gian xác thực quyền truy cập.",
+      },
+    };
+  }
 
+  const accessPromise = resolveAccess();
+  if (!signal) {
+    const access = await accessPromise;
+    return toAuthorizedResult(access);
+  }
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    signal.addEventListener("abort", () => reject(new Error("Auth timeout")), { once: true });
+  });
+
+  try {
+    const access = await Promise.race([accessPromise, timeoutPromise]);
+    return toAuthorizedResult(access);
+  } catch {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        code: "timeout",
+        message: "Quá thời gian xác thực quyền truy cập.",
+      },
+    };
+  }
+}
+
+function toAuthorizedResult(
+  access: Awaited<ReturnType<typeof resolveAccess>>,
+): { ok: true; user: CurrentUser } | AccessDenied {
   if (access.status === "ok") {
     return { ok: true, user: access.user };
   }

@@ -88,13 +88,16 @@ export type DuplicateContractCheck = {
  * Checks if a contract with the same contract_number, signed_date, and expiry_date
  * already exists in the organization (ignoring archived contracts).
  */
-export async function findDuplicateContract({
-  contractNumber,
-  signedDate,
-  expiryDate,
-  organizationId,
-  excludeContractId,
-}: DuplicateContractCheck): Promise<ContractRow | null> {
+export async function findDuplicateContract(
+  {
+    contractNumber,
+    signedDate,
+    expiryDate,
+    organizationId,
+    excludeContractId,
+  }: DuplicateContractCheck,
+  options?: { abortSignal?: AbortSignal },
+): Promise<ContractRow | null> {
   const cleanNumber = emptyToNull(contractNumber);
   if (!cleanNumber) return null;
 
@@ -110,6 +113,10 @@ export async function findDuplicateContract({
     .eq("organization_id", organizationId)
     .is("archived_at", null)
     .ilike("contract_number", escapedNumber);
+
+  if (options?.abortSignal) {
+    query = query.abortSignal(options.abortSignal);
+  }
 
   if (cleanSigned) {
     query = query.eq("signed_date", cleanSigned);

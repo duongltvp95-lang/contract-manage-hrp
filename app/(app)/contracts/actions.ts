@@ -222,19 +222,22 @@ export async function unarchiveContractAction(
   return fromService(await unarchiveContract(id));
 }
 
-async function withIoTimeout<T>(
-  promise: Promise<T>,
+async function withIoAbort<T>(
+  action: (signal: AbortSignal) => Promise<T>,
   maxMs: number,
   fallback: T,
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<T>((resolve) => {
-    timer = setTimeout(() => resolve(fallback), Math.max(100, maxMs));
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new Error("IO timeout"));
+  }, Math.max(100, maxMs));
+
   try {
-    return await Promise.race([promise, timeoutPromise]);
+    return await action(controller.signal);
+  } catch {
+    return fallback;
   } finally {
-    if (timer) clearTimeout(timer);
+    clearTimeout(timer);
   }
 }
 
@@ -254,8 +257,15 @@ export async function extractContractAction(
   const objectKey = formData.get("objectKey");
 
   try {
-    const access = await authorized();
+    const authTimeoutMs = Math.min(5_000, Math.max(1_000, actionDeadline - Date.now() - 40_000));
+    const access = await authorized({ timeoutMs: authTimeoutMs });
     if (!access.ok) return access.result;
+
+    const cleanupR2 = (key: string) => {
+      // Non-blocking fire-and-forget: xóa tệp tạm trên R2 với timeout 3s,
+      // tuyệt đối không chặn luồng trả về kết quả cho client.
+      deleteObject(key, { timeoutMs: 3_000 }).catch(() => {});
+    };
 
     let buffer: Buffer;
     let filename = "document.pdf";
@@ -270,7 +280,7 @@ export async function extractContractAction(
       }
 
       if (actionDeadline - Date.now() < 12_000) {
-        await deleteObject(objectKey).catch(() => {});
+        cleanupR2(objectKey);
         return validationFailure("Hệ thống hết thời gian xử lý", [
           {
             path: "file",
@@ -283,14 +293,14 @@ export async function extractContractAction(
       const headTimeoutMs = Math.min(5_000, Math.max(1_000, actionDeadline - Date.now() - 15_000));
       const head = await headObject(objectKey, { timeoutMs: headTimeoutMs });
       if (!head.exists || head.contentLength === null) {
-        await deleteObject(objectKey).catch(() => {});
+        cleanupR2(objectKey);
         return validationFailure("Không tìm thấy tệp", [
           { path: "objectKey", message: "Không thể đọc tệp từ kho lưu trữ đám mây" },
         ]);
       }
 
       if (head.contentLength > MAX_AI_FILE_SIZE_BYTES) {
-        await deleteObject(objectKey).catch(() => {});
+        cleanupR2(objectKey);
         return validationFailure("Dung lượng tệp quá lớn", [
           {
             path: "file",
@@ -301,7 +311,7 @@ export async function extractContractAction(
 
       // Kiểm tra lại ngân sách trước khi bắt đầu tải toàn bộ buffer từ R2
       if (actionDeadline - Date.now() < 12_000) {
-        await deleteObject(objectKey).catch(() => {});
+        cleanupR2(objectKey);
         return validationFailure("Hệ thống hết thời gian xử lý", [
           {
             path: "file",
@@ -312,7 +322,7 @@ export async function extractContractAction(
 
       const downloadTimeoutMs = Math.min(10_000, Math.max(1_000, actionDeadline - Date.now() - 10_000));
       const downloaded = await getObjectBuffer(objectKey, { timeoutMs: downloadTimeoutMs });
-      await deleteObject(objectKey).catch(() => {});
+      cleanupR2(objectKey);
 
       if (!downloaded) {
         return validationFailure("Không tìm thấy tệp", [
@@ -472,8 +482,8 @@ export async function extractContractAction(
       const remainingForDb = actionDeadline - Date.now() - 1_000;
       const partnerTimeout = Math.min(2_000, Math.max(300, Math.floor(remainingForDb / 3)));
 
-      let partnersRes = await withIoTimeout(
-        searchPartners(searchTerm),
+      let partnersRes = await withIoAbort(
+        (signal) => searchPartners(searchTerm, { abortSignal: signal }),
         partnerTimeout,
         { ok: false } as Awaited<ReturnType<typeof searchPartners>>,
       );
@@ -483,8 +493,8 @@ export async function extractContractAction(
         searchTerm !== "" &&
         actionDeadline - Date.now() >= 2_500
       ) {
-        partnersRes = await withIoTimeout(
-          searchPartners(""),
+        partnersRes = await withIoAbort(
+          (signal) => searchPartners("", { abortSignal: signal }),
           partnerTimeout,
           { ok: false } as Awaited<ReturnType<typeof searchPartners>>,
         );
@@ -492,8 +502,12 @@ export async function extractContractAction(
 
       const companiesRes =
         actionDeadline - Date.now() >= 2_000
-          ? await withIoTimeout(
-              listCompanies({ organizationId: access.user.organizationId }),
+          ? await withIoAbort(
+              (signal) =>
+                listCompanies(
+                  { organizationId: access.user.organizationId },
+                  { abortSignal: signal },
+                ),
               partnerTimeout,
               { ok: false } as Awaited<ReturnType<typeof listCompanies>>,
             )
@@ -507,13 +521,25 @@ export async function extractContractAction(
 
       const trimmedPartnerName = extracted.partnerName?.trim() ?? "";
 
+      // Idempotency: nếu fuzzy match chưa khớp nhưng danh sách đã có đối tác cùng tên chính xác
+      if (!matchedPartner && trimmedPartnerName.length > 0) {
+        const exactMatch = partners.find(
+          (p) => p.name.trim().toLowerCase() === trimmedPartnerName.toLowerCase(),
+        );
+        if (exactMatch) {
+          matchedPartner = { id: exactMatch.id, name: exactMatch.name };
+        }
+      }
+
       // Nếu trong danh bạ chưa có đối tác này, AI đọc được tên đối tác và TUYỆT ĐỐI không phải công ty nội bộ:
-      // Tự động tạo mới đối tác vào hệ thống nếu vẫn còn ít nhất 2.5s trước deadline
+      // Tự động tạo mới đối tác vào hệ thống nếu vẫn còn ít nhất 4.0s trước deadline.
+      // Tuyệt đối không dùng Promise.race bỏ rơi write operation; thực thi với AbortSignal
+      // và kiểm tra lại trạng thái DB nếu timeout xảy ra (đảm bảo tính idempotent).
       if (
         !matchedPartner &&
         trimmedPartnerName.length > 0 &&
         !isInternalCompany(trimmedPartnerName) &&
-        actionDeadline - Date.now() >= 2_500
+        actionDeadline - Date.now() >= 4_000
       ) {
         const targetCompanyIds = matchedCompany?.id
           ? [matchedCompany.id]
@@ -527,8 +553,14 @@ export async function extractContractAction(
             taxCode = "";
           }
 
-          let createRes = await withIoTimeout(
-            createPartner(
+          const createBudgetMs = Math.min(2_500, Math.max(1_000, actionDeadline - Date.now() - 1_500));
+          const createController = new AbortController();
+          const createTimer = setTimeout(() => {
+            createController.abort(new Error("Create partner timeout"));
+          }, createBudgetMs);
+
+          try {
+            const createRes = await createPartner(
               {
                 name: trimmedPartnerName,
                 taxCode: taxCode || undefined,
@@ -536,44 +568,71 @@ export async function extractContractAction(
                 companyIds: targetCompanyIds,
               },
               { organizationId: access.user.organizationId },
-            ),
-            1_500,
-            { ok: false } as Awaited<ReturnType<typeof createPartner>>,
-          );
-
-          // Nếu tạo với taxCode/address bị lỗi, fallback tạo với name + companyIds nếu còn thời gian
-          if (!createRes.ok && actionDeadline - Date.now() >= 2_000) {
-            createRes = await withIoTimeout(
-              createPartner(
-                {
-                  name: trimmedPartnerName,
-                  companyIds: targetCompanyIds,
-                },
-                { organizationId: access.user.organizationId },
-              ),
-              1_500,
-              { ok: false } as Awaited<ReturnType<typeof createPartner>>,
+              { abortSignal: createController.signal },
             );
-          }
 
-          if (createRes.ok) {
-            matchedPartner = {
-              id: createRes.data.id,
-              name: createRes.data.name,
-            };
-            isNewPartner = true;
+            if (createRes.ok) {
+              matchedPartner = {
+                id: createRes.data.id,
+                name: createRes.data.name,
+              };
+              isNewPartner = true;
+            } else {
+              // Nếu createPartner báo lỗi/trùng, kiểm tra xem đối tác đã tồn tại trong DB chưa để liên kết idempotent
+              if (actionDeadline - Date.now() >= 1_500) {
+                const checkRes = await searchPartners(trimmedPartnerName, {
+                  abortSignal: AbortSignal.timeout(1_000),
+                });
+                if (checkRes.ok && checkRes.data.length > 0) {
+                  const existing = checkRes.data.find(
+                    (p) => p.name.trim().toLowerCase() === trimmedPartnerName.toLowerCase(),
+                  );
+                  if (existing) {
+                    matchedPartner = { id: existing.id, name: existing.name };
+                    isNewPartner = false;
+                  }
+                }
+              }
+            }
+          } catch {
+            // Khi bị abort/timeout hoặc lỗi mạng, kiểm tra xem đối tác có kịp ghi thành công hay không
+            // để bảo đảm kết quả trả về phản ánh chính xác trạng thái thực tế của DB (idempotent)
+            if (actionDeadline - Date.now() >= 1_000) {
+              try {
+                const checkRes = await searchPartners(trimmedPartnerName, {
+                  abortSignal: AbortSignal.timeout(800),
+                });
+                if (checkRes.ok && checkRes.data.length > 0) {
+                  const existing = checkRes.data.find(
+                    (p) => p.name.trim().toLowerCase() === trimmedPartnerName.toLowerCase(),
+                  );
+                  if (existing) {
+                    matchedPartner = { id: existing.id, name: existing.name };
+                    isNewPartner = true;
+                  }
+                }
+              } catch {
+                // ignore
+              }
+            }
+          } finally {
+            clearTimeout(createTimer);
           }
         }
       }
 
       if (extracted.contractNumber && actionDeadline - Date.now() >= 1_500) {
-        duplicate = await withIoTimeout(
-          findDuplicateContract({
-            contractNumber: extracted.contractNumber,
-            signedDate: extracted.signedDate,
-            expiryDate: extracted.expiryDate,
-            organizationId: access.user.organizationId,
-          }),
+        duplicate = await withIoAbort(
+          (signal) =>
+            findDuplicateContract(
+              {
+                contractNumber: extracted.contractNumber,
+                signedDate: extracted.signedDate,
+                expiryDate: extracted.expiryDate,
+                organizationId: access.user.organizationId,
+              },
+              { abortSignal: signal },
+            ),
           1_000,
           null,
         );

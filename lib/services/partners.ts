@@ -123,16 +123,23 @@ export async function countContractsByPartner(
  * The companies of the caller's organization (round 10). Small by design — the
  * seed is two rows — so this returns the whole list for the form and the import.
  */
-export async function listCompanies({
-  organizationId,
-}: PartnerContext): Promise<ServiceResult<Company[]>> {
+export async function listCompanies(
+  { organizationId }: PartnerContext,
+  options?: { abortSignal?: AbortSignal },
+): Promise<ServiceResult<Company[]>> {
   const supabase = await createClient();
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("companies")
     .select("id, name")
     .eq("organization_id", organizationId)
     .order("name", { ascending: true });
+
+  if (options?.abortSignal) {
+    query = query.abortSignal(options.abortSignal);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     return dbError("listCompanies", error);
@@ -460,14 +467,21 @@ export type PartnerSearchRow = Pick<
  */
 export async function searchPartners(
   term: string,
+  options?: { abortSignal?: AbortSignal },
 ): Promise<ServiceResult<PartnerSearchRow[]>> {
   const supabase = await createClient();
   const query = term.trim().slice(0, 100);
 
-  const { data, error } = await supabase.rpc("search_partners", {
+  let req = supabase.rpc("search_partners", {
     term: query,
     lim: PARTNER_SEARCH_LIMIT,
   });
+
+  if (options?.abortSignal) {
+    req = req.abortSignal(options.abortSignal);
+  }
+
+  const { data, error } = await req;
 
   if (error) {
     return dbError("searchPartners", error);
@@ -619,7 +633,12 @@ function normaliseOptionalText(value: unknown): string | null | undefined {
 export async function createPartner(
   input: unknown,
   { organizationId }: PartnerContext,
+  options?: { abortSignal?: AbortSignal },
 ): Promise<ServiceResult<PartnerDetail>> {
+  if (options?.abortSignal?.aborted) {
+    return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
+  }
+
   const parsed = PartnerSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -642,7 +661,7 @@ export async function createPartner(
 
   // Every chosen company must belong to the caller's organization, or the
   // junction would link another tenant's company onto this partner.
-  const companies = await listCompanies({ organizationId });
+  const companies = await listCompanies({ organizationId }, options);
   if (!companies.ok) return companies;
 
   const orgCompanies = companies.data;
@@ -676,7 +695,7 @@ export async function createPartner(
 
   const supabase = await createClient();
 
-  const { data, error } = await supabase
+  let insertQuery = supabase
     .from("partners")
     .insert({
       // From the session, never from the request body.
@@ -688,10 +707,18 @@ export async function createPartner(
       abbreviation,
       status,
     })
-    .select(PARTNER_COLUMNS)
-    .single();
+    .select(PARTNER_COLUMNS);
+
+  if (options?.abortSignal) {
+    insertQuery = insertQuery.abortSignal(options.abortSignal);
+  }
+
+  const { data, error } = await insertQuery.single();
 
   if (error) {
+    if (options?.abortSignal?.aborted) {
+      return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
+    }
     return dbError("createPartner", error);
   }
 
@@ -699,12 +726,21 @@ export async function createPartner(
 
   // Junction — after the partner row exists. On failure, roll the partner back
   // so a half-saved partner (present but linked to no company) cannot survive.
-  const { error: junctionError } = await supabase
+  let junctionQuery = supabase
     .from("partner_companies")
     .insert(companyIds.map((companyId) => ({ partner_id: created.id, company_id: companyId })));
 
+  if (options?.abortSignal) {
+    junctionQuery = junctionQuery.abortSignal(options.abortSignal);
+  }
+
+  const { error: junctionError } = await junctionQuery;
+
   if (junctionError) {
     await deletePartnerRollback(created.id);
+    if (options?.abortSignal?.aborted) {
+      return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
+    }
     return dbError("createPartner", junctionError);
   }
 
