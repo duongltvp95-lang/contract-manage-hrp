@@ -15,7 +15,7 @@ import "server-only";
  * - Timeout 8s (PDF quá nặng).
  * - Lỗi parse.
  *
- * Dùng pdfjs-dist@6.x (đã có trong package.json) — entry `build/pdf.mjs`.
+ * Dùng pdfjs-dist@6.x (đã có trong package.json).
  */
 
 export type PdfTextResult = {
@@ -29,28 +29,19 @@ const TIMEOUT_MS = 8_000;
 export async function extractPdfText(buffer: Buffer): Promise<PdfTextResult | null> {
   if (!buffer || buffer.length === 0) return null;
 
-  // Dynamic import để tránh bundle pdfjs vào client (lib/ai/gemini.ts chỉ chạy server).
-  // Nếu pdfjs chưa cài hoặc path sai → throw, caller (gemini.ts) nuốt lỗi qua try-catch.
-  let pdfjs: typeof import("pdfjs-dist/legacy/build/pdf.mjs");
   try {
-    pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  } catch {
-    return null;
-  }
+    // Dynamic import để tránh bundle pdfjs vào client (lib/ai/gemini.ts chỉ chạy server).
+    // Import từ package root (pdfjs-dist) thay vì deep path để TS dùng types chính thức
+    // (`types/src/pdf.d.ts`) — Vercel/Next build resolve đồng nhất với local, tránh TS2344
+    // do `typeof import("...legacy/build/pdf.mjs")` ở một số môi trường strict.
+    const pdfjs = await import("pdfjs-dist");
 
-  try {
     // pdfjs v6: cần set workerSrc khi dùng Worker; nếu chạy Node server (không có Worker global)
-    // thì có thể tắt worker bằng `useWorkerFetch: false` + `isEvalSupported: false`.
-    // Tuy nhiên đơn giản nhất: set GlobalWorkerOptions.workerPort = null để chạy inline.
-    if (pdfjs.GlobalWorkerOptions) {
-      // Trỏ worker tới file local. Nếu file không tồn tại, pdfjs vẫn fallback chạy
-      // fake worker (chậm hơn nhưng vẫn chạy được).
-      try {
-        pdfjs.GlobalWorkerOptions.workerSrc =
-          "pdfjs-dist/legacy/build/pdf.worker.mjs";
-      } catch {
-        // ignore
-      }
+    // thì pdfjs fallback chạy fake worker (chậm hơn nhưng vẫn chạy được).
+    try {
+      pdfjs.GlobalWorkerOptions.workerSrc = "pdfjs-dist/legacy/build/pdf.worker.mjs";
+    } catch {
+      // ignore — fallback về fake worker
     }
 
     // Timeout guard — pdfjs không có timeout built-in.
@@ -88,7 +79,7 @@ export async function extractPdfText(buffer: Buffer): Promise<PdfTextResult | nu
 
     return { text: fullText, pageCount: pdf.numPages };
   } catch {
-    // Mọi lỗi (timeout, parse fail, worker load fail) → coi như không trích được.
+    // Mọi lỗi (timeout, parse fail, worker load fail, import fail) → coi như không trích được.
     return null;
   }
 }
