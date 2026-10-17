@@ -26,7 +26,12 @@ import {
   type ActionResult,
 } from "@/lib/server-action";
 import type { ExtractedContractResult } from "@schemas/contract";
-import { extractContractFromBuffer, MAX_AI_FILE_SIZE_BYTES } from "@/lib/ai/gemini";
+import {
+  ALLOWED_MIME_TYPES,
+  extractContractFromBuffer,
+  MAX_AI_FILE_SIZE_BYTES,
+  resolveMimeType,
+} from "@/lib/ai/gemini";
 import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
 import { aiLog } from "@/lib/ai/log";
 import {
@@ -300,6 +305,17 @@ export async function extractContractAction(
       buffer = Buffer.from(arrayBuffer);
       filename = file.name;
       mimeType = file.type;
+    }
+
+    // Kiểm tra định dạng tệp trước khi upload lên Gemini Files API
+    const resolvedMime = resolveMimeType(filename, mimeType);
+    if (!ALLOWED_MIME_TYPES.has(resolvedMime)) {
+      return validationFailure("Định dạng tệp không được hỗ trợ", [
+        {
+          path: "file",
+          message: `Định dạng tệp (${resolvedMime || "không rõ"}) chưa được hỗ trợ. AI chỉ hỗ trợ PDF hoặc hình ảnh (PNG, JPG, WebP).`,
+        },
+      ]);
     }
 
     // Tính toán ngân sách thời gian còn lại cho khâu AI

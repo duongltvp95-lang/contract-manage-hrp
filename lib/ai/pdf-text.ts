@@ -33,55 +33,57 @@ export async function extractPdfText(buffer: Buffer): Promise<PdfTextResult | nu
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
-    // Timeout guard — pdfjs không có timeout built-in. Hủy timer ở finally để tránh rò rỉ timer.
+    // Timeout guard — giới hạn toàn bộ quá trình đọc PDF (bao gồm cả load doc và toàn bộ vòng lặp getTextContent)
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => reject(new Error("PDF parse timeout")), TIMEOUT_MS);
     });
 
-    // Dynamic import legacy build dành riêng cho môi trường Node.js server, tránh in warning ra stderr
-    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const parseProcess = async (): Promise<PdfTextResult | null> => {
+      // Dynamic import legacy build dành riêng cho môi trường Node.js server, tránh in warning ra stderr
+      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
-    // pdfjs v6: cần set workerSrc khi dùng Worker; trên Node server fallback chạy fake worker an toàn.
-    try {
-      pdfjs.GlobalWorkerOptions.workerSrc = "pdfjs-dist/legacy/build/pdf.worker.mjs";
-    } catch {
-      // ignore — fallback về fake worker
-    }
-
-    const loadPromise = pdfjs.getDocument({
-      data: new Uint8Array(buffer),
-      useSystemFonts: true,
-      disableFontFace: true,
-      // Tránh fetch CMaps/font ngoài — chỉ dùng standard fonts built-in.
-      verbosity: 0,
-    }).promise;
-
-    const pdf = await Promise.race([loadPromise, timeoutPromise]);
-
-    const pageTexts: string[] = [];
-    const maxPages = Math.min(pdf.numPages, 50); // cap 50 trang
-    for (let i = 1; i <= maxPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const text = content.items
-        .map((item) => ("str" in item ? item.str : ""))
-        .join(" ");
-      if (text.trim()) {
-        pageTexts.push(text.trim());
+      // pdfjs v6: cần set workerSrc khi dùng Worker; trên Node server fallback chạy fake worker an toàn.
+      try {
+        pdfjs.GlobalWorkerOptions.workerSrc = "pdfjs-dist/legacy/build/pdf.worker.mjs";
+      } catch {
+        // ignore — fallback về fake worker
       }
-    }
 
-    const isTruncated = pdf.numPages > 50;
-    if (isTruncated) {
-      pageTexts.push(`[Lưu ý: Tài liệu gồm ${pdf.numPages} trang. Hệ thống đã trích xuất 50 trang đầu tiên.]`);
-    }
+      const pdf = await pdfjs.getDocument({
+        data: new Uint8Array(buffer),
+        useSystemFonts: true,
+        disableFontFace: true,
+        // Tránh fetch CMaps/font ngoài — chỉ dùng standard fonts built-in.
+        verbosity: 0,
+      }).promise;
 
-    const fullText = pageTexts.join("\n\n").trim();
-    if (fullText.length < MIN_TEXT_LENGTH) {
-      return null;
-    }
+      const pageTexts: string[] = [];
+      const maxPages = Math.min(pdf.numPages, 50); // cap 50 trang
+      for (let i = 1; i <= maxPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const text = content.items
+          .map((item) => ("str" in item ? item.str : ""))
+          .join(" ");
+        if (text.trim()) {
+          pageTexts.push(text.trim());
+        }
+      }
 
-    return { text: fullText, pageCount: pdf.numPages, isTruncated };
+      const isTruncated = pdf.numPages > 50;
+      if (isTruncated) {
+        pageTexts.push(`[Lưu ý: Tài liệu gồm ${pdf.numPages} trang. Hệ thống đã trích xuất 50 trang đầu tiên.]`);
+      }
+
+      const fullText = pageTexts.join("\n\n").trim();
+      if (fullText.length < MIN_TEXT_LENGTH) {
+        return null;
+      }
+
+      return { text: fullText, pageCount: pdf.numPages, isTruncated };
+    };
+
+    return await Promise.race([parseProcess(), timeoutPromise]);
   } catch {
     // Mọi lỗi (timeout, parse fail, worker load fail, import fail) → coi như không trích được.
     return null;

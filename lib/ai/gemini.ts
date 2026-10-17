@@ -9,7 +9,7 @@ export function getGeminiModels(): string[] {
   const envModel = process.env.GEMINI_MODEL?.trim();
   const defaults = [
     "gemini-3.5-flash-lite",
-    "gemini-2.5-flash-lite",
+    "gemini-3-flash-preview",
     "gemini-flash-latest",
   ];
   if (envModel) {
@@ -18,7 +18,7 @@ export function getGeminiModels(): string[] {
   return defaults;
 }
 
-const ALLOWED_MIME_TYPES = new Set([
+export const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
   "image/jpeg",
   "image/png",
@@ -256,8 +256,8 @@ export async function extractContractFromBuffer({
 
   let lastError = "Không thể kết nối tới dịch vụ AI Google Gemini.";
 
-  // Chỉ thử tối đa 2 models nhanh nhất để đảm bảo tổng thời gian không vượt quá giới hạn 60s của Vercel Serverless
-  const models = getGeminiModels().slice(0, 2);
+  // Thử tối đa 3 models trong danh sách nếu ngân sách thời gian thực tế vẫn còn đủ
+  const models = getGeminiModels().slice(0, 3);
   const startExtractTime = Date.now();
 
   for (const model of models) {
@@ -384,7 +384,7 @@ export async function extractContractFromBuffer({
         } catch (parseErr) {
           aiLog.error("Parse JSON thất bại", {
             model,
-            rawTextSnippet: rawText.slice(0, 200),
+            rawTextLength: rawText.length,
             errorMessage: String(parseErr),
           });
           continue;

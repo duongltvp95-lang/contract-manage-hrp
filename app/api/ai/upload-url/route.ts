@@ -3,7 +3,11 @@ import { NextResponse, type NextRequest } from "next/server";
 export const maxDuration = 60;
 import { guardFileApiRequest } from "@/lib/api-guard";
 import { createUploadUrl } from "@/lib/r2/presign";
-import { MAX_AI_FILE_SIZE_BYTES, resolveMimeType } from "@/lib/ai/gemini";
+import {
+  ALLOWED_MIME_TYPES,
+  MAX_AI_FILE_SIZE_BYTES,
+  resolveMimeType,
+} from "@/lib/ai/gemini";
 
 /**
  * POST /api/ai/upload-url
@@ -26,6 +30,22 @@ export async function POST(request: NextRequest) {
   const fileSize = Number(body.fileSize) || 0;
   const resolvedMime = resolveMimeType(filename, body.mimeType);
 
+  if (!ALLOWED_MIME_TYPES.has(resolvedMime)) {
+    return NextResponse.json(
+      {
+        error: `Định dạng tệp (${resolvedMime || "không rõ"}) chưa được hỗ trợ. AI chỉ hỗ trợ PDF hoặc hình ảnh (PNG, JPG, WebP).`,
+      },
+      { status: 400 },
+    );
+  }
+
+  if (fileSize <= 0) {
+    return NextResponse.json(
+      { error: "Kích thước tệp không hợp lệ." },
+      { status: 400 },
+    );
+  }
+
   if (fileSize > MAX_AI_FILE_SIZE_BYTES) {
     return NextResponse.json(
       { error: "Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI." },
@@ -38,7 +58,7 @@ export async function POST(request: NextRequest) {
   const objectKey = `ai-temp/${guard.user.organizationId}/${fileId}/${safeFilename}`;
 
   try {
-    const uploadUrl = await createUploadUrl(objectKey, resolvedMime);
+    const uploadUrl = await createUploadUrl(objectKey, resolvedMime, fileSize);
     return NextResponse.json(
       { uploadUrl, objectKey, mimeType: resolvedMime },
       { status: 200, headers: guard.headers },

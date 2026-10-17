@@ -13,6 +13,7 @@ import { aiLog } from "@/lib/ai/log";
 import { clientLog } from "@/lib/ai/log-client";
 import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
 import {
+  ALLOWED_MIME_TYPES,
   extractContractFromBuffer,
   getGeminiModels,
   MAX_AI_FILE_SIZE_BYTES,
@@ -373,6 +374,19 @@ describe("G2 v2 — extractContractFromBuffer với 3 nhánh", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("từ chối định dạng tệp không được hỗ trợ mà không gọi fetch", async () => {
+    const result = await extractContractFromBuffer({
+      buffer: Buffer.from("dummy-text"),
+      mimeType: "text/plain",
+      filename: "test.txt",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("Định dạng tệp (text/plain) chưa được hỗ trợ");
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("từ chối tệp vượt quá 20 MB mà không gọi fetch", async () => {
     const hugeBuffer = Buffer.alloc(MAX_AI_FILE_SIZE_BYTES + 1);
     const result = await extractContractFromBuffer({
@@ -396,23 +410,24 @@ describe("G2 v2 — Cấu hình model & fallback", () => {
     else process.env.GEMINI_MODEL = ORIGINAL_MODEL;
   });
 
-  it("mặc định ưu tiên gemini-3.5-flash-lite ổn định và không chứa model shutdown", () => {
+  it("mặc định ưu tiên gemini-3.5-flash-lite ổn định và fallback gemini-3-flash-preview, gemini-flash-latest", () => {
     delete process.env.GEMINI_MODEL;
     const models = getGeminiModels();
     expect(models[0]).toBe("gemini-3.5-flash-lite");
-    expect(models).toContain("gemini-2.5-flash-lite");
+    expect(models).toContain("gemini-3-flash-preview");
     expect(models).toContain("gemini-flash-latest");
-    // Không chứa model đã shutdown/deprecated
+    // Không chứa model đã shutdown/deprecated hoặc restricted
     expect(models).not.toContain("gemini-1.5-flash");
     expect(models).not.toContain("gemini-2.5-flash");
+    expect(models).not.toContain("gemini-2.5-flash-lite");
   });
 
   it("cấu hình GEMINI_MODEL ưu tiên model cấu hình mà không bị trùng lặp", () => {
-    process.env.GEMINI_MODEL = "gemini-2.5-flash-lite";
+    process.env.GEMINI_MODEL = "gemini-3-flash-preview";
     const models = getGeminiModels();
-    expect(models[0]).toBe("gemini-2.5-flash-lite");
+    expect(models[0]).toBe("gemini-3-flash-preview");
     // Không bị xuất hiện 2 lần
-    expect(models.filter((m) => m === "gemini-2.5-flash-lite")).toHaveLength(1);
+    expect(models.filter((m) => m === "gemini-3-flash-preview")).toHaveLength(1);
     expect(models).toContain("gemini-3.5-flash-lite");
   });
 });
@@ -428,13 +443,25 @@ describe("G2 v2 — extractPdfText (sửa BUG-1)", () => {
     expect(result).toBeNull();
   });
 
+  it("trích xuất thành công văn bản từ PDF có text layer hợp lệ", async () => {
+    const validTextPdf = Buffer.from(
+      "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n5 0 obj\n<< /Length 85 >>\nstream\nBT\n/F1 12 Tf\n72 712 Td\n(HOP DONG KINH TE SO 01/2026/HDKT GIUA CONG TY HRP VA DOI TAC) Tj\nET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000244 00000 n \n0000000318 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n455\n%%EOF",
+    );
+    const result = await extractPdfText(validTextPdf);
+    expect(result).not.toBeNull();
+    if (result) {
+      expect(result.text).toContain("HOP DONG KINH TE SO 01/2026/HDKT");
+      expect(result.pageCount).toBe(1);
+      expect(result.isTruncated).toBe(false);
+    }
+  });
+
   it("trả null khi buffer PDF scan (không có text layer)", async () => {
     // PDF tối thiểu không có text layer — chỉ có 1 object stream rỗng.
     const minimalPdf = Buffer.from(
       "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\nxref\n0 4\n0000000000 65535 f\n0000000009 00000 n\n0000000058 00000 n\n0000000110 00000 n\ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n178\n%%EOF",
     );
     const result = await extractPdfText(minimalPdf);
-    // PDF này quá đơn giản, không có text layer → expect null
     expect(result).toBeNull();
   });
 });

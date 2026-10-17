@@ -39,15 +39,22 @@ export function clampViewTtl(seconds: number): number {
  *
  * `contentType` is part of the signature, so the browser MUST send exactly the
  * same `Content-Type` header on the PUT or R2 answers 403.
+ *
+ * Khi truyền `contentLength`, chữ ký AWS SigV4 sẽ ràng buộc header `Content-Length`,
+ * ngăn chặn việc client khai báo kích thước nhỏ nhưng tải tệp lớn lên bucket.
  */
 export async function createUploadUrl(
   objectKey: string,
   contentType: string,
+  contentLength?: number,
 ): Promise<string> {
   const command = new PutObjectCommand({
     Bucket: getR2Bucket(),
     Key: objectKey,
     ContentType: contentType,
+    ...(typeof contentLength === "number" && contentLength > 0
+      ? { ContentLength: contentLength }
+      : {}),
   });
 
   return getSignedUrl(createR2Client(), command, {
