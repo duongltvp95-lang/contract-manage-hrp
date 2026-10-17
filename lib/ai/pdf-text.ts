@@ -16,25 +16,24 @@ import path from "path";
  * với buffer không phải PDF thật.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-let _pdfjsLib: Awaited<ReturnType<typeof import("pdfjs-dist/legacy/build/pdf.mjs")>> | null = null;
+type PdfJsLib = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+let _pdfjsLib: PdfJsLib | null = null;
 
-async function getPdfJs() {
+async function getPdfJs(): Promise<PdfJsLib> {
   if (_pdfjsLib) return _pdfjsLib;
 
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.mjs") as Awaited<
-    ReturnType<typeof import("pdfjs-dist/legacy/build/pdf.mjs")>
-  >;
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
-  // Dùng local worker (khớp version với pdf.mjs đã import)
-  // file:// protocol bắt buộc trên Windows
-  const workerPath = path.resolve(
-    require.resolve("pdfjs-dist/legacy/build/pdf.mjs"),
-    "..",
-    "pdf.worker.mjs",
-  );
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `file:///${workerPath.replace(/\\/g, "/")}`;
+  try {
+    const workerPath = path.resolve(
+      require.resolve("pdfjs-dist/legacy/build/pdf.mjs"),
+      "..",
+      "pdf.worker.mjs",
+    );
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `file:///${workerPath.replace(/\\/g, "/")}`;
+  } catch {
+    // fallback nếu không resolve được workerPath
+  }
 
   _pdfjsLib = pdfjsLib;
   return pdfjsLib;
@@ -71,7 +70,7 @@ export async function extractPdfText(
       data: uint8,
       useSystemFonts: true,
       disableFontFace: true,
-    });
+    }).promise;
 
     const pageCount = pdf.numPages;
     const pagesToScan = Math.min(pageCount, maxPages);
@@ -82,7 +81,7 @@ export async function extractPdfText(
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       const pageText = textContent.items
-        .map((item: { str?: string }) => item.str ?? "")
+        .map((item) => ("str" in item ? item.str : ""))
         .join(" ")
         .trim();
 
