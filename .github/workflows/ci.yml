@@ -177,7 +177,7 @@ jobs:
     name: deployment guard (all gates green)
     runs-on: ubuntu-latest
     needs: [quality, integration, e2e]
-    if: always()
+    if: ${{ !cancelled() }}
     steps:
       - name: Verify all quality gates
         run: |

@@ -4,17 +4,26 @@ import { type ExtractedContract } from "@schemas/contract";
 import { err, ok, type ServiceResult } from "@/lib/services/types";
 import { normalizeDurationText } from "@/lib/ai/matching";
 
-function getGeminiModels(): string[] {
+export function getGeminiModels(): string[] {
   const envModel = process.env.GEMINI_MODEL?.trim();
-  const defaults = [
-    "gemini-3-flash-preview",
+
+  // Ưu tiên model nhanh/rẻ/ổn định trước.
+  // gemini-3.5-flash-lite: model mới, latency thấp, phù hợp extraction đơn giản.
+  // gemini-flash-lite-latest: fallback rẻ nhất.
+  // gemini-3-flash-preview: preview có thể không ổn định → cuối cùng.
+  const orderedDefaults = [
     "gemini-3.5-flash-lite",
     "gemini-flash-lite-latest",
+    "gemini-3-flash-preview",
   ];
-  if (envModel && !defaults.includes(envModel)) {
-    return [envModel, ...defaults];
+
+  if (envModel) {
+    // Ưu tiên tuyệt đối model đã cấu hình trong .env.local.
+    // Loại bỏ khỏi defaults để tránh thử trùng lặp.
+    const filtered = orderedDefaults.filter((m) => m !== envModel);
+    return [envModel, ...filtered];
   }
-  return defaults;
+  return orderedDefaults;
 }
 
 const ALLOWED_MIME_TYPES = new Set([
@@ -165,37 +174,89 @@ export async function extractContractFromBuffer({
     );
   }
 
-  const base64Data = buffer.toString("base64");
+  // === NEW: Ưu tiên trích văn bản từ PDF dạng văn bản (không phải scan) ===
+  let base64Data: string | null = null;
+  let pdfTextForModel: string | null = null;
+
+  if (resolvedMime === "application/pdf") {
+    try {
+      const { extractPdfText } = await import("@/lib/ai/pdf-text");
+      const pdfResult = await extractPdfText(buffer);
+      if (pdfResult) {
+        // Có text layer → gửi văn bản thuần cho Gemini (nhanh hơn, không cần OCR nội bộ)
+        pdfTextForModel = pdfResult.text;
+      }
+    } catch {
+      // PDF.js lỗi → fallback xuống luồng base64
+    }
+  }
+
+  // Nếu không trích được text (image PDF hoặc lỗi) → dùng base64
+  if (!pdfTextForModel) {
+    base64Data = buffer.toString("base64");
+  }
+  // === END NEW ===
+
   let lastError = "Không thể kết nối tới dịch vụ AI Google Gemini.";
 
-  // Chỉ thử tối đa 2 models nhanh nhất để đảm bảo tổng thời gian không vượt quá giới hạn 60s của Vercel Serverless
-  const models = getGeminiModels().slice(0, 2);
+  // Cấu hình fallback chain:
+  // - Thử tối đa MAX_RETRIES model (primary + 1 fallback) thay vì tất cả 3 model.
+  // - Timeout mỗi model là 12s → overhead tối đa 24s thay vì 36s.
+  // - Lỗi 503/404/429 (quá tải / model không khả dụng / rate-limit) sẽ chuyển model ngay
+  //   mà không cần đợi hết timeout.
+  // - Lỗi 400/401 (lỗi logic / không xác thực) → KHÔNG retry, trả lỗi ngay.
+  const MODELS = getGeminiModels();
+  const PER_MODEL_TIMEOUT_MS = 12_000;
+  const MAX_RETRIES = 2;
 
-  for (const model of models) {
+  for (const model of MODELS.slice(0, MAX_RETRIES)) {
     const startTime = Date.now();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-    const requestBody = {
-      contents: [
-        {
-          parts: [
+    const requestBody = pdfTextForModel
+      ? {
+          // Luồng mới: gửi văn bản thuần (PDF có text layer)
+          contents: [
             {
-              inlineData: {
-                mimeType: resolvedMime,
-                data: base64Data,
-              },
-            },
-            {
-              text: EXTRACTION_SYSTEM_PROMPT,
+              parts: [
+                {
+                  text: `Đây là nội dung văn bản được trích xuất từ tài liệu PDF:\n\n${pdfTextForModel}\n\n---\nYêu cầu trích xuất thông tin từ nội dung trên:`,
+                },
+              ],
             },
           ],
-        },
-      ],
-      generationConfig: {
-        responseMimeType: "application/json",
-        temperature: 0.1,
-      },
-    };
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.1,
+          },
+        }
+      : {
+          // Luồng cũ: gửi base64 (image hoặc scanned PDF)
+          contents: [
+            {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: resolvedMime,
+                    data: base64Data!,
+                  },
+                },
+                {
+                  text: EXTRACTION_SYSTEM_PROMPT,
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.1,
+            // Giới hạn suy luận nội bộ của model → giảm thời gian phản hồi.
+            // -1 = dùng budget mặc định của model (thường là minimal cho flash-lite).
+            thinkingConfig: {
+              thinkingBudget: -1,
+            },
+          },
+        };
 
     try {
       console.log(`[ai:gemini] Đang trích xuất với model: ${model}...`);
@@ -203,7 +264,7 @@ export async function extractContractFromBuffer({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(24_000),
+        signal: AbortSignal.timeout(PER_MODEL_TIMEOUT_MS),
       });
 
       if (response.ok) {
@@ -272,7 +333,7 @@ export async function extractContractFromBuffer({
         networkError instanceof Error &&
         (networkError.name === "TimeoutError" || networkError.message.includes("timeout"));
       lastError = isTimeout
-        ? `Quá thời gian chờ phản hồi (24s) từ model ${model}`
+        ? `Quá thời gian chờ phản hồi (${PER_MODEL_TIMEOUT_MS / 1000}s) từ model ${model}`
         : networkError instanceof Error
           ? networkError.message
           : "Lỗi kết nối mạng";
@@ -280,9 +341,13 @@ export async function extractContractFromBuffer({
     }
   }
 
-  const friendlyError = lastError.toLowerCase().includes("high demand")
-    ? "Hệ thống Google Gemini hiện đang quá tải truy vấn tạm thời. Bạn vui lòng bấm nút trích xuất lại sau vài giây."
-    : lastError;
+  const friendlyError =
+    lastError.toLowerCase().includes("high demand") ||
+    lastError.toLowerCase().includes("overloaded") ||
+    lastError.toLowerCase().includes("unavailable") ||
+    lastError.toLowerCase().includes("try again later")
+      ? "Hệ thống Google Gemini hiện đang quá tải truy vấn tạm thời. Bạn vui lòng bấm nút trích xuất lại sau vài giây."
+      : lastError;
 
   return err("validation", `Trích xuất AI thất bại: ${friendlyError}`);
 }
