@@ -295,16 +295,30 @@ export async function extractContractAction(
 
     // Tìm kiếm đối tác và công ty tương đồng trong tổ chức hiện tại
     const searchTerm = extracted.partnerName ? cleanEntityName(extracted.partnerName) : "";
-    let partnersRes = await searchPartners(searchTerm);
-    if ((!partnersRes.ok || partnersRes.data.length === 0) && searchTerm !== "") {
-      partnersRes = await searchPartners("");
-    }
-    const companiesRes = await listCompanies({
-      organizationId: access.user.organizationId,
-    });
 
-    const partners = partnersRes.ok ? partnersRes.data : [];
-    const companies = companiesRes.ok ? companiesRes.data : [];
+    // Chạy song song 3 truy vấn độc lập để giảm thời gian chờ sau khi AI xong.
+    const [partnersResult, companiesResult, duplicateResult] = await Promise.all([
+      (async () => {
+        let res = await searchPartners(searchTerm);
+        if ((!res.ok || res.data.length === 0) && searchTerm !== "") {
+          res = await searchPartners("");
+        }
+        return res;
+      })(),
+      listCompanies({ organizationId: access.user.organizationId }),
+      extracted.contractNumber
+        ? findDuplicateContract({
+            contractNumber: extracted.contractNumber,
+            signedDate: extracted.signedDate,
+            expiryDate: extracted.expiryDate,
+            organizationId: access.user.organizationId,
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const partners = partnersResult.ok ? partnersResult.data : [];
+    const companies = companiesResult.ok ? companiesResult.data : [];
+    const duplicate = duplicateResult;
 
     let matchedPartner = findBestMatchingPartner(extracted.partnerName, partners);
     const matchedCompany = findBestMatchingCompany(extracted.companyName, companies);
@@ -361,15 +375,6 @@ export async function extractContractAction(
         }
       }
     }
-
-    const duplicate = extracted.contractNumber
-      ? await findDuplicateContract({
-          contractNumber: extracted.contractNumber,
-          signedDate: extracted.signedDate,
-          expiryDate: extracted.expiryDate,
-          organizationId: access.user.organizationId,
-        })
-      : null;
 
     const result: ExtractedContractResult = {
       ...extracted,

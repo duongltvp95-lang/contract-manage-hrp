@@ -4,17 +4,26 @@ import { type ExtractedContract } from "@schemas/contract";
 import { err, ok, type ServiceResult } from "@/lib/services/types";
 import { normalizeDurationText } from "@/lib/ai/matching";
 
-function getGeminiModels(): string[] {
+export function getGeminiModels(): string[] {
   const envModel = process.env.GEMINI_MODEL?.trim();
-  const defaults = [
-    "gemini-3-flash-preview",
+
+  // Ưu tiên model nhanh/rẻ/ổn định trước.
+  // gemini-3.5-flash-lite: model mới, latency thấp, phù hợp extraction đơn giản.
+  // gemini-flash-lite-latest: fallback rẻ nhất.
+  // gemini-3-flash-preview: preview có thể không ổn định → cuối cùng.
+  const orderedDefaults = [
     "gemini-3.5-flash-lite",
     "gemini-flash-lite-latest",
+    "gemini-3-flash-preview",
   ];
-  if (envModel && !defaults.includes(envModel)) {
-    return [envModel, ...defaults];
+
+  if (envModel) {
+    // Ưu tiên tuyệt đối model đã cấu hình trong .env.local.
+    // Loại bỏ khỏi defaults để tránh thử trùng lặp.
+    const filtered = orderedDefaults.filter((m) => m !== envModel);
+    return [envModel, ...filtered];
   }
-  return defaults;
+  return orderedDefaults;
 }
 
 const ALLOWED_MIME_TYPES = new Set([
@@ -165,43 +174,89 @@ export async function extractContractFromBuffer({
     );
   }
 
-  const base64Data = buffer.toString("base64");
+  // === NEW: Ưu tiên trích văn bản từ PDF dạng văn bản (không phải scan) ===
+  let base64Data: string | null = null;
+  let pdfTextForModel: string | null = null;
+
+  if (resolvedMime === "application/pdf") {
+    try {
+      const { extractPdfText } = await import("@/lib/ai/pdf-text");
+      const pdfResult = await extractPdfText(buffer);
+      if (pdfResult) {
+        // Có text layer → gửi văn bản thuần cho Gemini (nhanh hơn, không cần OCR nội bộ)
+        pdfTextForModel = pdfResult.text;
+      }
+    } catch {
+      // PDF.js lỗi → fallback xuống luồng base64
+    }
+  }
+
+  // Nếu không trích được text (image PDF hoặc lỗi) → dùng base64
+  if (!pdfTextForModel) {
+    base64Data = buffer.toString("base64");
+  }
+  // === END NEW ===
+
   let lastError = "Không thể kết nối tới dịch vụ AI Google Gemini.";
 
   // Cấu hình fallback chain:
-  // - Thử tất cả model trong getGeminiModels() (3 model) thay vì chỉ 2 model đầu.
-  // - Timeout mỗi model là 12s để dù cả 3 model đều phản hồi chậm cũng không vượt quá
-  //   ngưỡng 60s của Vercel Serverless (3 × 12s = 36s overhead tối đa).
+  // - Thử tối đa MAX_RETRIES model (primary + 1 fallback) thay vì tất cả 3 model.
+  // - Timeout mỗi model là 12s → overhead tối đa 24s thay vì 36s.
   // - Lỗi 503/404/429 (quá tải / model không khả dụng / rate-limit) sẽ chuyển model ngay
   //   mà không cần đợi hết timeout.
-  const models = getGeminiModels();
+  // - Lỗi 400/401 (lỗi logic / không xác thực) → KHÔNG retry, trả lỗi ngay.
+  const MODELS = getGeminiModels();
   const PER_MODEL_TIMEOUT_MS = 12_000;
+  const MAX_RETRIES = 2;
 
-  for (const model of models) {
+  for (const model of MODELS.slice(0, MAX_RETRIES)) {
     const startTime = Date.now();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-    const requestBody = {
-      contents: [
-        {
-          parts: [
+    const requestBody = pdfTextForModel
+      ? {
+          // Luồng mới: gửi văn bản thuần (PDF có text layer)
+          contents: [
             {
-              inlineData: {
-                mimeType: resolvedMime,
-                data: base64Data,
-              },
-            },
-            {
-              text: EXTRACTION_SYSTEM_PROMPT,
+              parts: [
+                {
+                  text: `Đây là nội dung văn bản được trích xuất từ tài liệu PDF:\n\n${pdfTextForModel}\n\n---\nYêu cầu trích xuất thông tin từ nội dung trên:`,
+                },
+              ],
             },
           ],
-        },
-      ],
-      generationConfig: {
-        responseMimeType: "application/json",
-        temperature: 0.1,
-      },
-    };
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.1,
+          },
+        }
+      : {
+          // Luồng cũ: gửi base64 (image hoặc scanned PDF)
+          contents: [
+            {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: resolvedMime,
+                    data: base64Data!,
+                  },
+                },
+                {
+                  text: EXTRACTION_SYSTEM_PROMPT,
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.1,
+            // Giới hạn suy luận nội bộ của model → giảm thời gian phản hồi.
+            // -1 = dùng budget mặc định của model (thường là minimal cho flash-lite).
+            thinkingConfig: {
+              thinkingBudget: -1,
+            },
+          },
+        };
 
     try {
       console.log(`[ai:gemini] Đang trích xuất với model: ${model}...`);

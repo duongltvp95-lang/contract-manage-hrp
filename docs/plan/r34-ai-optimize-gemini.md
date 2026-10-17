@@ -214,7 +214,7 @@ const duplicate = duplicateResult;
 
 | File | Mục thay đổi |
 |---|---|
-| `lib/ai/gemini.ts` | §3.1 + §3.2 + §3.3 |
+| `lib/ai/gemini.ts` | §3.1 + §3.2 + §3.3 + §3.5 |
 | `app/(app)/contracts/actions.ts` | §3.4 |
 
 **Không thay đổi:**
@@ -223,6 +223,169 @@ const duplicate = duplicateResult;
 - Services (`contracts.ts`, `partners.ts`)
 - Integration test (không cần sửa — logic giống nhau)
 - Unit test (nếu có mock `getGeminiModels` → cần cập nhật)
+
+---
+
+## 3.5 Trích văn bản từ PDF dạng văn bản (không phải scan) — §3.5 R34
+
+### 3.5.1 Vấn đề
+
+Gemini phải xử lý **toàn bộ nội dung thị giác** của PDF (cả text-layer PDFs lẫn scanned-image PDFs) qua `inlineData`. Với các hợp đồng dạng văn bản (không phải scan), model phải nhận diện text qua OCR nội bộ → **lãng phí** và **chậm hơn** so với gửi trực tiếp văn bản đã có.
+
+### 3.5.2 Giải pháp
+
+Thêm bước tiền xử lý: **dùng PDF.js kiểm tra xem PDF có lớp văn bản chọn được không**.
+
+- **Có text layer**: trích văn bản → gửi cho Gemini dưới dạng text (thay vì base64 image/PDF).
+- **Không có text layer (scanned)**: dùng luồng hiện tại (base64 PDF/image).
+
+**Ước tính**: với PDF văn bản (~10 trang), trích text ~50ms, gửi text thay vì base64 → giảm payload đáng kể, model xử lý trực tiếp không cần OCR → **tiết kiệm 1–3s**.
+
+### 3.5.3 Dependency
+
+Dự án đã có `pdfjs-dist` (import ở `components/contracts/...`). Cần kiểm tra:
+
+```bash
+npm list pdfjs-dist
+```
+
+Nếu chưa có → cài dev dependency: `npm install -D pdfjs-dist@4.9.155`.
+
+### 3.5.4 Module mới: `lib/ai/pdf-text.ts`
+
+```ts
+import "server-only";
+
+/**
+ * Extracts selectable text from a PDF using PDF.js.
+ * Returns null if the PDF is likely a scanned/image-only document.
+ *
+ * Strategy:
+ * 1. Load PDF with PDF.js (disable GPU rendering).
+ * 2. Scan first 3 pages for text content.
+ * 3. If total text length > MIN_TEXT_LENGTH → return extracted text.
+ * 4. Otherwise → return null (likely scanned).
+ */
+export async function extractPdfText(
+  buffer: Buffer,
+  options?: { maxPages?: number; minTextLength?: number },
+): Promise<{ text: string; pageCount: number } | null> {
+  const { maxPages = 3, minTextLength = 100 } = options ?? {};
+
+  // Dynamically import pdfjs-dist (server-only, không bundle vào client)
+  const pdfjsLib = await import("pdfjs-dist");
+
+  // Set worker source (inline blob URL để tránh CORS / file not found)
+  // Worker được tải từ CDN của pdfjs-dist, hoặc dùng bundled worker nếu có
+  // Quan trọng: worker chỉ chạy server-side, không bao giờ gửi đến client
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+
+  const loadingTask = pdfjsLib.getDocument({
+    data: buffer,
+    useSystemFonts: true,
+    disableFontFace: true, // Server-side, không cần font rendering
+  });
+
+  const pdf = await loadingTask.promise;
+  const pageCount = pdf.numPages;
+
+  let totalText = "";
+
+  // Chỉ đọc N trang đầu để quyết định nhanh
+  const pagesToScan = Math.min(pageCount, maxPages);
+
+  for (let i = 1; i <= pagesToScan; i++) {
+    const page = await pdf.getPage(i);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map((item: { str?: string }) => item.str ?? "")
+      .join(" ")
+      .trim();
+    totalText += pageText + "\n";
+  }
+
+  // Nếu lượng text đủ lớn → có text layer → trả về text
+  if (totalText.length >= minTextLength) {
+    return { text: totalText.trim(), pageCount };
+  }
+
+  return null; // Likely scanned → dùng luồng image/PDF
+}
+
+/**
+ * Checks if the first N pages of a PDF contain sufficient selectable text.
+ */
+export async function hasPdfTextLayer(
+  buffer: Buffer,
+  options?: { maxPages?: number; minTextLength?: number },
+): Promise<boolean> {
+  const result = await extractPdfText(buffer, options);
+  return result !== null;
+}
+```
+
+### 3.5.5 Cập nhật `extractContractFromBuffer` (lib/ai/gemini.ts)
+
+```ts
+// Thêm import
+import { extractPdfText } from "@/lib/ai/pdf-text";
+
+export async function extractContractFromBuffer({
+  buffer,
+  mimeType,
+  filename = "",
+}: {
+  buffer: Buffer;
+  mimeType: string;
+  filename?: string;
+}): Promise<ServiceResult<ExtractedContract>> {
+  // ... existing validation code ...
+
+  // === NEW: Ưu tiên trích văn bản từ PDF dạng văn bản ===
+  if (resolvedMime === "application/pdf") {
+    const pdfResult = await extractPdfText(buffer);
+    if (pdfResult) {
+      // Có text layer → gửi văn bản thuần cho Gemini (nhanh hơn)
+      const textResult = await callGeminiWithText(pdfResult.text, apiKey, models, perModelTimeout);
+      if (textResult.ok) return textResult;
+      // Nếu thất bại → fallback xuống luồng base64
+    }
+  }
+  // === END NEW ===
+
+  // Luồng hiện tại: base64 PDF/image
+  const base64Data = buffer.toString("base64");
+  // ... rest of existing code ...
+}
+```
+
+**Lưu ý:**
+- Cần tạo helper `callGeminiWithText` (tái sử dụng logic gọi API hiện có) hoặc gộp chung vào `extractContractFromBuffer`.
+- Nếu text extraction fail hoặc trả về null → fallback về base64 như cũ.
+- Không làm thay đổi API public signature (vẫn trả `ServiceResult<ExtractedContract>`).
+
+### 3.5.6 Điều chỉnh test
+
+Thêm unit test cho `extractPdfText`:
+
+| Test | Verify |
+|---|---|
+| `extractPdfText trả về null cho scanned PDF` | Pass buffer nhỏ, text < minTextLength → null |
+| `extractPdfText trả về text + pageCount cho PDF có text layer` | Mock PDF với text content |
+| `hasPdfTextLayer trả true khi đủ text` | Text length > 100 → true |
+| `hasPdfTextLayer trả false khi không đủ text` | Text length < 100 → false |
+
+### 3.5.7 Điều chỉnh effort
+
+| Task | Thời gian |
+|---|---|
+| §3.1–3.4 (đã xong) | ~60 phút |
+| Cài pdfjs-dist@4.9.155 nếu chưa có | 5 phút |
+| Tạo `lib/ai/pdf-text.ts` (~50 dòng) | 20 phút |
+| Tích hợp vào `extractContractFromBuffer` | 15 phút |
+| Unit test cho pdf-text | 20 phút |
+| **Tổng bổ sung §3.5** | **~60 phút** |
+| **Tổng R34 (all)** | **~120 phút (2 giờ)** |
 
 ---
 

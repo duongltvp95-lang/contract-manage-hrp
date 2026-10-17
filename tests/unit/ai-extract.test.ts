@@ -1,5 +1,16 @@
+/**
+ * @vitest-environment node
+ * vitest-fetch-mock is required for AI extraction tests to mock global.fetch.
+ * @vitest-fetch-mock
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExtractedContractSchema } from "@schemas/contract";
+
+// Mock pdf-text để ngăn pdfjs-dist chạy trong unit test (chỉ mock fetch là đủ cho AI extraction tests)
+vi.mock("@/lib/ai/pdf-text", () => ({
+  extractPdfText: vi.fn().mockResolvedValue(null), // Luôn fallback về base64 trong test
+  hasPdfTextLayer: vi.fn().mockResolvedValue(false),
+}));
 import {
   calculateDurationBetweenDates,
   cleanEntityName,
@@ -347,6 +358,38 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
     });
   });
 
+  describe("getGeminiModels — model priority & deduplication", () => {
+    const originalEnv = process.env.GEMINI_MODEL;
+
+    afterEach(() => {
+      if (originalEnv === undefined) delete process.env.GEMINI_MODEL;
+      else process.env.GEMINI_MODEL = originalEnv;
+    });
+
+    it("defaults to gemini-3.5-flash-lite first (fastest stable model)", async () => {
+      delete process.env.GEMINI_MODEL;
+      const { getGeminiModels } = await import("@/lib/ai/gemini");
+      const models = getGeminiModels();
+      expect(models[0]).toBe("gemini-3.5-flash-lite");
+    });
+
+    it("env model goes first and is removed from defaults (no duplicate)", async () => {
+      process.env.GEMINI_MODEL = "gemini-3.5-flash-lite";
+      const { getGeminiModels } = await import("@/lib/ai/gemini");
+      const models = getGeminiModels();
+      expect(models[0]).toBe("gemini-3.5-flash-lite");
+      expect(models.filter((m) => m === "gemini-3.5-flash-lite")).toHaveLength(1);
+    });
+
+    it("custom env model goes first even if not in defaults", async () => {
+      process.env.GEMINI_MODEL = "gemini-pro-experimental";
+      const { getGeminiModels } = await import("@/lib/ai/gemini");
+      const models = getGeminiModels();
+      expect(models[0]).toBe("gemini-pro-experimental");
+      expect(models).toHaveLength(4); // custom + 3 defaults
+    });
+  });
+
   describe("extractContractFromBuffer — fallback chain & retry behavior", () => {
     const originalFetch = global.fetch;
     const originalEnv = process.env.GEMINI_API_KEY;
@@ -435,13 +478,14 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
       }
     });
 
-    it("falls back through all 3 models on cascading 503 errors and returns friendly error", async () => {
+    it("falls back through up to 2 models on cascading 503 errors and returns friendly error", async () => {
       process.env.GEMINI_API_KEY = "test-key";
       const fetchMock = vi
         .fn()
         .mockResolvedValueOnce(mockErrorResponse(503, "The model is overloaded. Please try again later."))
         .mockResolvedValueOnce(mockErrorResponse(503, "The model is overloaded. Please try again later."))
-        .mockResolvedValueOnce(mockErrorResponse(503, "The model is overloaded. Please try again later."));
+        // MAX_RETRIES=2 → chỉ thử 2 model, không thử model thứ 3
+        .mockResolvedValueOnce(mockOkResponse({ contractNumber: "should-not-be-called" }));
       global.fetch = fetchMock as unknown as typeof fetch;
 
       const { extractContractFromBuffer } = await import("@/lib/ai/gemini");
@@ -451,8 +495,8 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
         filename: "hop-dong.pdf",
       });
 
-      // Quan trọng: vẫn phải thử đủ 3 model thay vì dừng ở 2 (đây là điểm cải tiến chính)
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // MAX_RETRIES=2 → chỉ gọi 2 lần (không thử model thứ 3)
+      expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         // Phải có message thân thiện bằng tiếng Việt khi server quá tải
