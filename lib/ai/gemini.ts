@@ -5,15 +5,15 @@ import { err, ok, type ServiceResult } from "@/lib/services/types";
 import { normalizeDurationText } from "@/lib/ai/matching";
 import { aiLog } from "@/lib/ai/log";
 
-function getGeminiModels(): string[] {
+export function getGeminiModels(): string[] {
   const envModel = process.env.GEMINI_MODEL?.trim();
   const defaults = [
-    "gemini-3-flash-preview",
     "gemini-3.5-flash-lite",
-    "gemini-flash-lite-latest",
+    "gemini-2.5-flash",
+    "gemini-1.5-flash",
   ];
-  if (envModel && !defaults.includes(envModel)) {
-    return [envModel, ...defaults];
+  if (envModel) {
+    return [envModel, ...defaults.filter((m) => m !== envModel)];
   }
   return defaults;
 }
@@ -25,7 +25,7 @@ const ALLOWED_MIME_TYPES = new Set([
   "image/webp",
 ]);
 
-const MAX_AI_FILE_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
+export const MAX_AI_FILE_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
 
 const EXTRACTION_SYSTEM_PROMPT = `Bạn là trợ lý AI chuyên gia phân tích hợp đồng kinh tế và pháp lý tại Việt Nam.
 Hãy đọc kỹ tài liệu hợp đồng đính kèm và trích xuất các thông tin sau thành JSON cấu trúc chuẩn:
@@ -48,6 +48,57 @@ Hãy đọc kỹ tài liệu hợp đồng đính kèm và trích xuất các th
 - summary: Tóm tắt ngắn gọn nội dung và phạm vi hợp đồng trong 1-2 câu tiếng Việt.
 
 Chỉ trả về JSON hợp lệ khớp với cấu trúc trên.`;
+
+const CONTRACT_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    contractNumber: {
+      type: "STRING",
+      description: "Số hợp đồng, để trống '' nếu không có",
+    },
+    signedDate: {
+      type: "STRING",
+      description: "Ngày ký hợp đồng YYYY-MM-DD, để trống '' nếu không tìm thấy",
+    },
+    expiryDate: {
+      type: "STRING",
+      description: "Ngày hết hạn hợp đồng YYYY-MM-DD, để trống '' nếu không có",
+    },
+    durationText: {
+      type: "STRING",
+      description: "Thời hạn hiệu lực ghi dạng số tháng hoặc số năm (vd '1 năm', '6 tháng')",
+    },
+    companyName: {
+      type: "STRING",
+      description: "Tên công ty nội bộ: 'CÔNG TY TNHH HRP VIỆT NAM' hoặc 'CÔNG TY TNHH HR PARTNER VIỆT NAM'",
+    },
+    partnerName: {
+      type: "STRING",
+      description: "Tên công ty đối tác bên ngoài",
+    },
+    partnerTaxCode: {
+      type: "STRING",
+      description: "Mã số thuế của đối tác bên ngoài",
+    },
+    partnerAddress: {
+      type: "STRING",
+      description: "Địa chỉ của đối tác bên ngoài",
+    },
+    summary: {
+      type: "STRING",
+      description: "Tóm tắt ngắn gọn nội dung và phạm vi hợp đồng trong 1-2 câu",
+    },
+  },
+  required: [
+    "contractNumber",
+    "signedDate",
+    "expiryDate",
+    "durationText",
+    "companyName",
+    "partnerName",
+    "summary",
+  ],
+};
 
 /**
  * Safely strips markdown code blocks and extracts JSON object substring.
@@ -207,7 +258,7 @@ export async function extractContractFromBuffer({
 
   for (const model of models) {
     const startTime = Date.now();
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
     // Build parts dựa trên luồng đã chọn.
     const parts: Array<Record<string, unknown>> = [];
@@ -222,10 +273,11 @@ export async function extractContractFromBuffer({
       });
       parts.push({ text: EXTRACTION_SYSTEM_PROMPT });
     } else if (pdfTextForModel) {
-      // PDF có text layer: gửi văn bản thuần.
+      // PDF có text layer: gửi văn bản thuần kèm system prompt đầy đủ.
       parts.push({
         text: `Đây là nội dung văn bản được trích xuất từ tài liệu PDF:\n\n${pdfTextForModel}\n\n---\nYêu cầu trích xuất thông tin từ nội dung trên:`,
       });
+      parts.push({ text: EXTRACTION_SYSTEM_PROMPT });
     } else {
       // Fallback: gửi base64 (ảnh hoặc PDF scan).
       parts.push({
@@ -241,6 +293,7 @@ export async function extractContractFromBuffer({
       contents: [{ parts }],
       generationConfig: {
         responseMimeType: "application/json",
+        responseSchema: CONTRACT_RESPONSE_SCHEMA,
         temperature: 0.1,
       },
     };
@@ -253,9 +306,12 @@ export async function extractContractFromBuffer({
       });
       const response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(24_000),
+        signal: AbortSignal.timeout(16_000),
       });
 
       if (response.ok) {
@@ -340,7 +396,7 @@ export async function extractContractFromBuffer({
         networkError instanceof Error &&
         (networkError.name === "TimeoutError" || networkError.message.includes("timeout"));
       lastError = isTimeout
-        ? `Quá thời gian chờ phản hồi (24s) từ model ${model}`
+        ? `Quá thời gian chờ phản hồi (16s) từ model ${model}`
         : networkError instanceof Error
           ? networkError.message
           : "Lỗi kết nối mạng";

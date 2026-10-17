@@ -3,9 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 export const maxDuration = 60;
 import { guardFileApiRequest } from "@/lib/api-guard";
 import { createUploadUrl } from "@/lib/r2/presign";
-import { resolveMimeType } from "@/lib/ai/gemini";
-
-const MAX_AI_TEMP_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25 MB
+import { MAX_AI_FILE_SIZE_BYTES, resolveMimeType } from "@/lib/ai/gemini";
 
 /**
  * POST /api/ai/upload-url
@@ -28,9 +26,9 @@ export async function POST(request: NextRequest) {
   const fileSize = Number(body.fileSize) || 0;
   const resolvedMime = resolveMimeType(filename, body.mimeType);
 
-  if (fileSize > MAX_AI_TEMP_FILE_SIZE_BYTES) {
+  if (fileSize > MAX_AI_FILE_SIZE_BYTES) {
     return NextResponse.json(
-      { error: "Dung lượng tệp vượt quá giới hạn 25 MB cho phép đối với phân tích AI." },
+      { error: "Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI." },
       { status: 400 },
     );
   }

@@ -21,6 +21,7 @@ import "server-only";
 export type PdfTextResult = {
   text: string;
   pageCount: number;
+  isTruncated?: boolean;
 };
 
 const MIN_TEXT_LENGTH = 50; // < 50 ký tự coi như scan
@@ -72,12 +73,17 @@ export async function extractPdfText(buffer: Buffer): Promise<PdfTextResult | nu
       }
     }
 
+    const isTruncated = pdf.numPages > 50;
+    if (isTruncated) {
+      pageTexts.push(`[Lưu ý: Tài liệu gồm ${pdf.numPages} trang. Hệ thống đã trích xuất 50 trang đầu tiên.]`);
+    }
+
     const fullText = pageTexts.join("\n\n").trim();
     if (fullText.length < MIN_TEXT_LENGTH) {
       return null;
     }
 
-    return { text: fullText, pageCount: pdf.numPages };
+    return { text: fullText, pageCount: pdf.numPages, isTruncated };
   } catch {
     // Mọi lỗi (timeout, parse fail, worker load fail, import fail) → coi như không trích được.
     return null;

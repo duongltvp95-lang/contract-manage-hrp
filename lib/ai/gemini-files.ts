@@ -24,10 +24,10 @@ import { aiLog } from "@/lib/ai/log";
 const UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta/files";
 const FILES_URL = "https://generativelanguage.googleapis.com/v1beta/files";
 
-/** Thời gian timeout cho upload (30s) — tránh treo nếu Gemini chậm. */
-const UPLOAD_TIMEOUT_MS = 30_000;
-/** Thời gian timeout cho delete (10s) — không cần lâu. */
-const DELETE_TIMEOUT_MS = 10_000;
+/** Thời gian timeout cho upload (15s) — ngân sách an toàn dưới giới hạn 60s của Vercel. */
+const UPLOAD_TIMEOUT_MS = 15_000;
+/** Thời gian timeout cho delete (3s) — thao tác dọn dẹp nhẹ, không chặn lâu. */
+const DELETE_TIMEOUT_MS = 3_000;
 
 export type GeminiFile = {
   name: string; // "files/abc123"
@@ -89,7 +89,7 @@ export async function uploadToGeminiFiles({
 
   const body = Buffer.concat([head, buffer, tail]);
 
-  const url = `${UPLOAD_URL}?key=${encodeURIComponent(apiKey)}`;
+  const url = UPLOAD_URL;
 
   try {
     const response = await fetch(url, {
@@ -97,6 +97,7 @@ export async function uploadToGeminiFiles({
       headers: {
         "Content-Type": `multipart/related; boundary=${boundary}`,
         "X-Goog-Upload-Protocol": "multipart",
+        "x-goog-api-key": apiKey,
       },
       body,
       signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
@@ -164,10 +165,13 @@ export async function deleteGeminiFile(
   apiKey: string,
 ): Promise<void> {
   if (!fileName || !apiKey) return;
-  const url = `${FILES_URL}/${fileName}?key=${encodeURIComponent(apiKey)}`;
+  const url = `${FILES_URL}/${fileName}`;
   try {
     const response = await fetch(url, {
       method: "DELETE",
+      headers: {
+        "x-goog-api-key": apiKey,
+      },
       signal: AbortSignal.timeout(DELETE_TIMEOUT_MS),
     });
     if (!response.ok && response.status !== 404) {

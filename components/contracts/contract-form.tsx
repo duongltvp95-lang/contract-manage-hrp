@@ -266,6 +266,13 @@ export function ContractForm({
   }, [isEdit, savedContractId, resetFormState]);
 
   async function handleExtractAi(fileItem: PendingFile) {
+    if (fileItem.file.size > 20 * 1024 * 1024) {
+      toast.error("Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI.", {
+        id: "ai-extract",
+      });
+      return;
+    }
+
     setIsExtractingAi(true);
     setAiSummary(null);
 

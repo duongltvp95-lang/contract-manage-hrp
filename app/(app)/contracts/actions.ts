@@ -26,7 +26,7 @@ import {
   type ActionResult,
 } from "@/lib/server-action";
 import type { ExtractedContractResult } from "@schemas/contract";
-import { extractContractFromBuffer } from "@/lib/ai/gemini";
+import { extractContractFromBuffer, MAX_AI_FILE_SIZE_BYTES } from "@/lib/ai/gemini";
 import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
 import { aiLog } from "@/lib/ai/log";
 import {
@@ -270,10 +270,21 @@ export async function extractContractAction(
       mimeType = file.type;
     }
 
-    // G2 v2: Ưu tiên upload lên Gemini Files API trước khi gọi generateContent.
-    // Lợi ích: body request nhỏ (vài KB) thay vì inline base64 (vài MB → vài chục MB).
+    if (buffer.length > MAX_AI_FILE_SIZE_BYTES) {
+      return validationFailure("Dung lượng tệp quá lớn", [
+        {
+          path: "file",
+          message: "Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI.",
+        },
+      ]);
+    }
+
+    // Chọn chiến lược gửi cho Gemini theo dung lượng:
+    // - Tệp >= 2 MB: Tải lên Gemini Files API để tránh body base64 quá lớn làm nghẽn mạng/timeout khi retry.
+    // - Tệp < 2 MB: Bỏ qua Files API, gửi trực tiếp (hoặc qua text layer PDF) để tiết kiệm 2 lượt mạng (upload + delete).
+    const FILES_API_THRESHOLD_BYTES = 2 * 1024 * 1024; // 2 MB
     let geminiFileUri: string | null = null;
-    if (apiKey) {
+    if (apiKey && buffer.length >= FILES_API_THRESHOLD_BYTES) {
       const uploadRes = await uploadToGeminiFiles({
         buffer,
         mimeType,

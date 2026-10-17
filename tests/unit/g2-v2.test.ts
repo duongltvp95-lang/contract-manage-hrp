@@ -12,7 +12,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aiLog } from "@/lib/ai/log";
 import { clientLog } from "@/lib/ai/log-client";
 import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
-import { extractContractFromBuffer } from "@/lib/ai/gemini";
+import {
+  extractContractFromBuffer,
+  getGeminiModels,
+  MAX_AI_FILE_SIZE_BYTES,
+} from "@/lib/ai/gemini";
 import { extractPdfText } from "@/lib/ai/pdf-text";
 
 describe("G2 v2 — Logger có cấu trúc", () => {
@@ -124,9 +128,9 @@ describe("G2 v2 — Gemini Files API", () => {
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-      expect(url).toContain("https://generativelanguage.googleapis.com/upload/v1beta/files");
-      expect(url).toContain("key=test-key");
+      expect(url).toBe("https://generativelanguage.googleapis.com/upload/v1beta/files");
       const headers = init.headers as Record<string, string>;
+      expect(headers["x-goog-api-key"]).toBe("test-key");
       expect(headers["Content-Type"]).toMatch(/^multipart\/related; boundary=/);
       expect(headers["X-Goog-Upload-Protocol"]).toBe("multipart");
       // body phải chứa metadata JSON
@@ -174,8 +178,9 @@ describe("G2 v2 — Gemini Files API", () => {
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-      expect(url).toContain("v1beta/files/files/abc123");
-      expect(url).toContain("key=test-key");
+      expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/files/files/abc123");
+      const headers = init.headers as Record<string, string>;
+      expect(headers["x-goog-api-key"]).toBe("test-key");
       expect(init.method).toBe("DELETE");
     });
 
@@ -241,6 +246,10 @@ describe("G2 v2 — extractContractFromBuffer với 3 nhánh", () => {
     expect(result.ok).toBe(true);
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toContain("generateContent");
+    expect(url).not.toContain("key=");
+    const headers = init.headers as Record<string, string>;
+    expect(headers["x-goog-api-key"]).toBe("test-key");
+
     const body = JSON.parse(init.body as string);
     const parts = body.contents[0].parts;
     // Có fileData, KHÔNG có inlineData
@@ -253,6 +262,12 @@ describe("G2 v2 — extractContractFromBuffer với 3 nhánh", () => {
       mimeType: "application/pdf",
       fileUri: expect.stringContaining("files/xyz"),
     });
+
+    // Structured JSON output schema
+    expect(body.generationConfig?.responseMimeType).toBe("application/json");
+    expect(body.generationConfig?.responseSchema).toBeDefined();
+    expect(body.generationConfig.responseSchema.properties).toHaveProperty("contractNumber");
+    expect(body.generationConfig.responseSchema.properties).toHaveProperty("durationText");
   });
 
   it("fallback inlineData khi không có geminiFileUri", async () => {
@@ -292,6 +307,79 @@ describe("G2 v2 — extractContractFromBuffer với 3 nhánh", () => {
     if (!result.ok) {
       expect(result.message).toContain("GEMINI_API_KEY");
     }
+  });
+
+  it("nhánh PDF có text layer gửi cả text đã trích xuất và EXTRACTION_SYSTEM_PROMPT", async () => {
+    const pdfTextModule = await import("@/lib/ai/pdf-text");
+    const extractPdfSpy = vi.spyOn(pdfTextModule, "extractPdfText").mockResolvedValueOnce({
+      text: "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nHỢP ĐỒNG KINH TẾ Số: 99/2026/HĐKT",
+      pageCount: 1,
+    });
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: '{"contractNumber":"99/2026/HĐKT"}' }] } }],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await extractContractFromBuffer({
+      buffer: Buffer.from("dummy-pdf-bytes"),
+      mimeType: "application/pdf",
+      filename: "contract.pdf",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(extractPdfSpy).toHaveBeenCalled();
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    const parts = body.contents[0].parts;
+    // Phải có 2 text parts: part 1 là nội dung trích xuất, part 2 là EXTRACTION_SYSTEM_PROMPT
+    expect(parts).toHaveLength(2);
+    expect(parts[0].text).toContain("HỢP ĐỒNG KINH TẾ Số: 99/2026/HĐKT");
+    expect(parts[1].text).toContain("Bạn là trợ lý AI chuyên gia phân tích hợp đồng");
+    extractPdfSpy.mockRestore();
+  });
+
+  it("từ chối tệp vượt quá 20 MB mà không gọi fetch", async () => {
+    const hugeBuffer = Buffer.alloc(MAX_AI_FILE_SIZE_BYTES + 1);
+    const result = await extractContractFromBuffer({
+      buffer: hugeBuffer,
+      mimeType: "application/pdf",
+      filename: "huge.pdf",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("20 MB");
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("G2 v2 — Cấu hình model & fallback", () => {
+  const ORIGINAL_MODEL = process.env.GEMINI_MODEL;
+
+  afterEach(() => {
+    if (ORIGINAL_MODEL === undefined) delete process.env.GEMINI_MODEL;
+    else process.env.GEMINI_MODEL = ORIGINAL_MODEL;
+  });
+
+  it("mặc định ưu tiên gemini-3.5-flash-lite ổn định", () => {
+    delete process.env.GEMINI_MODEL;
+    const models = getGeminiModels();
+    expect(models[0]).toBe("gemini-3.5-flash-lite");
+    expect(models).toContain("gemini-2.5-flash");
+  });
+
+  it("cấu hình GEMINI_MODEL ưu tiên model cấu hình mà không bị trùng lặp", () => {
+    process.env.GEMINI_MODEL = "gemini-2.5-flash";
+    const models = getGeminiModels();
+    expect(models[0]).toBe("gemini-2.5-flash");
+    // Không bị xuất hiện 2 lần
+    expect(models.filter((m) => m === "gemini-2.5-flash")).toHaveLength(1);
+    expect(models).toContain("gemini-3.5-flash-lite");
   });
 });
 
