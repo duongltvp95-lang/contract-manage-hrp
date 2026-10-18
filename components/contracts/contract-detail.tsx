@@ -171,6 +171,8 @@ export function ContractDetail({
             files={files}
             initialViewUrl={initialViewUrl}
             initialSelectedId={initialSelectedId}
+            canDelete={canDelete && !archived}
+            readOnly={archived}
           />
         </section>
 

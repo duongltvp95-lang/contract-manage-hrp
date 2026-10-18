@@ -48,6 +48,8 @@ export function DocumentViewer({
   files,
   initialViewUrl = null,
   initialSelectedId = null,
+  canDelete = false,
+  readOnly = false,
 }: {
   contractId?: string;
   files: SelectableFile[];
@@ -55,6 +57,8 @@ export function DocumentViewer({
   initialViewUrl?: ViewUrl | null;
   /** `?file=<id>` deep link, validated by the page. */
   initialSelectedId?: string | null;
+  canDelete?: boolean;
+  readOnly?: boolean;
 }) {
   const router = useRouter();
   const firstId = initialSelectedId ?? files[0]?.id ?? null;
@@ -67,7 +71,7 @@ export function DocumentViewer({
   const [isDeleting, setIsDeleting] = useState(false);
 
   const handleDeleteFile = async (file: SelectableFile) => {
-    if (!contractId) return;
+    if (!contractId || readOnly || !canDelete) return;
     const confirmed = window.confirm(
       `Bạn có chắc chắn muốn xoá tệp "${file.original_filename}" khỏi hợp đồng này không?`,
     );
@@ -201,14 +205,14 @@ export function DocumentViewer({
         onSelect={selectFile}
         disabled={loading || isDeleting}
         onAddFile={
-          contractId
+          contractId && !readOnly
             ? () => {
                 setReplacingFile(null);
                 setUploadModalOpen(true);
               }
             : undefined
         }
-        onDeleteFile={contractId ? handleDeleteFile : undefined}
+        onDeleteFile={contractId && canDelete && !readOnly ? handleDeleteFile : undefined}
       />
 
       <div className="min-h-0 min-w-0 flex-1">
@@ -219,7 +223,7 @@ export function DocumentViewer({
               <AlertDescription className="space-y-3">
                 <p>{formatPdfErrorMessage(error)}</p>
                 <div className="flex flex-wrap gap-2">
-                  {contractId && selected && (
+                  {contractId && selected && canDelete && !readOnly && (
                     <Button
                       type="button"
                       size="sm"
@@ -255,7 +259,7 @@ export function DocumentViewer({
               url={current.viewUrl}
               onSignatureExpired={handleSignatureExpired}
               onUploadReplacement={
-                contractId && selected
+                contractId && selected && canDelete && !readOnly
                   ? () => {
                       setReplacingFile({ id: selected.id, name: selected.original_filename });
                       setUploadModalOpen(true);
@@ -273,7 +277,7 @@ export function DocumentViewer({
         )}
       </div>
 
-      {contractId && (
+      {contractId && !readOnly && (
         <UploadContractFileDialog
           contractId={contractId}
           open={uploadModalOpen}

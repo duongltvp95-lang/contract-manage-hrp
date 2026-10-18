@@ -43,6 +43,7 @@ export async function POST(request: NextRequest) {
     mimeType: parsed.data.mimeType,
     fileSize: parsed.data.fileSize,
     kind: parsed.data.kind,
+    userEmail: guard.user.email,
   });
 
   if (!result.ok) {

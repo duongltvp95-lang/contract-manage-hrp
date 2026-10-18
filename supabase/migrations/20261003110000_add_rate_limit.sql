@@ -76,7 +76,13 @@ begin
     return;
   end if;
 
-  if p_limit is null or p_limit <= 0 or p_window_seconds is null or p_window_seconds <= 0 then
+  -- Validate bucket and bounds for parameters to prevent abuse from authenticated clients
+  if p_bucket is null or p_bucket not in ('files:upload-url', 'files:view-url', 'ai:upload-url') then
+    return query select false, 0, now();
+    return;
+  end if;
+
+  if p_limit is null or p_limit < 1 or p_limit > 1000 or p_window_seconds is null or p_window_seconds < 1 or p_window_seconds > 3600 then
     return query select false, 0, now();
     return;
   end if;

@@ -11,7 +11,9 @@ import {
 } from "@/lib/r2/presign";
 import { getR2Bucket } from "@/lib/r2/client";
 import { formatBytes } from "@/lib/format";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { canDeleteEntities } from "@/lib/delete-permissions";
 import { recordCurrentUserAudit } from "./audit-logs";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
@@ -60,12 +62,13 @@ export async function getContractFileAccess(
   organizationId: string,
   contractId: string,
   fileId?: string,
+  options?: { userEmail?: string | null; forUpload?: boolean },
 ): Promise<ServiceResult<FileAccess>> {
   const supabase = await createClient();
 
   const { data: contract, error: contractError } = await supabase
     .from("contracts")
-    .select("id")
+    .select("id, archived_at")
     .eq("id", contractId)
     .eq("organization_id", organizationId)
     .maybeSingle();
@@ -78,6 +81,18 @@ export async function getContractFileAccess(
     // `not_found` covers both "no such contract" and "another organization's
     // contract"; the caller turns it into 403, not 404, so nothing leaks.
     return err("forbidden", "Hợp đồng không thuộc tổ chức của bạn");
+  }
+
+  const contractRow = contract as { id: string; archived_at: string | null };
+
+  // An archived contract is frozen; no new files may be uploaded or attached
+  if (options?.forUpload && contractRow.archived_at !== null) {
+    return err("validation", "Hợp đồng đã được lưu trữ, không thể tải lên tệp mới");
+  }
+
+  // An archived contract is only viewable by delete-admins / Owner (matches contract detail page rule)
+  if (contractRow.archived_at !== null && !canDeleteEntities(options?.userEmail)) {
+    return err("forbidden", "Hợp đồng đã được lưu trữ và bạn không có quyền truy cập");
   }
 
   if (!fileId) {
@@ -118,6 +133,7 @@ export type CreateUploadRequestInput = {
   mimeType: string;
   fileSize: number;
   kind?: FileKind;
+  userEmail?: string | null;
 };
 
 /**
@@ -143,9 +159,12 @@ export async function createUploadRequest(
     );
   }
 
-  const { organizationId, contractId, filename, mimeType } = parsed.data;
+  const { organizationId, contractId, filename, mimeType, fileSize } = parsed.data;
 
-  const access = await getContractFileAccess(organizationId, contractId);
+  const access = await getContractFileAccess(organizationId, contractId, undefined, {
+    userEmail: input.userEmail,
+    forUpload: true,
+  });
   if (!access.ok) {
     return access;
   }
@@ -158,7 +177,8 @@ export async function createUploadRequest(
     filename,
   });
 
-  const uploadUrl = await createUploadUrl(objectKey, mimeType);
+  // Pass fileSize so AWS SigV4 binds Content-Length header, preventing oversized uploads
+  const uploadUrl = await createUploadUrl(objectKey, mimeType, fileSize);
 
   return ok({
     fileId,
@@ -172,6 +192,7 @@ export async function createUploadRequest(
 export type CompleteUploadInput = {
   organizationId: string;
   userId: string;
+  userEmail?: string | null;
   contractId: string;
   fileId: string;
   objectKey: string;
@@ -191,9 +212,12 @@ export type CompleteUploadInput = {
 export async function completeUpload(
   input: CompleteUploadInput,
 ): Promise<ServiceResult<ContractFileRow>> {
-  const { organizationId, userId, contractId, fileId, objectKey } = input;
+  const { organizationId, userId, userEmail, contractId, fileId, objectKey } = input;
 
-  const access = await getContractFileAccess(organizationId, contractId);
+  const access = await getContractFileAccess(organizationId, contractId, undefined, {
+    userEmail,
+    forUpload: true,
+  });
   if (!access.ok) {
     return access;
   }
@@ -279,8 +303,11 @@ export async function completeUpload(
 export async function listContractFiles(
   organizationId: string,
   contractId: string,
+  userEmail?: string | null,
 ): Promise<ServiceResult<ContractFileRow[]>> {
-  const access = await getContractFileAccess(organizationId, contractId);
+  const access = await getContractFileAccess(organizationId, contractId, undefined, {
+    userEmail,
+  });
   if (!access.ok) {
     return access;
   }
@@ -326,6 +353,7 @@ export type FileViewUrl = {
 export async function getFileViewUrl(
   fileId: string,
   organizationId: string,
+  userEmail?: string | null,
 ): Promise<ServiceResult<FileViewUrl>> {
   const supabase = await createClient();
 
@@ -349,6 +377,7 @@ export async function getFileViewUrl(
     organizationId,
     located.contract_id,
     fileId,
+    { userEmail },
   );
   if (!access.ok) {
     return access;
@@ -398,17 +427,31 @@ export async function getFileViewUrl(
 }
 
 /**
- * Deletes a contract file from both R2 storage and the `contract_files` table.
+ * Deletes a contract file from both `contract_files` table and R2 storage.
+ *
+ * Only owners/delete-admins can delete files; archived contracts cannot be modified.
+ * DB row is deleted first using adminClient (due to RLS hardening revoking DELETE from authenticated);
+ * R2 object is deleted only after the DB deletion succeeds.
  */
 export async function deleteContractFile(
   fileId: string,
   organizationId: string,
+  userEmail?: string | null,
 ): Promise<ServiceResult<{ id: string; contractId: string }>> {
-  const supabase = await createClient();
+  if (!canDeleteEntities(userEmail)) {
+    return err("forbidden", "Không có quyền xoá tệp hợp đồng");
+  }
 
-  const { data, error: findError } = await supabase
+  let admin: ReturnType<typeof createAdminClient>;
+  try {
+    admin = createAdminClient();
+  } catch (error) {
+    return dbError("deleteContractFile", error);
+  }
+
+  const { data: fileData, error: findError } = await admin
     .from("contract_files")
-    .select("id, contract_id, object_key, organization_id")
+    .select("id, contract_id, object_key, organization_id, original_filename")
     .eq("id", fileId)
     .eq("organization_id", organizationId)
     .maybeSingle();
@@ -417,19 +460,39 @@ export async function deleteContractFile(
     return dbError("deleteContractFile", findError);
   }
 
-  if (!data) {
+  if (!fileData) {
     return err("forbidden", "Tệp không tồn tại hoặc không thuộc tổ chức của bạn");
   }
 
-  const file = data as { id: string; contract_id: string; object_key: string };
+  const file = fileData as {
+    id: string;
+    contract_id: string;
+    object_key: string;
+    original_filename: string;
+  };
 
-  try {
-    await deleteObject(file.object_key);
-  } catch {
-    // If the object is already missing from R2 (e.g. 404), proceed with row deletion
+  const { data: contractData, error: contractError } = await admin
+    .from("contracts")
+    .select("id, archived_at")
+    .eq("id", file.contract_id)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+
+  if (contractError) {
+    return dbError("deleteContractFile", contractError);
   }
 
-  const { error: deleteError } = await supabase
+  if (!contractData) {
+    return err("forbidden", "Hợp đồng không tồn tại hoặc không thuộc tổ chức của bạn");
+  }
+
+  if (contractData.archived_at !== null) {
+    return err("validation", "Không thể xoá tệp của hợp đồng đã được lưu trữ");
+  }
+
+  // Delete DB row FIRST with service-role client (authenticated has no DELETE grant).
+  // If DB deletion fails, R2 object is left completely untouched.
+  const { error: deleteError } = await admin
     .from("contract_files")
     .delete()
     .eq("id", fileId)
@@ -439,5 +502,13 @@ export async function deleteContractFile(
     return dbError("deleteContractFile", deleteError);
   }
 
+  // DB deletion succeeded; delete R2 object
+  try {
+    await deleteObject(file.object_key);
+  } catch (r2Error) {
+    console.error("[service:deleteContractFile] R2 delete failed", r2Error);
+  }
+
   return ok({ id: file.id, contractId: file.contract_id });
 }
+

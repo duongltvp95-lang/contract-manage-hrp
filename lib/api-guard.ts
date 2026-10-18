@@ -50,17 +50,24 @@ export async function guardFileApiRequest(
   const verdict = await consumeRateLimit(bucket);
 
   if (!verdict.ok) {
-    // Fail OPEN, deliberately.
+    // Fail CLOSED.
     //
-    // The counter lives in the same database as the contracts, so if it is
-    // unreachable the request would fail a moment later anyway. Returning 503
-    // here would turn a transient blip into a full outage of uploads and
-    // previews — a worse outcome than briefly losing the limit. `dbError()`
-    // has already logged the underlying failure.
+    // For presigned URL generation endpoints (such as /api/ai/upload-url),
+    // subsequent steps do not necessarily hit PostgreSQL. Failing open would allow
+    // unmetered issuance of presigned R2 upload URLs during a database blip.
     console.error(
-      `[rate-limit] counter unavailable for ${bucket}; allowing the request`,
+      `[rate-limit] counter unavailable for ${bucket}; failing closed`,
     );
-    return { ok: true, user: access.user, headers: {} };
+    return {
+      ok: false,
+      response: NextResponse.json(
+        {
+          error: "Dịch vụ giới hạn tần suất tạm thời không khả dụng, vui lòng thử lại sau.",
+          code: "rate_limit_unavailable",
+        },
+        { status: 503 },
+      ),
+    };
   }
 
   const headers = rateLimitHeaders(verdict.data);

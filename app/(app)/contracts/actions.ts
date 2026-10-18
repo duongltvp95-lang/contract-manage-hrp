@@ -27,6 +27,8 @@ import {
   validationFailure,
   type ActionResult,
 } from "@/lib/server-action";
+import { canDeleteEntities } from "@/lib/delete-permissions";
+import { err } from "@/lib/services/types";
 import type { ExtractedContractResult } from "@schemas/contract";
 import {
   ALLOWED_MIME_TYPES,
@@ -141,6 +143,7 @@ export async function completeUploadAction(
   const result = await completeUpload({
     organizationId: access.user.organizationId,
     userId: access.user.id,
+    userEmail: access.user.email,
     contractId: payload.contractId,
     fileId: payload.fileId,
     objectKey: payload.objectKey,
@@ -159,6 +162,10 @@ export async function deleteContractFileAction(
   const access = await authorized();
   if (!access.ok) return access.result;
 
+  if (!canDeleteEntities(access.user.email)) {
+    return fromService(err("forbidden", "Không có quyền xoá tệp hợp đồng"));
+  }
+
   if (typeof fileId !== "string" || fileId.length === 0) {
     return validationFailure("Thiếu thông tin tệp", [
       { path: "fileId", message: "Không xác định được tệp cần xoá" },
@@ -166,7 +173,7 @@ export async function deleteContractFileAction(
   }
 
   return fromService(
-    await deleteContractFile(fileId, access.user.organizationId),
+    await deleteContractFile(fileId, access.user.organizationId, access.user.email),
   );
 }
 

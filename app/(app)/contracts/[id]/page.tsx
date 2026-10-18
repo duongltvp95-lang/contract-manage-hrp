@@ -97,12 +97,14 @@ async function ContractDetailContent({
   id,
   requestedFileId,
   organizationId,
+  userEmail,
   contract,
   canDelete,
 }: {
   id: string;
   requestedFileId: string | undefined;
   organizationId: string;
+  userEmail: string | null;
   contract: ContractDetailRow;
   canDelete: boolean;
 }) {
@@ -110,7 +112,7 @@ async function ContractDetailContent({
   // Sheet's combobox has its options on first paint; typing searches the whole
   // directory through a server action (round 6).
   const [files, partners] = await Promise.all([
-    listContractFiles(organizationId, id),
+    listContractFiles(organizationId, id, userEmail),
     searchPartners(""),
   ]);
 
@@ -126,7 +128,7 @@ async function ContractDetailContent({
   // of waiting for a client round trip. Switching files happens client-side.
   let initialViewUrl = null;
   if (initial) {
-    const signed = await getFileViewUrl(initial.id, organizationId);
+    const signed = await getFileViewUrl(initial.id, organizationId, userEmail);
     initialViewUrl = signed.ok ? signed.data : null;
   }
 
@@ -163,6 +165,7 @@ export default async function ContractDetailPage({
         id={id}
         requestedFileId={requestedFileId}
         organizationId={user.organizationId}
+        userEmail={user.email}
         contract={contract}
         canDelete={canDeleteEntities(user.email)}
       />
