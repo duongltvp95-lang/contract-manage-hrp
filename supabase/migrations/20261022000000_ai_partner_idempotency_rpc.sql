@@ -38,6 +38,21 @@ begin
     return;
   end if;
 
+  -- Validate company IDs: every partner MUST be linked to at least one valid company of this organization.
+  -- Rejects requests without companies to eliminate company-unaware tax code matching or orphan partners.
+  if p_company_ids is null or array_length(p_company_ids, 1) is null or array_length(p_company_ids, 1) = 0 then
+    return;
+  end if;
+
+  select coalesce(array_agg(c.id), array[]::uuid[]) into p_company_ids
+  from public.companies c
+  where c.organization_id = p_org_id
+    and c.id = any(p_company_ids);
+
+  if array_length(p_company_ids, 1) is null or array_length(p_company_ids, 1) = 0 then
+    return;
+  end if;
+
   v_clean_tax := nullif(btrim(coalesce(p_tax_code, '')), '');
 
   -- Acquire transaction-level advisory locks:
@@ -72,47 +87,34 @@ begin
 
   if v_partner_id is not null then
     -- Ensure any missing company links from p_company_ids are linked
-    if p_company_ids is not null and array_length(p_company_ids, 1) > 0 then
-      insert into public.partner_companies (partner_id, company_id)
-      select v_partner_id, unnest(p_company_ids)
-      on conflict do nothing;
-    end if;
+    insert into public.partner_companies (partner_id, company_id)
+    select v_partner_id, unnest(p_company_ids)
+    on conflict do nothing;
+
     return query select v_partner_id, v_partner_name, false;
     return;
   end if;
 
-  -- 2. If tax code is provided, check if partner with same tax code already exists
+  -- 2. If tax code is provided, check if partner with same tax code already exists under an overlapping company
   -- Round 29 company-aware rule:
   -- Tax-code duplicate/conflict only applies within the SAME company or overlapping companies.
   -- The same tax code under a completely different company is allowed!
   if v_clean_tax is not null then
-    if p_company_ids is not null and array_length(p_company_ids, 1) > 0 then
-      -- Match partner sharing this tax code ONLY IF they link to at least one overlapping company
-      select p.id, p.name into v_partner_id, v_partner_name
-      from public.partners p
-      join public.partner_companies pc on pc.partner_id = p.id
-      where p.organization_id = p_org_id
-        and p.tax_code = v_clean_tax
-        and pc.company_id = any(p_company_ids)
-      order by p.created_at asc
-      limit 1;
-    else
-      -- If caller sent no company info, match any partner with this tax code in the organization
-      select p.id, p.name into v_partner_id, v_partner_name
-      from public.partners p
-      where p.organization_id = p_org_id
-        and p.tax_code = v_clean_tax
-      order by p.created_at asc
-      limit 1;
-    end if;
+    select p.id, p.name into v_partner_id, v_partner_name
+    from public.partners p
+    join public.partner_companies pc on pc.partner_id = p.id
+    where p.organization_id = p_org_id
+      and p.tax_code = v_clean_tax
+      and pc.company_id = any(p_company_ids)
+    order by p.created_at asc
+    limit 1;
 
     if v_partner_id is not null then
       -- Partner with same tax code found for overlapping company -> reuse partner
-      if p_company_ids is not null and array_length(p_company_ids, 1) > 0 then
-        insert into public.partner_companies (partner_id, company_id)
-        select v_partner_id, unnest(p_company_ids)
-        on conflict do nothing;
-      end if;
+      insert into public.partner_companies (partner_id, company_id)
+      select v_partner_id, unnest(p_company_ids)
+      on conflict do nothing;
+
       return query select v_partner_id, v_partner_name, false;
       return;
     end if;
@@ -130,11 +132,9 @@ begin
   returning partners.id, partners.name into v_partner_id, v_partner_name;
 
   -- 4. Link to chosen companies
-  if p_company_ids is not null and array_length(p_company_ids, 1) > 0 then
-    insert into public.partner_companies (partner_id, company_id)
-    select v_partner_id, unnest(p_company_ids)
-    on conflict do nothing;
-  end if;
+  insert into public.partner_companies (partner_id, company_id)
+  select v_partner_id, unnest(p_company_ids)
+  on conflict do nothing;
 
   return query select v_partner_id, v_partner_name, true;
 end;

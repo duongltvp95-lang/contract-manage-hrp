@@ -864,6 +864,10 @@ export async function findOrCreatePartnerForAi(
     return err("validation", "Tên đối tác không được để trống");
   }
 
+  if (!input.companyIds || input.companyIds.length === 0) {
+    return err("validation", "Chọn ít nhất một công ty cho đối tác");
+  }
+
   const cleanTax = input.taxCode?.trim() || "";
   const dedupKey = `${organizationId}:${trimmedName.toLowerCase()}`;
   const existingInFlight = inFlightAiPartnerCreations.get(dedupKey);

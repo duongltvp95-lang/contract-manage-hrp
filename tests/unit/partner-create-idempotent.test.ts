@@ -181,6 +181,26 @@ describe("Partner Creation & Matching Idempotency", () => {
     });
   });
 
+  it("findOrCreatePartnerForAi: từ chối yêu cầu thiếu công ty để bảo đảm quy tắc company-aware", async () => {
+    mockRpc.mockClear();
+
+    const res = await findOrCreatePartnerForAi(
+      {
+        name: "Công ty Không Có Công Ty",
+        taxCode: "0109876543",
+        companyIds: [],
+      },
+      { organizationId: "org-1" },
+    );
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.code).toBe("validation");
+      expect(res.message).toContain("công ty");
+    }
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it("chặn tạo đối tác mới nếu thời gian còn lại trước deadline dưới 4 giây", () => {
     const actionStartTime = Date.now();
     const actionDeadline = actionStartTime + 48_000;
