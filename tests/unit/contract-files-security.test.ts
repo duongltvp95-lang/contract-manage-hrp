@@ -400,6 +400,65 @@ describe("Contract Files Security & Access Control", () => {
       // Object không được xoá bù vì hàng DB đã tồn tại
       expect(mockDeleteObject).not.toHaveBeenCalled();
     });
+
+    it("khi DB insert báo lỗi và truy vấn xác minh DB cũng lỗi, KHÔNG xóa object R2 và đưa vào hàng đợi outbox", async () => {
+      mockCreateClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "contracts") {
+            return createChainableMock({ id: contractId, archived_at: null });
+          }
+          if (table === "contract_files") {
+            return createChainableMock(null, { message: "connection error", code: "ECONNRESET" });
+          }
+          return createChainableMock(null);
+        },
+      });
+
+      const queueInsertMock = vi.fn().mockResolvedValue({ error: null });
+
+      // Admin client kiểm tra DB: TRUY VẤN XÁC MINH CŨNG BỊ LỖI
+      mockCreateAdminClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "contract_files") {
+            return createChainableMock(null, { message: "DB timeout", code: "57P01" });
+          }
+          if (table === "r2_cleanup_queue") {
+            return { insert: queueInsertMock };
+          }
+          return createChainableMock(null);
+        },
+      });
+
+      mockHeadObject.mockResolvedValue({
+        exists: true,
+        contentLength: 1024,
+        etag: "etag-123",
+      });
+
+      const res = await completeUpload({
+        organizationId: orgId,
+        userId: "user-1",
+        userEmail: nonAdminEmail,
+        contractId,
+        fileId,
+        objectKey,
+        filename: "test.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+      });
+
+      expect(res.ok).toBe(false);
+      // TUYỆT ĐỐI KHÔNG XÓA R2 khi trạng thái DB chưa rõ!
+      expect(mockDeleteObject).not.toHaveBeenCalled();
+      // Đưa vào queue để worker đối soát sau
+      expect(queueInsertMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          object_key: objectKey,
+          reason: "upload_db_failed",
+          status: "pending",
+        }),
+      );
+    });
   });
 
   describe("[P2] storage-cleanup service", () => {
@@ -409,12 +468,13 @@ describe("Contract Files Security & Access Control", () => {
         from: () => ({ insert: mockInsert }),
       });
 
-      await enqueueR2Cleanup({
+      const success = await enqueueR2Cleanup({
         objectKey: "test-key.pdf",
         reason: "file_deleted",
         lastError: "Timeout",
       });
 
+      expect(success).toBe(true);
       expect(mockInsert).toHaveBeenCalledWith(
         expect.objectContaining({
           object_key: "test-key.pdf",
@@ -423,6 +483,20 @@ describe("Contract Files Security & Access Control", () => {
           last_error: "Timeout",
         }),
       );
+    });
+
+    it("enqueueR2Cleanup ghi nhận lỗi khi PostgREST trả về error", async () => {
+      const mockInsert = vi.fn().mockResolvedValue({ error: { message: "permission denied" } });
+      mockCreateAdminClient.mockReturnValue({
+        from: () => ({ insert: mockInsert }),
+      });
+
+      const success = await enqueueR2Cleanup({
+        objectKey: "test-key.pdf",
+        reason: "file_deleted",
+      });
+
+      expect(success).toBe(false);
     });
 
     it("processR2CleanupQueue: hủy tác vụ nếu object upload_db_failed đang được contract_files trỏ tới", async () => {
@@ -503,6 +577,50 @@ describe("Contract Files Security & Access Control", () => {
       expect(mockUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
           status: "completed",
+        }),
+      );
+    });
+
+    it("processR2CleanupQueue: không xóa R2 nếu truy vấn đối soát DB gặp lỗi, đánh dấu job failed để thử lại", async () => {
+      const mockJobs = [
+        {
+          id: "job-err",
+          object_key: "uncertain.pdf",
+          reason: "upload_db_failed",
+          attempts: 0,
+          status: "pending",
+        },
+      ];
+
+      const mockUpdate = vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValue({ error: null }),
+      });
+
+      mockCreateAdminClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "r2_cleanup_queue") {
+            const chain = createChainableMock(mockJobs);
+            chain.update = mockUpdate;
+            return chain;
+          }
+          if (table === "contract_files") {
+            // Lỗi DB khi đối soát
+            return createChainableMock(null, { message: "DB connection timeout" });
+          }
+          return createChainableMock(null);
+        },
+      });
+
+      const result = await processR2CleanupQueue();
+      expect(result.processed).toBe(1);
+      expect(result.failed).toBe(1);
+      expect(result.succeeded).toBe(0);
+      // KHÔNG được xóa R2 vì lỗi truy vấn đối soát
+      expect(mockDeleteObject).not.toHaveBeenCalled();
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "failed",
+          last_error: expect.stringContaining("DB verification error"),
         }),
       );
     });

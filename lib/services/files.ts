@@ -284,24 +284,33 @@ export async function completeUpload(
   if (error) {
     // Riêng lỗi ghi DB: xác minh trạng thái hàng trước khi xóa bù
     // để tránh xóa nhầm object trong trường hợp DB đã ghi thành công nhưng phản hồi bị lỗi mạng.
+    // CHỈ xóa khi truy vấn thành công và xác nhận không có hàng (isConfirmedMissing = true).
+    // Nếu truy vấn gặp lỗi (checkError) hoặc trạng thái chưa rõ, GIỮ object và đưa vào queue để tác vụ thử lại.
+    let isConfirmedMissing = false;
     let isRowCommitted = false;
+    let checkErrorMessage: string | null = null;
+
     try {
       const admin = createAdminClient();
-      const { data: existingRow } = await admin
+      const { data: existingRow, error: checkError } = await admin
         .from("contract_files")
         .select("id")
         .eq("id", fileId)
         .maybeSingle();
 
-      if (existingRow) {
+      if (checkError) {
+        checkErrorMessage = checkError.message;
+      } else if (existingRow) {
         isRowCommitted = true;
+      } else {
+        isConfirmedMissing = true;
       }
-    } catch {
-      // Nếu không lấy được admin client, không mạo hiểm xóa object
+    } catch (checkErr) {
+      checkErrorMessage = checkErr instanceof Error ? checkErr.message : String(checkErr);
     }
 
-    if (!isRowCommitted) {
-      // Hàng thực sự chưa được ghi vào DB -> xóa bù object trên R2
+    if (isConfirmedMissing) {
+      // Hàng được xác nhận chắc chắn chưa tồn tại trong DB -> xóa bù object trên R2
       try {
         await deleteObject(objectKey);
       } catch (cleanupErr) {
@@ -312,6 +321,14 @@ export async function completeUpload(
           lastError: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
         });
       }
+    } else if (!isRowCommitted) {
+      // Trạng thái chưa rõ ràng (truy vấn DB xác minh gặp lỗi) -> KHÔNG xóa R2!
+      // Giữ object và đưa vào hàng đợi outbox để worker đối soát và thử lại sau khi DB ổn định.
+      await enqueueR2Cleanup({
+        objectKey,
+        reason: "upload_db_failed",
+        lastError: `DB verification failed (${checkErrorMessage}); retained object for retry`,
+      });
     }
 
     return dbError("completeUpload", error);

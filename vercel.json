@@ -7,6 +7,12 @@
       "maxDuration": 60
     }
   },
+  "crons": [
+    {
+      "path": "/api/cron/storage-cleanup",
+      "schedule": "0 * * * *"
+    }
+  ],
   "github": {
     "silent": true
   }

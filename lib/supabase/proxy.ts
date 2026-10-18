@@ -59,6 +59,9 @@ export async function updateSession(request: NextRequest) {
   const isPublicPath =
     pathname.startsWith("/login") || pathname.startsWith("/auth");
 
+  // Cron routes authenticate via Bearer CRON_SECRET or custom token at handler level
+  const isCronPath = pathname.startsWith("/api/cron");
+
   // API callers must get JSON status codes, not an HTML login redirect.
   const isApiPath = pathname.startsWith("/api");
 
@@ -71,7 +74,7 @@ export async function updateSession(request: NextRequest) {
   };
 
   if (!user) {
-    if (isPublicPath) {
+    if (isPublicPath || isCronPath) {
       return supabaseResponse;
     }
 

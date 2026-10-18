@@ -30,18 +30,28 @@ export async function enqueueR2Cleanup(input: {
   objectKey: string;
   reason: CleanupReason;
   lastError?: string | null;
-}): Promise<void> {
+}): Promise<boolean> {
   try {
     const admin = createAdminClient();
-    await admin.from("r2_cleanup_queue").insert({
+    const { error: insertError } = await admin.from("r2_cleanup_queue").insert({
       object_key: input.objectKey,
       reason: input.reason,
       status: "pending",
       last_error: input.lastError ?? null,
       attempts: 0,
     });
+
+    if (insertError) {
+      console.error(
+        "[storage-cleanup:enqueueR2Cleanup] Không thể ghi nhận tác vụ cleanup vào PostgREST",
+        insertError,
+      );
+      return false;
+    }
+    return true;
   } catch (error) {
-    console.error("[storage-cleanup:enqueueR2Cleanup] Không thể ghi nhận tác vụ cleanup", error);
+    console.error("[storage-cleanup:enqueueR2Cleanup] Lỗi ngoại lệ khi ghi nhận tác vụ cleanup", error);
+    return false;
   }
 }
 
@@ -51,6 +61,8 @@ export async function enqueueR2Cleanup(input: {
  * Reconciles with the database before deleting:
  * For `upload_db_failed`, if an active `contract_files` row is found referencing the key,
  * the task is cancelled rather than deleting a valid in-use file.
+ * If the database verification query encounters an error, the object is NOT deleted;
+ * the job is marked failed to retry on the next scheduled run.
  */
 export async function processR2CleanupQueue(options?: {
   limit?: number;
@@ -85,11 +97,27 @@ export async function processR2CleanupQueue(options?: {
   for (const job of jobs as { id: string; object_key: string; reason: CleanupReason; attempts: number }[]) {
     // For upload_db_failed, verify the file isn't referenced by any active contract_files row
     if (job.reason === "upload_db_failed") {
-      const { data: existingRow } = await admin
+      const { data: existingRow, error: verifyError } = await admin
         .from("contract_files")
         .select("id")
         .eq("object_key", job.object_key)
         .maybeSingle();
+
+      if (verifyError) {
+        // Lỗi khi truy vấn xác minh DB: KHÔNG xóa R2 vì trạng thái chưa rõ.
+        // Ghi nhận lỗi và thử lại ở chu kỳ tiếp theo.
+        failed++;
+        await admin
+          .from("r2_cleanup_queue")
+          .update({
+            status: "failed",
+            attempts: job.attempts + 1,
+            last_error: `DB verification error: ${verifyError.message}`,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", job.id);
+        continue;
+      }
 
       if (existingRow) {
         await admin
