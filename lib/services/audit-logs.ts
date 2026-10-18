@@ -83,15 +83,23 @@ async function getService(): Promise<SupabaseClient> {
  * Write one row. The caller chooses to swallow the error — see the file-level
  * comment for why.
  */
-export async function recordAudit(input: {
-  organizationId: string;
-  actorId: string;
-  actorRole: "admin" | "user";
-  action: AuditAction;
-  targetKind: AuditTargetKind;
-  targetId: string | null;
-  metadata?: Record<string, unknown>;
-}): Promise<ServiceResult<{ id: string }>> {
+export async function recordAudit(
+  input: {
+    organizationId: string;
+    actorId: string;
+    actorRole: "admin" | "user";
+    action: AuditAction;
+    targetKind: AuditTargetKind;
+    targetId: string | null;
+    metadata?: Record<string, unknown>;
+  },
+  options?: { abortSignal?: AbortSignal; timeoutMs?: number },
+): Promise<ServiceResult<{ id: string }>> {
+  const signal = options?.abortSignal ?? (options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined);
+  if (signal?.aborted) {
+    return err("db_error", "Ghi log kiểm toán bị hủy do quá thời gian");
+  }
+
   let service: SupabaseClient;
   try {
     service = await getService();
@@ -99,7 +107,7 @@ export async function recordAudit(input: {
     return dbError("recordAudit", error);
   }
 
-  const { data, error } = await service
+  let query = service
     .from("audit_logs")
     .insert({
       organization_id: input.organizationId,
@@ -110,8 +118,13 @@ export async function recordAudit(input: {
       target_id: input.targetId,
       metadata: input.metadata ?? {},
     })
-    .select("id")
-    .single();
+    .select("id");
+
+  if (signal) {
+    query = query.abortSignal(signal);
+  }
+
+  const { data, error } = await query.single();
 
   if (error) {
     return dbError("recordAudit", error);
@@ -131,25 +144,34 @@ export async function recordAudit(input: {
  * The error is logged server-side when a write fails, so it is observable
  * without ever propagating to the caller.
  */
-export async function recordCurrentUserAudit(input: {
-  action: AuditAction;
-  targetKind: AuditTargetKind;
-  targetId: string | null;
-  metadata?: Record<string, unknown>;
-}): Promise<void> {
-  try {
-    const user = await getCurrentUser();
-    if (!user) return;
+export async function recordCurrentUserAudit(
+  input: {
+    action: AuditAction;
+    targetKind: AuditTargetKind;
+    targetId: string | null;
+    metadata?: Record<string, unknown>;
+  },
+  options?: { abortSignal?: AbortSignal; timeoutMs?: number },
+): Promise<void> {
+  const signal = options?.abortSignal ?? (options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined);
+  if (signal?.aborted) return;
 
-    const result = await recordAudit({
-      organizationId: user.organizationId,
-      actorId: user.id,
-      actorRole: user.role,
-      action: input.action,
-      targetKind: input.targetKind,
-      targetId: input.targetId,
-      metadata: input.metadata,
-    });
+  try {
+    const user = await getCurrentUser(signal ? { abortSignal: signal } : undefined);
+    if (!user || signal?.aborted) return;
+
+    const result = await recordAudit(
+      {
+        organizationId: user.organizationId,
+        actorId: user.id,
+        actorRole: user.role,
+        action: input.action,
+        targetKind: input.targetKind,
+        targetId: input.targetId,
+        metadata: input.metadata,
+      },
+      signal ? { abortSignal: signal } : undefined,
+    );
 
     if (!result.ok) {
       console.error(
@@ -159,7 +181,9 @@ export async function recordCurrentUserAudit(input: {
       );
     }
   } catch (error) {
-    console.error("[audit:recordCurrentUserAudit]", error);
+    if (!signal?.aborted) {
+      console.error("[audit:recordCurrentUserAudit]", error);
+    }
   }
 }
 

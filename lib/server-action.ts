@@ -44,28 +44,25 @@ export async function authorized(
     };
   }
 
-  const accessPromise = resolveAccess();
-  if (!signal) {
-    const access = await accessPromise;
-    return toAuthorizedResult(access);
-  }
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    signal.addEventListener("abort", () => reject(new Error("Auth timeout")), { once: true });
-  });
-
   try {
-    const access = await Promise.race([accessPromise, timeoutPromise]);
+    const access = await resolveAccess(signal ? { abortSignal: signal } : undefined);
     return toAuthorizedResult(access);
-  } catch {
-    return {
-      ok: false,
-      result: {
+  } catch (error) {
+    if (
+      signal?.aborted ||
+      (error instanceof Error &&
+        (error.name === "AbortError" || error.message.includes("AbortError")))
+    ) {
+      return {
         ok: false,
-        code: "timeout",
-        message: "Quá thời gian xác thực quyền truy cập.",
-      },
-    };
+        result: {
+          ok: false,
+          code: "timeout",
+          message: "Quá thời gian xác thực quyền truy cập.",
+        },
+      };
+    }
+    throw error;
   }
 }
 

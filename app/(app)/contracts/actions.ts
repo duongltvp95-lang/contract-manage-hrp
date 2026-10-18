@@ -1,5 +1,7 @@
 "use server";
 
+import { after } from "next/server";
+
 import { CompleteUploadSchema, type CompleteUploadInput } from "@schemas/file";
 
 import {
@@ -42,7 +44,11 @@ import {
   normalizeDurationText,
   reconcileContractParties,
 } from "@/lib/ai/matching";
-import { createPartner, listCompanies, searchPartners } from "@/lib/services/partners";
+import {
+  findOrCreatePartnerForAi,
+  listCompanies,
+  searchPartners,
+} from "@/lib/services/partners";
 
 /**
  * Server actions for contract CRUD and the upload flow — plan sections 42, 64.
@@ -262,9 +268,16 @@ export async function extractContractAction(
     if (!access.ok) return access.result;
 
     const cleanupR2 = (key: string) => {
-      // Non-blocking fire-and-forget: xóa tệp tạm trên R2 với timeout 3s,
+      // Đăng ký tác vụ nền với Next.js after() / Vercel lifecycle để bảo đảm
+      // function không bị đóng băng trước khi lệnh xóa R2 hoàn tất, đồng thời
       // tuyệt đối không chặn luồng trả về kết quả cho client.
-      deleteObject(key, { timeoutMs: 3_000 }).catch(() => {});
+      try {
+        after(async () => {
+          await deleteObject(key, { timeoutMs: 5_000 }).catch(() => {});
+        });
+      } catch {
+        void deleteObject(key, { timeoutMs: 5_000 }).catch(() => {});
+      }
     };
 
     let buffer: Buffer;
@@ -532,9 +545,8 @@ export async function extractContractAction(
       }
 
       // Nếu trong danh bạ chưa có đối tác này, AI đọc được tên đối tác và TUYỆT ĐỐI không phải công ty nội bộ:
-      // Tự động tạo mới đối tác vào hệ thống nếu vẫn còn ít nhất 4.0s trước deadline.
-      // Tuyệt đối không dùng Promise.race bỏ rơi write operation; thực thi với AbortSignal
-      // và kiểm tra lại trạng thái DB nếu timeout xảy ra (đảm bảo tính idempotent).
+      // Tự động tìm hoặc tạo mới đối tác với cơ chế nguyên tử (Postgres advisory lock + in-process mutex)
+      // nếu vẫn còn ít nhất 4.0s trước deadline.
       if (
         !matchedPartner &&
         trimmedPartnerName.length > 0 &&
@@ -554,69 +566,23 @@ export async function extractContractAction(
           }
 
           const createBudgetMs = Math.min(2_500, Math.max(1_000, actionDeadline - Date.now() - 1_500));
-          const createController = new AbortController();
-          const createTimer = setTimeout(() => {
-            createController.abort(new Error("Create partner timeout"));
-          }, createBudgetMs);
+          const aiPartnerRes = await findOrCreatePartnerForAi(
+            {
+              name: trimmedPartnerName,
+              taxCode: taxCode || undefined,
+              address: extracted.partnerAddress?.trim() || undefined,
+              companyIds: targetCompanyIds,
+            },
+            { organizationId: access.user.organizationId },
+            { abortSignal: AbortSignal.timeout(createBudgetMs) },
+          );
 
-          try {
-            const createRes = await createPartner(
-              {
-                name: trimmedPartnerName,
-                taxCode: taxCode || undefined,
-                address: extracted.partnerAddress?.trim() || undefined,
-                companyIds: targetCompanyIds,
-              },
-              { organizationId: access.user.organizationId },
-              { abortSignal: createController.signal },
-            );
-
-            if (createRes.ok) {
-              matchedPartner = {
-                id: createRes.data.id,
-                name: createRes.data.name,
-              };
-              isNewPartner = true;
-            } else {
-              // Nếu createPartner báo lỗi/trùng, kiểm tra xem đối tác đã tồn tại trong DB chưa để liên kết idempotent
-              if (actionDeadline - Date.now() >= 1_500) {
-                const checkRes = await searchPartners(trimmedPartnerName, {
-                  abortSignal: AbortSignal.timeout(1_000),
-                });
-                if (checkRes.ok && checkRes.data.length > 0) {
-                  const existing = checkRes.data.find(
-                    (p) => p.name.trim().toLowerCase() === trimmedPartnerName.toLowerCase(),
-                  );
-                  if (existing) {
-                    matchedPartner = { id: existing.id, name: existing.name };
-                    isNewPartner = false;
-                  }
-                }
-              }
-            }
-          } catch {
-            // Khi bị abort/timeout hoặc lỗi mạng, kiểm tra xem đối tác có kịp ghi thành công hay không
-            // để bảo đảm kết quả trả về phản ánh chính xác trạng thái thực tế của DB (idempotent)
-            if (actionDeadline - Date.now() >= 1_000) {
-              try {
-                const checkRes = await searchPartners(trimmedPartnerName, {
-                  abortSignal: AbortSignal.timeout(800),
-                });
-                if (checkRes.ok && checkRes.data.length > 0) {
-                  const existing = checkRes.data.find(
-                    (p) => p.name.trim().toLowerCase() === trimmedPartnerName.toLowerCase(),
-                  );
-                  if (existing) {
-                    matchedPartner = { id: existing.id, name: existing.name };
-                    isNewPartner = true;
-                  }
-                }
-              } catch {
-                // ignore
-              }
-            }
-          } finally {
-            clearTimeout(createTimer);
+          if (aiPartnerRes.ok) {
+            matchedPartner = {
+              id: aiPartnerRes.data.id,
+              name: aiPartnerRes.data.name,
+            };
+            isNewPartner = aiPartnerRes.data.isNew;
           }
         }
       }

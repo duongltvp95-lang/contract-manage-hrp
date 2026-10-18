@@ -54,54 +54,67 @@ type ProfileRow = {
  * Route handlers should use this so they can answer 401 / 403 instead of an
  * HTML redirect, which is what a page-level guard would produce.
  */
-export const resolveAccess = cache(async (): Promise<AccessResult> => {
-  if (!hasEnvVars) {
-    return { status: "unauthenticated" };
-  }
+export const resolveAccess = cache(
+  async (options?: { abortSignal?: AbortSignal }): Promise<AccessResult> => {
+    if (!hasEnvVars) {
+      return { status: "unauthenticated" };
+    }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    if (options?.abortSignal?.aborted) {
+      throw new Error("AbortError");
+    }
 
-  if (!user) {
-    return { status: "unauthenticated" };
-  }
+    const supabase = await createClient(options);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-  // RLS already limits this to the signed-in user's own row.
-  const { data } = await supabase
-    .from("profiles")
-    .select("id, organization_id, full_name, role, is_active, accent_color, background_color, sidebar_color")
-    .eq("id", user.id)
-    .maybeSingle();
+    if (!user) {
+      return { status: "unauthenticated" };
+    }
 
-  const profile = data as ProfileRow | null;
+    // RLS already limits this to the signed-in user's own row.
+    let query = supabase
+      .from("profiles")
+      .select("id, organization_id, full_name, role, is_active, accent_color, background_color, sidebar_color")
+      .eq("id", user.id);
 
-  // Either the profile is missing (should be impossible — the
-  // on_auth_user_created trigger guarantees one) or an administrator
-  // deactivated the account.
-  if (!profile || !profile.is_active) {
-    return { status: "disabled" };
-  }
+    if (options?.abortSignal) {
+      query = query.abortSignal(options.abortSignal);
+    }
 
-  return {
-    status: "ok",
-    user: {
-      id: user.id,
-      email: user.email ?? null,
-      fullName: profile.full_name,
-      organizationId: profile.organization_id,
-      role: profile.role === "admin" ? "admin" : "user",
-      accentColor: profile.accent_color ?? null,
-      backgroundColor: profile.background_color ?? null,
-      sidebarColor: profile.sidebar_color ?? null,
-    },
-  };
-});
+    const { data } = await query.maybeSingle();
+
+    const profile = data as ProfileRow | null;
+
+    // Either the profile is missing (should be impossible — the
+    // on_auth_user_created trigger guarantees one) or an administrator
+    // deactivated the account.
+    if (!profile || !profile.is_active) {
+      return { status: "disabled" };
+    }
+
+    return {
+      status: "ok",
+      user: {
+        id: user.id,
+        email: user.email ?? null,
+        fullName: profile.full_name,
+        organizationId: profile.organization_id,
+        role: profile.role === "admin" ? "admin" : "user",
+        accentColor: profile.accent_color ?? null,
+        backgroundColor: profile.background_color ?? null,
+        sidebarColor: profile.sidebar_color ?? null,
+      },
+    };
+  },
+);
 
 /** Convenience wrapper for code that only needs "is there a usable user?". */
-export async function getCurrentUser(): Promise<CurrentUser | null> {
-  const result = await resolveAccess();
+export async function getCurrentUser(
+  options?: { abortSignal?: AbortSignal },
+): Promise<CurrentUser | null> {
+  const result = await resolveAccess(options);
   return result.status === "ok" ? result.user : null;
 }
 
