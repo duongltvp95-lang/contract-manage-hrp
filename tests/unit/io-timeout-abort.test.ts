@@ -32,12 +32,27 @@ vi.mock("@/lib/auth", () => ({
 
 const mockFrom = vi.fn();
 const mockRpc = vi.fn();
+const mockAdminAbortSignal = vi.fn().mockResolvedValue({ error: null });
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn().mockImplementation(() => {
     return {
       from: mockFrom,
       rpc: mockRpc,
+    };
+  }),
+}));
+
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: vi.fn().mockImplementation(() => {
+    return {
+      from: vi.fn().mockReturnValue({
+        delete: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            abortSignal: mockAdminAbortSignal,
+          }),
+        }),
+      }),
     };
   }),
 }));
@@ -121,5 +136,77 @@ describe("I/O Timeout & Abort Handling", () => {
     if (!result.ok) {
       expect(result.code).toBe("db_error");
     }
+  });
+
+  it("deletePartnerRollback: sử dụng signal dọn dẹp độc lập, không tái sử dụng signal đã bị abort của caller", async () => {
+    const callerController = new AbortController();
+
+    const validCompanyId = "c0000000-0000-4000-8000-000000000001";
+
+    // 1. listCompanies thành công
+    // 2. partners.insert thành công (tạo partner 'partner-orphan-test')
+    // 3. partner_companies.insert thất bại do timeout/abort của caller
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "companies") {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          abortSignal: vi.fn().mockResolvedValue({
+            data: [{ id: validCompanyId, name: "HRP" }],
+            error: null,
+          }),
+        };
+      }
+      if (table === "partners") {
+        return {
+          insert: vi.fn().mockReturnValue({
+            select: vi.fn().mockReturnValue({
+              abortSignal: vi.fn().mockReturnValue({
+                single: vi.fn().mockResolvedValue({
+                  data: {
+                    id: "partner-orphan-test",
+                    name: "Công ty Test Rollback",
+                    organization_id: "org-1",
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === "partner_companies") {
+        return {
+          insert: vi.fn().mockReturnValue({
+            abortSignal: vi.fn().mockImplementation(() => {
+              // Caller kích hoạt abort trước hoặc trong lúc ghi junction
+              callerController.abort();
+              return Promise.resolve({
+                error: new Error("AbortError"),
+              });
+            }),
+          }),
+        };
+      }
+      return {};
+    });
+
+    const res = await createPartner(
+      {
+        name: "Công ty Test Rollback",
+        companyIds: [validCompanyId],
+      },
+      { organizationId: "org-1" },
+      { abortSignal: callerController.signal },
+    );
+
+    expect(res.ok).toBe(false);
+
+    // Rollback phải được kích hoạt và tín hiệu truyền vào admin delete PHẢI KHÔNG BỊ ABORT
+    expect(mockAdminAbortSignal).toHaveBeenCalled();
+    const cleanupSignal = mockAdminAbortSignal.mock.calls[0][0] as AbortSignal;
+    expect(cleanupSignal).toBeInstanceOf(AbortSignal);
+    expect(cleanupSignal.aborted).toBe(false);
   });
 });

@@ -375,17 +375,21 @@ export async function companiesForPartners(
   return result;
 }
 
+
 /**
  * Rolls back a partner row the caller just created but whose junction insert
  * failed. The session client has no DELETE grant on `partners`, so this uses the
  * service-role client; if that is unavailable the orphan row is logged and left
  * (the caller still gets the error, so it is never silently half-saved).
+ *
+ * Uses an independent cleanup timeout (default 3,000ms) rather than inheriting
+ * an already-aborted caller signal, ensuring the delete operation actually runs.
  */
 async function deletePartnerRollback(
   partnerId: string,
-  options?: { abortSignal?: AbortSignal; timeoutMs?: number },
+  options?: { cleanupTimeoutMs?: number },
 ): Promise<void> {
-  const signal = options?.abortSignal ?? (options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : AbortSignal.timeout(2_000));
+  const signal = AbortSignal.timeout(options?.cleanupTimeoutMs ?? 3_000);
   try {
     const admin = await createAdminClient();
     let query = admin.from("partners").delete().eq("id", partnerId);
@@ -681,8 +685,7 @@ export async function createPartner(
     return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
   }
 
-  try {
-    const parsed = PartnerSchema.safeParse(input);
+  const parsed = PartnerSchema.safeParse(input);
 
   if (!parsed.success) {
     return err(
@@ -739,74 +742,80 @@ export async function createPartner(
   }
 
   const supabase = await createClient(options);
+  let created: PartnerRow | null = null;
 
-  let insertQuery = supabase
-    .from("partners")
-    .insert({
-      // From the session, never from the request body.
-      organization_id: organizationId,
-      name: parsed.data.name,
-      address,
-      tax_code: taxCode,
-      region,
-      abbreviation,
-      status,
-    })
-    .select(PARTNER_COLUMNS);
-
-  if (options?.abortSignal) {
-    insertQuery = insertQuery.abortSignal(options.abortSignal);
-  }
-
-  const { data, error } = await insertQuery.single();
-
-  if (error) {
-    if (options?.abortSignal?.aborted) {
-      return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
-    }
-    return dbError("createPartner", error);
-  }
-
-  const created = data as PartnerRow;
-
-  // Junction — after the partner row exists. On failure, roll the partner back
-  // so a half-saved partner (present but linked to no company) cannot survive.
-  let junctionQuery = supabase
-    .from("partner_companies")
-    .insert(companyIds.map((companyId) => ({ partner_id: created.id, company_id: companyId })));
-
-  if (options?.abortSignal) {
-    junctionQuery = junctionQuery.abortSignal(options.abortSignal);
-  }
-
-  const { error: junctionError } = await junctionQuery;
-
-  if (junctionError) {
-    await deletePartnerRollback(created.id, options);
-    if (options?.abortSignal?.aborted) {
-      return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
-    }
-    return dbError("createPartner", junctionError);
-  }
-
-  // Fire-and-forget: a failed write must never block the create.
-  await recordCurrentUserAudit(
-    {
-      action: "create_partner",
-      targetKind: "partner",
-      targetId: created.id,
-      metadata: {
-        name: created.name,
-        taxCode: created.tax_code ?? null,
+  try {
+    let insertQuery = supabase
+      .from("partners")
+      .insert({
+        // From the session, never from the request body.
+        organization_id: organizationId,
+        name: parsed.data.name,
+        address,
+        tax_code: taxCode,
+        region,
+        abbreviation,
         status,
-        companies: companyNames,
-      },
-    },
-    options,
-  );
+      })
+      .select(PARTNER_COLUMNS);
 
-    return ok({ ...created, companies: companyNames });
+    if (options?.abortSignal) {
+      insertQuery = insertQuery.abortSignal(options.abortSignal);
+    }
+
+    const { data, error } = await insertQuery.single();
+
+    if (error) {
+      if (options?.abortSignal?.aborted) {
+        return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
+      }
+      return dbError("createPartner", error);
+    }
+
+    const savedPartner = data as PartnerRow;
+    created = savedPartner;
+
+    // Junction — after the partner row exists. On failure, roll the partner back
+    // so a half-saved partner (present but linked to no company) cannot survive.
+    let junctionQuery = supabase
+      .from("partner_companies")
+      .insert(companyIds.map((companyId) => ({ partner_id: savedPartner.id, company_id: companyId })));
+
+    if (options?.abortSignal) {
+      junctionQuery = junctionQuery.abortSignal(options.abortSignal);
+    }
+
+    const { error: junctionError } = await junctionQuery;
+
+    if (junctionError) {
+      await deletePartnerRollback(created.id, { cleanupTimeoutMs: 3_000 });
+      if (options?.abortSignal?.aborted) {
+        return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
+      }
+      return dbError("createPartner", junctionError);
+    }
+
+    // Fire-and-forget: a failed write must never block the create.
+    await recordCurrentUserAudit(
+      {
+        action: "create_partner",
+        targetKind: "partner",
+        targetId: savedPartner.id,
+        metadata: {
+          name: savedPartner.name,
+          taxCode: savedPartner.tax_code ?? null,
+          status,
+          companies: companyNames,
+        },
+      },
+      options,
+    );
+
+    return ok({ ...savedPartner, companies: companyNames });
   } catch (errCatch) {
+    if (created) {
+      await deletePartnerRollback(created.id, { cleanupTimeoutMs: 3_000 });
+    }
     if (options?.abortSignal?.aborted) {
       return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
     }
@@ -833,12 +842,12 @@ export type AiPartnerLookupResult = {
  * Atomic partner lookup / creation for AI contract extraction flow.
  *
  * Guarantees idempotency and eliminates race conditions when concurrent
- * actions process contracts with the same partner name:
+ * actions process contracts with the same partner name or tax code:
  * 1. Checks in-process mutex to deduplicate concurrent calls within the same process.
- * 2. Invokes Postgres RPC `find_or_create_partner_for_ai`, which acquires a
- *    transaction-level advisory lock (`pg_advisory_xact_lock`) scoped to the organization
- *    and partner name.
- * 3. Falls back gracefully to application-level check + create if the RPC is not available.
+ * 2. Invokes Postgres RPC `find_or_create_partner_for_ai`, which acquires
+ *    transaction-level advisory locks (`pg_advisory_xact_lock`) on both name
+ *    and tax-code domains, and enforces company-aware matching.
+ * 3. Never silently falls back to non-atomic creation.
  */
 export async function findOrCreatePartnerForAi(
   input: {
@@ -855,25 +864,24 @@ export async function findOrCreatePartnerForAi(
     return err("validation", "Tên đối tác không được để trống");
   }
 
+  const cleanTax = input.taxCode?.trim() || "";
   const dedupKey = `${organizationId}:${trimmedName.toLowerCase()}`;
   const existingInFlight = inFlightAiPartnerCreations.get(dedupKey);
   if (existingInFlight) {
     return await existingInFlight;
   }
 
-  const creationPromise = (async () => {
+  const creationPromise = (async (): Promise<ServiceResult<AiPartnerLookupResult>> => {
     if (options?.abortSignal?.aborted) {
       return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
     }
 
-    const supabase = await createClient(options);
-
-    // 1. Thử gọi Postgres RPC với pg_advisory_xact_lock (bảo đảm an toàn phân tán)
     try {
+      const supabase = await createClient(options);
       let rpcReq = supabase.rpc("find_or_create_partner_for_ai", {
         p_org_id: organizationId,
         p_name: trimmedName,
-        p_tax_code: input.taxCode?.trim() || null,
+        p_tax_code: cleanTax || null,
         p_address: input.address?.trim() || null,
         p_company_ids: input.companyIds,
       });
@@ -884,78 +892,46 @@ export async function findOrCreatePartnerForAi(
 
       const { data: rpcData, error: rpcError } = await rpcReq;
 
-      if (!rpcError && Array.isArray(rpcData) && rpcData.length > 0) {
-        const row = rpcData[0] as { id: string; name: string; is_new: boolean };
-        if (row.is_new) {
-          await recordCurrentUserAudit(
-            {
-              action: "create_partner",
-              targetKind: "partner",
-              targetId: row.id,
-              metadata: {
-                name: row.name,
-                taxCode: input.taxCode?.trim() || null,
-                source: "ai_auto_create",
-                companies: input.companyIds,
-              },
-            },
-            options,
-          );
+      if (rpcError) {
+        if (options?.abortSignal?.aborted) {
+          return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
         }
-        return ok({
-          id: row.id,
-          name: row.name,
-          isNew: row.is_new,
-        });
+        return dbError("findOrCreatePartnerForAi", rpcError);
       }
-    } catch {
+
+      if (!Array.isArray(rpcData) || rpcData.length === 0) {
+        return err("db_error", "Không nhận được phản hồi hợp lệ từ hàm tạo đối tác nguyên tử");
+      }
+
+      const row = rpcData[0] as { id: string; name: string; is_new: boolean };
+      if (row.is_new) {
+        await recordCurrentUserAudit(
+          {
+            action: "create_partner",
+            targetKind: "partner",
+            targetId: row.id,
+            metadata: {
+              name: row.name,
+              taxCode: cleanTax || null,
+              source: "ai_auto_create",
+              companies: input.companyIds,
+            },
+          },
+          options,
+        );
+      }
+
+      return ok({
+        id: row.id,
+        name: row.name,
+        isNew: row.is_new,
+      });
+    } catch (catchedError) {
       if (options?.abortSignal?.aborted) {
         return err("db_error", "Yêu cầu tạo đối tác đã bị hủy do quá thời gian");
       }
+      return dbError("findOrCreatePartnerForAi", catchedError);
     }
-
-    // 2. Fallback ứng dụng: nếu RPC chưa có trong DB / mock DB:
-    const searchRes = await searchPartners(trimmedName, options);
-    if (searchRes.ok && searchRes.data.length > 0) {
-      const match = searchRes.data.find(
-        (p) => p.name.trim().toLowerCase() === trimmedName.toLowerCase(),
-      );
-      if (match) {
-        return ok({ id: match.id, name: match.name, isNew: false });
-      }
-    }
-
-    const createRes = await createPartner(
-      {
-        name: trimmedName,
-        taxCode: input.taxCode || undefined,
-        address: input.address || undefined,
-        companyIds: input.companyIds,
-      },
-      { organizationId },
-      options,
-    );
-
-    if (createRes.ok) {
-      return ok({
-        id: createRes.data.id,
-        name: createRes.data.name,
-        isNew: true,
-      });
-    }
-
-    // Nếu createPartner báo lỗi/trùng, kiểm tra lại DB
-    const doubleCheck = await searchPartners(trimmedName, options);
-    if (doubleCheck.ok && doubleCheck.data.length > 0) {
-      const match = doubleCheck.data.find(
-        (p) => p.name.trim().toLowerCase() === trimmedName.toLowerCase(),
-      );
-      if (match) {
-        return ok({ id: match.id, name: match.name, isNew: false });
-      }
-    }
-
-    return createRes;
   })();
 
   inFlightAiPartnerCreations.set(dedupKey, creationPromise);

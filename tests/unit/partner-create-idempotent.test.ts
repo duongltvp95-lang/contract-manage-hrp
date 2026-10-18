@@ -119,6 +119,68 @@ describe("Partner Creation & Matching Idempotency", () => {
     }
   });
 
+  it("findOrCreatePartnerForAi: không âm thầm chuyển sang luồng tạo không nguyên tử khi RPC lỗi", async () => {
+    mockFrom.mockClear();
+    mockRpc.mockImplementation((fnName: string) => ({
+      abortSignal: vi.fn().mockReturnThis(),
+      then: (resolve: (val: unknown) => void) => {
+        if (fnName === "find_or_create_partner_for_ai") {
+          resolve({
+            data: null,
+            error: { message: "database connection timeout", code: "57P01" },
+          });
+        }
+      },
+    }));
+
+    const res = await findOrCreatePartnerForAi(
+      {
+        name: "Công ty RPC Lỗi",
+        companyIds: ["b0000000-0000-4000-8000-000000000002"],
+      },
+      { organizationId: "a0000000-0000-4000-8000-000000000001" },
+    );
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.code).toBe("db_error");
+    }
+
+    // Tuyệt đối không fallback gọi mockFrom để query/insert không khóa
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  it("findOrCreatePartnerForAi: truyền đúng mã số thuế và danh sách công ty vào RPC để kiểm tra theo công ty", async () => {
+    mockRpc.mockImplementation((_fnName: string, params: Record<string, unknown>) => ({
+      abortSignal: vi.fn().mockReturnThis(),
+      then: (resolve: (val: unknown) => void) => {
+        resolve({
+          data: [{ id: "p-company-aware-1", name: params.p_name, is_new: true }],
+          error: null,
+        });
+      },
+    }));
+
+    const res = await findOrCreatePartnerForAi(
+      {
+        name: "Công ty Phân Phạm Vi",
+        taxCode: "0109876543",
+        address: "123 Đường Láng, Hà Nội",
+        companyIds: ["comp-hrp-1"],
+      },
+      { organizationId: "org-1" },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(mockRpc).toHaveBeenCalledWith("find_or_create_partner_for_ai", {
+      p_org_id: "org-1",
+      p_name: "Công ty Phân Phạm Vi",
+      p_tax_code: "0109876543",
+      p_address: "123 Đường Láng, Hà Nội",
+      p_company_ids: ["comp-hrp-1"],
+    });
+  });
+
   it("chặn tạo đối tác mới nếu thời gian còn lại trước deadline dưới 4 giây", () => {
     const actionStartTime = Date.now();
     const actionDeadline = actionStartTime + 48_000;
