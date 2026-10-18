@@ -15,6 +15,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { recordCurrentUserAudit } from "./audit-logs";
+import { enqueueR2Cleanup } from "./storage-cleanup";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
@@ -237,18 +238,16 @@ export async function completeUpload(
   }
 
   /**
-   * Enforce the ceiling on what actually landed, not on what was promised.
+   * Enforce the ceiling on what actually landed as server-side defense-in-depth.
    *
-   * The size in the request is the client's claim. A presigned PUT cannot cap a
-   * body — the signature fixes the key and the content type, not a maximum
-   * length — so a client can declare 1 KB, upload 500 MB and the bytes are in
-   * the bucket before anyone looks. The HEAD above is the first fact available,
-   * and until this check existed the only limit that applied was the one on the
-   * browser's own file picker.
+   * Presigned PUT now signs `Content-Length` into AWS SigV4 headers (`createUploadUrl`),
+   * which instructs R2 to reject uploads exceeding the declared fileSize.
+   * The HEAD check here remains as a server-side defense-in-depth verification:
+   * it guarantees the actual stored size is strictly within `MAX_UPLOAD_SIZE_BYTES`
+   * and records the verified byte count and ETag into the database.
    *
-   * The object is removed before returning: leaving it would mean paying to
-   * store something the application refuses to acknowledge, with no row to find
-   * it by later.
+   * If the actual size somehow exceeds the maximum allowed limit, the object is
+   * immediately removed to prevent storing unauthorized payloads.
    */
   const actualSize = head.contentLength ?? 0;
 
@@ -283,6 +282,38 @@ export async function completeUpload(
     .single();
 
   if (error) {
+    // Riêng lỗi ghi DB: xác minh trạng thái hàng trước khi xóa bù
+    // để tránh xóa nhầm object trong trường hợp DB đã ghi thành công nhưng phản hồi bị lỗi mạng.
+    let isRowCommitted = false;
+    try {
+      const admin = createAdminClient();
+      const { data: existingRow } = await admin
+        .from("contract_files")
+        .select("id")
+        .eq("id", fileId)
+        .maybeSingle();
+
+      if (existingRow) {
+        isRowCommitted = true;
+      }
+    } catch {
+      // Nếu không lấy được admin client, không mạo hiểm xóa object
+    }
+
+    if (!isRowCommitted) {
+      // Hàng thực sự chưa được ghi vào DB -> xóa bù object trên R2
+      try {
+        await deleteObject(objectKey);
+      } catch (cleanupErr) {
+        // Nếu xóa bù thất bại (ví dụ mạng R2 lỗi), đưa vào hàng đợi cleanup bền vững
+        await enqueueR2Cleanup({
+          objectKey,
+          reason: "upload_db_failed",
+          lastError: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+        });
+      }
+    }
+
     return dbError("completeUpload", error);
   }
 
@@ -506,7 +537,12 @@ export async function deleteContractFile(
   try {
     await deleteObject(file.object_key);
   } catch (r2Error) {
-    console.error("[service:deleteContractFile] R2 delete failed", r2Error);
+    console.error("[service:deleteContractFile] R2 delete failed; enqueuing for background cleanup", r2Error);
+    await enqueueR2Cleanup({
+      objectKey: file.object_key,
+      reason: "file_deleted",
+      lastError: r2Error instanceof Error ? r2Error.message : String(r2Error),
+    });
   }
 
   return ok({ id: file.id, contractId: file.contract_id });

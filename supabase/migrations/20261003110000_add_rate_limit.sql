@@ -76,19 +76,22 @@ begin
     return;
   end if;
 
-  -- Validate bucket and bounds for parameters to prevent abuse from authenticated clients
+  -- Validate bucket strictly against known endpoint buckets
   if p_bucket is null or p_bucket not in ('files:upload-url', 'files:view-url', 'ai:upload-url') then
     return query select false, 0, now();
     return;
   end if;
 
-  if p_limit is null or p_limit < 1 or p_limit > 1000 or p_window_seconds is null or p_window_seconds < 1 or p_window_seconds > 3600 then
+  -- Enforce application's fixed policy (exactly 60 requests per 60-second window).
+  -- Reject any deviating parameters to prevent authenticated clients from arbitrarily
+  -- creating multiple counter rows with different windows or limits.
+  if coalesce(p_limit, 60) <> 60 or coalesce(p_window_seconds, 60) <> 60 then
     return query select false, 0, now();
     return;
   end if;
 
   v_window_start := to_timestamp(
-    floor(extract(epoch from clock_timestamp()) / p_window_seconds) * p_window_seconds
+    floor(extract(epoch from clock_timestamp()) / 60) * 60
   );
 
   insert into public.rate_limit_counters (user_id, bucket, window_start, hits)
@@ -102,12 +105,12 @@ begin
   delete from public.rate_limit_counters
    where user_id = v_user_id
      and bucket = p_bucket
-     and window_start < v_window_start - make_interval(secs => p_window_seconds * 2);
+     and window_start < v_window_start - interval '120 seconds';
 
   return query
-    select v_hits <= p_limit,
-           greatest(p_limit - v_hits, 0),
-           v_window_start + make_interval(secs => p_window_seconds);
+    select v_hits <= 60,
+           greatest(60 - v_hits, 0),
+           v_window_start + interval '60 seconds';
 end;
 $$;
 

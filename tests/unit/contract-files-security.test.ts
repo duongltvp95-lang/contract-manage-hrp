@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const mockCreateClient = vi.fn();
 const mockCreateAdminClient = vi.fn();
 const mockDeleteObject = vi.fn();
+const mockHeadObject = vi.fn();
 const mockCreateUploadUrl = vi.fn();
 const mockConsumeRateLimit = vi.fn();
 const mockResolveAccess = vi.fn();
@@ -21,6 +22,7 @@ vi.mock("@/lib/supabase/admin", () => ({
 
 vi.mock("@/lib/r2/objects", () => ({
   deleteObject: (...args: unknown[]) => mockDeleteObject(...args),
+  headObject: (...args: unknown[]) => mockHeadObject(...args),
 }));
 
 vi.mock("@/lib/r2/presign", () => ({
@@ -38,10 +40,12 @@ vi.mock("@/lib/services/audit-logs", () => ({
 }));
 
 import {
+  completeUpload,
   createUploadRequest,
   deleteContractFile,
   getContractFileAccess,
 } from "@/lib/services/files";
+import { enqueueR2Cleanup, processR2CleanupQueue } from "@/lib/services/storage-cleanup";
 import { guardFileApiRequest } from "@/lib/api-guard";
 import { OWNER_EMAIL } from "@/lib/owner";
 
@@ -49,7 +53,14 @@ function createChainableMock(resolvedData: unknown, error: unknown = null) {
   const chain: Record<string, unknown> = {};
   chain.select = vi.fn().mockReturnValue(chain);
   chain.eq = vi.fn().mockReturnValue(chain);
+  chain.in = vi.fn().mockReturnValue(chain);
+  chain.lt = vi.fn().mockReturnValue(chain);
+  chain.order = vi.fn().mockReturnValue(chain);
+  chain.limit = vi.fn().mockReturnValue(chain);
   chain.delete = vi.fn().mockReturnValue(chain);
+  chain.update = vi.fn().mockReturnValue(chain);
+  chain.insert = vi.fn().mockReturnValue(chain);
+  chain.single = vi.fn().mockResolvedValue({ data: resolvedData, error });
   chain.maybeSingle = vi.fn().mockResolvedValue({ data: resolvedData, error });
   chain.then = (resolve: (val: unknown) => void) => resolve({ data: resolvedData, error });
   return chain;
@@ -60,6 +71,7 @@ describe("Contract Files Security & Access Control", () => {
   const orgId = "11111111-1111-1111-1111-111111111111";
   const contractId = "22222222-2222-2222-2222-222222222222";
   const fileId = "33333333-3333-3333-3333-333333333333";
+  const objectKey = `contracts/${orgId}/${contractId}/${fileId}/doc.pdf`;
   const nonAdminEmail = "viewer@hrpartner.vn";
   const adminEmail = OWNER_EMAIL;
 
@@ -119,7 +131,7 @@ describe("Contract Files Security & Access Control", () => {
       const mockFile = {
         id: fileId,
         contract_id: contractId,
-        object_key: "contracts/org/c/f/doc.pdf",
+        object_key: objectKey,
         original_filename: "doc.pdf",
         mime_type: "application/pdf",
         file_size_bytes: 1024,
@@ -258,6 +270,241 @@ describe("Contract Files Security & Access Control", () => {
       expect(res.ok).toBe(true);
       expect(filesMock.delete).toHaveBeenCalled();
       expect(mockDeleteObject).toHaveBeenCalledWith("contracts/key.pdf");
+    });
+
+    it("nếu xóa R2 thất bại sau khi xóa DB, đưa vào hàng đợi r2_cleanup_queue", async () => {
+      const filesMock = createChainableMock({
+        id: fileId,
+        contract_id: contractId,
+        object_key: "contracts/key.pdf",
+        organization_id: orgId,
+        original_filename: "doc.pdf",
+      });
+      filesMock.delete = vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          eq: vi.fn().mockResolvedValue({ error: null }),
+        }),
+      });
+
+      const queueInsertMock = vi.fn().mockResolvedValue({ error: null });
+
+      mockCreateAdminClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "contract_files") {
+            return filesMock;
+          }
+          if (table === "contracts") {
+            return createChainableMock({ id: contractId, archived_at: null });
+          }
+          if (table === "r2_cleanup_queue") {
+            return { insert: queueInsertMock };
+          }
+          return createChainableMock(null);
+        },
+      });
+
+      mockDeleteObject.mockRejectedValue(new Error("R2 network timeout"));
+
+      const res = await deleteContractFile(fileId, orgId, adminEmail);
+      expect(res.ok).toBe(true);
+      expect(queueInsertMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          object_key: "contracts/key.pdf",
+          reason: "file_deleted",
+          status: "pending",
+        }),
+      );
+    });
+  });
+
+  describe("[P2] completeUpload: Xử lý lỗi DB và xóa bù object mồ côi", () => {
+    it("khi DB insert thất bại và hàng chưa ghi, xóa bù object trên R2", async () => {
+      mockCreateClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "contracts") {
+            return createChainableMock({ id: contractId, archived_at: null });
+          }
+          if (table === "contract_files") {
+            return createChainableMock(null, { message: "insert failed", code: "23505" });
+          }
+          return createChainableMock(null);
+        },
+      });
+
+      // Admin client kiểm tra DB: hàng không tồn tại
+      mockCreateAdminClient.mockReturnValue({
+        from: () => createChainableMock(null),
+      });
+
+      mockHeadObject.mockResolvedValue({
+        exists: true,
+        contentLength: 1024,
+        etag: "etag-123",
+      });
+
+      mockDeleteObject.mockResolvedValue(undefined);
+
+      const res = await completeUpload({
+        organizationId: orgId,
+        userId: "user-1",
+        userEmail: nonAdminEmail,
+        contractId,
+        fileId,
+        objectKey,
+        filename: "test.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(mockDeleteObject).toHaveBeenCalledWith(objectKey);
+    });
+
+    it("khi DB insert báo lỗi nhưng hàng thực tế ĐÃ commit, KHÔNG xóa object R2", async () => {
+      mockCreateClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "contracts") {
+            return createChainableMock({ id: contractId, archived_at: null });
+          }
+          if (table === "contract_files") {
+            return createChainableMock(null, { message: "socket hang up", code: "ECONNRESET" });
+          }
+          return createChainableMock(null);
+        },
+      });
+
+      // Admin client kiểm tra DB: hàng THỰC TẾ ĐÃ ĐƯỢC COMMIT!
+      mockCreateAdminClient.mockReturnValue({
+        from: () => createChainableMock({ id: fileId }),
+      });
+
+      mockHeadObject.mockResolvedValue({
+        exists: true,
+        contentLength: 1024,
+        etag: "etag-123",
+      });
+
+      const res = await completeUpload({
+        organizationId: orgId,
+        userId: "user-1",
+        userEmail: nonAdminEmail,
+        contractId,
+        fileId,
+        objectKey,
+        filename: "test.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+      });
+
+      expect(res.ok).toBe(false);
+      // Object không được xoá bù vì hàng DB đã tồn tại
+      expect(mockDeleteObject).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("[P2] storage-cleanup service", () => {
+    it("enqueueR2Cleanup ghi nhận tác vụ vào bảng r2_cleanup_queue", async () => {
+      const mockInsert = vi.fn().mockResolvedValue({ error: null });
+      mockCreateAdminClient.mockReturnValue({
+        from: () => ({ insert: mockInsert }),
+      });
+
+      await enqueueR2Cleanup({
+        objectKey: "test-key.pdf",
+        reason: "file_deleted",
+        lastError: "Timeout",
+      });
+
+      expect(mockInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          object_key: "test-key.pdf",
+          reason: "file_deleted",
+          status: "pending",
+          last_error: "Timeout",
+        }),
+      );
+    });
+
+    it("processR2CleanupQueue: hủy tác vụ nếu object upload_db_failed đang được contract_files trỏ tới", async () => {
+      const mockJobs = [
+        {
+          id: "job-1",
+          object_key: "in-use.pdf",
+          reason: "upload_db_failed",
+          attempts: 0,
+          status: "pending",
+        },
+      ];
+
+      const mockUpdate = vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValue({ error: null }),
+      });
+
+      mockCreateAdminClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "r2_cleanup_queue") {
+            const chain = createChainableMock(mockJobs);
+            chain.update = mockUpdate;
+            return chain;
+          }
+          if (table === "contract_files") {
+            // Tệp đang được dùng bởi hợp đồng
+            return createChainableMock({ id: "file-existing" });
+          }
+          return createChainableMock(null);
+        },
+      });
+
+      const result = await processR2CleanupQueue();
+      expect(result.processed).toBe(1);
+      expect(result.succeeded).toBe(1);
+      // Không được gọi deleteObject trên R2
+      expect(mockDeleteObject).not.toHaveBeenCalled();
+      // Job phải được đánh dấu cancelled
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "cancelled",
+        }),
+      );
+    });
+
+    it("processR2CleanupQueue: xóa object R2 và đánh dấu completed khi hợp lệ", async () => {
+      const mockJobs = [
+        {
+          id: "job-2",
+          object_key: "orphan.pdf",
+          reason: "file_deleted",
+          attempts: 0,
+          status: "pending",
+        },
+      ];
+
+      const mockUpdate = vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValue({ error: null }),
+      });
+
+      mockCreateAdminClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "r2_cleanup_queue") {
+            const chain = createChainableMock(mockJobs);
+            chain.update = mockUpdate;
+            return chain;
+          }
+          return createChainableMock(null);
+        },
+      });
+
+      mockDeleteObject.mockResolvedValue(undefined);
+
+      const result = await processR2CleanupQueue();
+      expect(result.processed).toBe(1);
+      expect(result.succeeded).toBe(1);
+      expect(mockDeleteObject).toHaveBeenCalledWith("orphan.pdf");
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "completed",
+        }),
+      );
     });
   });
 
