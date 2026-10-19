@@ -145,6 +145,68 @@ export async function findDuplicateContract(
   return data as ContractRow;
 }
 
+/**
+ * Looks for an active (unarchived) contract matching a contract number (exact or trimmed ilike)
+ * within the organization, resolving partner details.
+ */
+export async function findBaseContractByNumber(
+  {
+    contractNumber,
+    organizationId,
+  }: {
+    contractNumber: string;
+    organizationId: string;
+  },
+  options?: { abortSignal?: AbortSignal },
+): Promise<{
+  id: string;
+  contractNumber: string;
+  partnerName?: string | null;
+  signedDate?: string | null;
+  expiryDate?: string | null;
+} | null> {
+  const cleanNumber = emptyToNull(contractNumber);
+  if (!cleanNumber) return null;
+
+  const supabase = await createClient();
+  const escapedNumber = cleanNumber.trim().replace(/[%_]/g, "\\$&");
+
+  let query = supabase
+    .from("contracts")
+    .select("id, contract_number, signed_date, expiry_date, partner_id, partner_text, partners(name)")
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .ilike("contract_number", escapedNumber)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (options?.abortSignal) {
+    query = query.abortSignal(options.abortSignal);
+  }
+
+  const { data, error } = await query;
+  if (error || !data || data.length === 0) {
+    return null;
+  }
+
+  const row = data[0] as unknown as {
+    id: string;
+    contract_number: string | null;
+    signed_date: string | null;
+    expiry_date: string | null;
+    partner_text: string | null;
+    partners?: { name: string } | null;
+  };
+
+  return {
+    id: row.id,
+    contractNumber: row.contract_number ?? cleanNumber,
+    partnerName: row.partners?.name || row.partner_text || null,
+    signedDate: row.signed_date,
+    expiryDate: row.expiry_date,
+  };
+}
+
 /** Plan sections 31, 45 — inserts one contract for the caller's organization. */
 export async function createContract(
   input: CreateContractInput,

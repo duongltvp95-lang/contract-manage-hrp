@@ -9,6 +9,7 @@ import {
   createContract,
   deleteContract,
   deleteContracts,
+  findBaseContractByNumber,
   findDuplicateContract,
   unarchiveContract,
   updateContract,
@@ -29,7 +30,7 @@ import {
 } from "@/lib/server-action";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { err } from "@/lib/services/types";
-import type { ExtractedContractResult } from "@schemas/contract";
+import type { ExtractedContractResult, MatchedBaseContract } from "@schemas/contract";
 import {
   ALLOWED_MIME_TYPES,
   extractContractFromBuffer,
@@ -508,6 +509,7 @@ export async function extractContractAction(
     let matchedCompany: { id: string; name: string } | null = null;
     let isNewPartner = false;
     let duplicate: Awaited<ReturnType<typeof findDuplicateContract>> = null;
+    let matchedBaseContract: MatchedBaseContract | null = null;
 
     // Chỉ thực hiện các truy vấn DB bổ sung nếu ngân sách còn ít nhất 3 giây
     if (actionDeadline - Date.now() >= 3_000) {
@@ -623,6 +625,25 @@ export async function extractContractAction(
           null,
         );
       }
+
+      const baseContractTarget =
+        extracted.baseContractNumber ||
+        (extracted.documentType === "appendix" ? extracted.contractNumber : "");
+
+      if (baseContractTarget && actionDeadline - Date.now() >= 1_200) {
+        matchedBaseContract = await withIoAbort(
+          (signal) =>
+            findBaseContractByNumber(
+              {
+                contractNumber: baseContractTarget,
+                organizationId: access.user.organizationId,
+              },
+              { abortSignal: signal },
+            ),
+          1_000,
+          null,
+        );
+      }
     }
 
     const result: ExtractedContractResult = {
@@ -634,6 +655,7 @@ export async function extractContractAction(
       isNewPartner,
       isDuplicate: Boolean(duplicate),
       duplicateContractId: duplicate?.id ?? null,
+      matchedBaseContract: matchedBaseContract ?? null,
     };
 
     return {

@@ -11,10 +11,12 @@ import {
   CreateContractSchema,
   getContractWarnings,
   type CreateContractInput,
+  type MatchedBaseContract,
 } from "@schemas/contract";
 import { MAX_AI_FILE_SIZE_BYTES, MAX_AI_FILE_SIZE_MB } from "@schemas/file";
 
 import {
+  completeUploadAction,
   createContractAction,
   extractContractAction,
   updateContractAction,
@@ -207,6 +209,9 @@ export function ContractForm({
     hasFiles,
     busy,
     mergeFiles,
+    toggleFileKind,
+    setFileKind,
+    removeFileById,
     runUploads,
     retryUploads,
     resetUploads,
@@ -222,12 +227,20 @@ export function ContractForm({
   const [formError, setFormError] = useState<string | null>(null);
   const [isExtractingAi, setIsExtractingAi] = useState(false);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [appendixNotice, setAppendixNotice] = useState<{
+    type: "found" | "not_found";
+    baseContractNumber: string;
+    baseContract?: MatchedBaseContract | null;
+    file: PendingFile;
+  } | null>(null);
+  const [isAttachingToExisting, setIsAttachingToExisting] = useState(false);
 
   const resetFormState = useCallback(() => {
     form.reset(EMPTY_VALUES);
     setExtraCompany(null);
     setAiSummary(null);
     setFormError(null);
+    setAppendixNotice(null);
     resetUploads();
   }, [form, resetUploads]);
 
@@ -266,6 +279,78 @@ export function ContractForm({
       return () => clearTimeout(timer);
     }
   }, [isEdit, savedContractId, resetFormState]);
+
+  async function handleAttachToExistingContract(baseContractId: string, fileItem: PendingFile) {
+    setIsAttachingToExisting(true);
+    toast.loading("Đang gán phụ lục vào hợp đồng...", { id: "attach-appendix" });
+    try {
+      const rawFile = fileItem.file;
+      const presignResponse = await fetch("/api/files/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contractId: baseContractId,
+          filename: rawFile.name,
+          mimeType: rawFile.type || "application/pdf",
+          fileSize: rawFile.size,
+          kind: "appendix",
+        }),
+      });
+
+      if (!presignResponse.ok) {
+        const payload = await presignResponse.json().catch(() => null);
+        throw new Error(payload?.error ?? `Lỗi khởi tạo tải lên (HTTP ${presignResponse.status})`);
+      }
+
+      const { fileId, objectKey, uploadUrl } = (await presignResponse.json()) as {
+        fileId: string;
+        objectKey: string;
+        uploadUrl: string;
+      };
+
+      await putFileWithProgress(uploadUrl, rawFile, {
+        contentType: rawFile.type || "application/pdf",
+        onProgress: (p) => {
+          toast.loading(`Đang tải phụ lục lên: ${p.percent}%...`, { id: "attach-appendix" });
+        },
+      });
+
+      const completeRes = await completeUploadAction({
+        contractId: baseContractId,
+        fileId,
+        objectKey,
+        filename: rawFile.name,
+        mimeType: rawFile.type || "application/pdf",
+        fileSize: rawFile.size,
+        kind: "appendix",
+      });
+
+      if (!completeRes.ok) {
+        throw new Error(completeRes.message);
+      }
+
+      removeFileById(fileItem.id);
+      setAppendixNotice(null);
+
+      toast.success(`Đã thêm phụ lục "${rawFile.name}" vào hợp đồng thành công!`, {
+        id: "attach-appendix",
+        action: {
+          label: "Xem hợp đồng",
+          onClick: () => router.push(`/contracts/${baseContractId}`),
+        },
+        duration: 8000,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Gán phụ lục thất bại. Vui lòng thử lại.";
+      toast.error("Không thể gán phụ lục vào hợp đồng", {
+        id: "attach-appendix",
+        description: msg,
+        duration: 8000,
+      });
+    } finally {
+      setIsAttachingToExisting(false);
+    }
+  }
 
   async function handleExtractAi(fileItem: PendingFile) {
     if (fileItem.file.size > MAX_AI_FILE_SIZE_BYTES) {
@@ -340,6 +425,30 @@ export function ContractForm({
 
       const data = result.data;
       const filledFields: string[] = [];
+
+      const isAppendixDoc = data.documentType === "appendix" || Boolean(data.baseContractNumber);
+      if (isAppendixDoc) {
+        setFileKind(fileItem.id, "appendix");
+        const baseNum = data.baseContractNumber || data.contractNumber || "Không xác định";
+        if (data.matchedBaseContract) {
+          setAppendixNotice({
+            type: "found",
+            baseContractNumber: baseNum,
+            baseContract: data.matchedBaseContract,
+            file: fileItem,
+          });
+        } else {
+          setAppendixNotice({
+            type: "not_found",
+            baseContractNumber: baseNum,
+            baseContract: null,
+            file: fileItem,
+          });
+        }
+      } else {
+        setFileKind(fileItem.id, "document");
+        setAppendixNotice(null);
+      }
 
       if (data.contractNumber) {
         form.setValue("contractNumber", data.contractNumber, {
@@ -421,7 +530,7 @@ export function ContractForm({
         setAiSummary(data.summary);
       }
 
-      if (data.isDuplicate) {
+      if (data.isDuplicate && !isAppendixDoc) {
         const signedDisp = data.signedDate ? formatDateOnly(data.signedDate) : "trống";
         const expiryDisp = data.expiryDate ? formatDateOnly(data.expiryDate) : "trống";
         const dupMsg = `Hợp đồng số "${data.contractNumber}" (ngày ký: ${signedDisp}, hết hạn: ${expiryDisp}) đã tồn tại trong hệ thống. Vui lòng không thêm trùng lặp.`;
@@ -432,15 +541,25 @@ export function ContractForm({
         });
       }
 
-      const toastTitle = data.isNewPartner
-        ? "✨ AI đã trích xuất & tự động thêm đối tác mới!"
-        : "✨ AI đã trích xuất thành công thông tin hợp đồng!";
+      let toastTitle = "✨ AI đã trích xuất thành công thông tin hợp đồng!";
+      if (isAppendixDoc) {
+        toastTitle = data.matchedBaseContract
+          ? "✨ AI nhận diện Phụ lục & tìm thấy Hợp đồng gốc!"
+          : "⚠️ AI nhận diện Phụ lục: Chưa có Hợp đồng gốc trên hệ thống!";
+      } else if (data.isNewPartner) {
+        toastTitle = "✨ AI đã trích xuất & tự động thêm đối tác mới!";
+      }
+
+      const toastDesc =
+        isAppendixDoc && !data.matchedBaseContract
+          ? `Đây là phụ lục của hợp đồng "${data.baseContractNumber || data.contractNumber}" và chưa có hợp đồng này được tải lên để gán.`
+          : filledFields.length > 0
+            ? `Đã điền: ${filledFields.join(", ")}.`
+            : "Đã phân tích xong nội dung tệp đính kèm.";
 
       toast.success(toastTitle, {
-        description:
-          filledFields.length > 0
-            ? `Đã điền: ${filledFields.join(", ")}.`
-            : "Đã phân tích xong nội dung tệp đính kèm.",
+        description: toastDesc,
+        duration: isAppendixDoc ? 8000 : 5000,
       });
     } catch (err) {
       clientLog.error("handleExtractAi thất bại", {
@@ -721,6 +840,11 @@ export function ContractForm({
             onRetryUploads={retryUploads}
             onExtractAi={handleExtractAi}
             isExtractingAi={isExtractingAi}
+            onToggleFileKind={toggleFileKind}
+            appendixNotice={appendixNotice}
+            onAttachToExistingContract={handleAttachToExistingContract}
+            isAttachingToExisting={isAttachingToExisting}
+            onDismissAppendixNotice={() => setAppendixNotice(null)}
           />
         )}
 

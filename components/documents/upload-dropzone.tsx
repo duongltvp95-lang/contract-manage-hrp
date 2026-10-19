@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, ImageIcon, Loader2, Trash2, UploadCloud, XCircle, CheckCircle2 } from "lucide-react";
+import { FileText, ImageIcon, Loader2, Sparkles, Trash2, UploadCloud, XCircle, CheckCircle2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 
@@ -38,6 +38,10 @@ export function UploadDropzone({
   kind = "document",
   hint,
   inputTestId,
+  onToggleKind,
+  showKindBadge = false,
+  onExtractAi,
+  isExtractingAi = false,
 }: {
   files: PendingFile[];
   onFilesChange: (files: PendingFile[]) => void;
@@ -49,6 +53,10 @@ export function UploadDropzone({
   hint?: string;
   /** Stable test id for the hidden file input (two dropzones on the form). */
   inputTestId?: string;
+  onToggleKind?: (id: string) => void;
+  showKindBadge?: boolean;
+  onExtractAi?: (file: PendingFile) => void;
+  isExtractingAi?: boolean;
 }) {
   const maxBytes = maxUploadSizeMb * 1024 * 1024;
 
@@ -114,10 +122,27 @@ export function UploadDropzone({
               <FileIcon mimeType={pending.file.type} />
 
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate text-sm font-medium">
                     {pending.file.name}
                   </span>
+                  {showKindBadge && (
+                    <button
+                      type="button"
+                      disabled={disabled || pending.status === "uploading"}
+                      onClick={() => onToggleKind?.(pending.id)}
+                      className={cn(
+                        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium transition-colors",
+                        pending.kind === "appendix"
+                          ? "bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/40 dark:text-purple-300"
+                          : "bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-300",
+                        onToggleKind && "cursor-pointer",
+                      )}
+                      title={onToggleKind ? "Bấm để đổi phân loại (Tài liệu chính ↔ Phụ lục)" : undefined}
+                    >
+                      {pending.kind === "appendix" ? "Phụ lục" : "Tài liệu chính"}
+                    </button>
+                  )}
                   <StatusBadge status={pending.status} />
                 </div>
 
@@ -135,17 +160,34 @@ export function UploadDropzone({
                 )}
               </div>
 
-              {!disabled && pending.status !== "uploading" && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Xoá ${pending.file.name}`}
-                  onClick={() => removeFile(pending.id)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              )}
+              <div className="flex items-center gap-1.5">
+                {onExtractAi && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1 px-2 text-xs text-purple-700 hover:bg-purple-50 hover:text-purple-800 dark:border-purple-800 dark:text-purple-300 dark:hover:bg-purple-950/40"
+                    disabled={disabled || isExtractingAi || pending.status === "uploading"}
+                    onClick={() => onExtractAi(pending)}
+                    title="Phân tích nội dung tệp này bằng AI"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    <span className="hidden sm:inline">Phân tích</span>
+                  </Button>
+                )}
+
+                {!disabled && pending.status !== "uploading" && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Xoá ${pending.file.name}`}
+                    onClick={() => removeFile(pending.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
             </li>
           ))}
         </ul>

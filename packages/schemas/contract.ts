@@ -147,9 +147,21 @@ export const ExtractedContractSchema = z.object({
   partnerAddress: z.string().optional().default(""),
   companyName: z.string().optional().default(""),
   summary: z.string().optional().default(""),
+  // Document classification & appendix metadata
+  documentType: z.enum(["contract", "appendix"]).optional().default("contract"),
+  baseContractNumber: z.string().optional().default(""),
+  appendixNumber: z.string().optional().default(""),
 });
 
 export type ExtractedContract = z.infer<typeof ExtractedContractSchema>;
+
+export type MatchedBaseContract = {
+  id: string;
+  contractNumber: string;
+  partnerName?: string | null;
+  signedDate?: string | null;
+  expiryDate?: string | null;
+};
 
 export type ExtractedContractResult = ExtractedContract & {
   matchedPartnerId?: string | null;
@@ -159,4 +171,5 @@ export type ExtractedContractResult = ExtractedContract & {
   isNewPartner?: boolean;
   isDuplicate?: boolean;
   duplicateContractId?: string | null;
+  matchedBaseContract?: MatchedBaseContract | null;
 };

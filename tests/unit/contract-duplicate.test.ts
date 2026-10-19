@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { findDuplicateContract, createContract } from "@/lib/services/contracts";
+import { findDuplicateContract, findBaseContractByNumber, createContract } from "@/lib/services/contracts";
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(),
@@ -129,5 +129,50 @@ describe("Duplicate Contract Detection", () => {
       expect(response.message).toContain("01/03/2024");
       expect(response.message).toContain("01/03/2025");
     }
+  });
+
+  it("findBaseContractByNumber returns null when contractNumber is empty", async () => {
+    const result = await findBaseContractByNumber({
+      contractNumber: "",
+      organizationId: orgId,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("findBaseContractByNumber finds base contract and resolves partner name", async () => {
+    const mockData = {
+      id: "base-contract-1",
+      contract_number: "123/2026/HĐKT",
+      signed_date: "2026-01-01",
+      expiry_date: "2027-01-01",
+      partner_text: null,
+      partner_id: "p1",
+      partners: { name: "Đối tác Công ty ABC" },
+    };
+
+    const mockLimit = vi.fn().mockResolvedValue({
+      data: [mockData],
+      error: null,
+    });
+    const mockOrder = vi.fn().mockReturnValue({ limit: mockLimit });
+    const mockIlike = vi.fn().mockReturnValue({ order: mockOrder });
+    const mockArchived = vi.fn().mockReturnValue({ ilike: mockIlike });
+    const mockOrg = vi.fn().mockReturnValue({ is: mockArchived });
+    const mockSelect = vi.fn().mockReturnValue({ eq: mockOrg });
+    const mockFrom = vi.fn().mockReturnValue({ select: mockSelect });
+
+    (createClient as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      from: mockFrom,
+    });
+
+    const result = await findBaseContractByNumber({
+      contractNumber: "123/2026/HĐKT",
+      organizationId: orgId,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.id).toBe("base-contract-1");
+    expect(result?.contractNumber).toBe("123/2026/HĐKT");
+    expect(result?.partnerName).toBe("Đối tác Công ty ABC");
   });
 });

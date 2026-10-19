@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CreateContractSchema,
+  ExtractedContractSchema,
   UpdateContractSchema,
   emptyToNull,
   getContractWarnings,
@@ -141,5 +142,36 @@ describe("getContractWarnings (plan section 47)", () => {
     expect(
       getContractWarnings({ signedDate: "not-a-date", expiryDate: "2026-01-01" }),
     ).toEqual([]);
+  });
+});
+
+describe("ExtractedContractSchema", () => {
+  it("defaults documentType to contract if missing or null", () => {
+    const result = ExtractedContractSchema.parse({
+      contractNumber: "01/2026/HĐKT",
+      partnerName: "Công ty ABC",
+    });
+    expect(result.documentType).toBe("contract");
+  });
+
+  it("accepts documentType = appendix with baseContractNumber and appendixNumber", () => {
+    const parsed = ExtractedContractSchema.parse({
+      contractNumber: "PL-01/01/2026/HĐKT",
+      documentType: "appendix",
+      baseContractNumber: "01/2026/HĐKT",
+      appendixNumber: "PL-01",
+      partnerName: "Công ty ABC",
+    });
+    expect(parsed.documentType).toBe("appendix");
+    expect(parsed.baseContractNumber).toBe("01/2026/HĐKT");
+    expect(parsed.appendixNumber).toBe("PL-01");
+  });
+
+  it("defaults baseContractNumber and appendixNumber to empty strings when omitted", () => {
+    const parsed = ExtractedContractSchema.parse({
+      contractNumber: "HĐ-123",
+    });
+    expect(parsed.baseContractNumber).toBe("");
+    expect(parsed.appendixNumber).toBe("");
   });
 });

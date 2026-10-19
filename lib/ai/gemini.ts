@@ -28,8 +28,13 @@ export const ALLOWED_MIME_TYPES = new Set([
 export { MAX_AI_FILE_SIZE_BYTES, MAX_AI_FILE_SIZE_MB };
 
 const EXTRACTION_SYSTEM_PROMPT = `Bạn là trợ lý AI chuyên gia phân tích hợp đồng kinh tế và pháp lý tại Việt Nam.
-Hãy đọc kỹ tài liệu hợp đồng đính kèm và trích xuất các thông tin sau thành JSON cấu trúc chuẩn:
-- contractNumber: Số hợp đồng (chuỗi ký tự, ví dụ: "12/2026/HĐKT", để trống "" nếu không có)
+Hãy đọc kỹ tài liệu đính kèm (có thể là văn bản Hợp đồng chính hoặc Phụ lục hợp đồng) và trích xuất các thông tin sau thành JSON cấu trúc chuẩn:
+- documentType: Phân loại tài liệu:
+  + "contract": Nếu tài liệu là văn bản Hợp đồng chính (Hợp đồng kinh tế, dịch vụ, mua bán, nguyên tắc...).
+  + "appendix": Nếu tài liệu là Phụ lục hợp đồng (hoặc văn bản sửa đổi, bổ sung, gia hạn hợp đồng).
+- baseContractNumber: Nếu tài liệu là Phụ lục hợp đồng ("appendix"), hãy trích xuất Số hợp đồng gốc được tham chiếu trong điều khoản căn cứ (ví dụ: "Căn cứ Hợp đồng số 24022024/HRVN - STAR ENGINEERS..." -> điền "24022024/HRVN - STAR ENGINEERS"). Nếu là hợp đồng chính thì để trống "".
+- appendixNumber: Số thứ tự phụ lục nếu có (ví dụ: "01", "02", "1", để trống "" nếu không có).
+- contractNumber: Số của tài liệu (nếu là hợp đồng thì là số hợp đồng; nếu là phụ lục thì là số phụ lục hoặc số hợp đồng ghi ở đầu văn bản, để trống "" nếu không có)
 - signedDate: Ngày ký hợp đồng theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2026-03-15", để trống "" nếu không tìm thấy)
 - expiryDate: Ngày hết hạn của hợp đồng theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2027-03-15").
   QUY TẮC BẮT BUỘC VỀ NGÀY HẾT HẠN:
@@ -56,6 +61,18 @@ Chỉ trả về JSON hợp lệ khớp với cấu trúc trên.`;
 const CONTRACT_RESPONSE_SCHEMA = {
   type: "OBJECT",
   properties: {
+    documentType: {
+      type: "STRING",
+      description: "Phân loại tài liệu: 'contract' (hợp đồng) hoặc 'appendix' (phụ lục)",
+    },
+    baseContractNumber: {
+      type: "STRING",
+      description: "Số hợp đồng gốc mà phụ lục tham chiếu tới, để trống '' nếu là hợp đồng",
+    },
+    appendixNumber: {
+      type: "STRING",
+      description: "Số thứ tự phụ lục nếu có (vd '01'), để trống '' nếu không có",
+    },
     contractNumber: {
       type: "STRING",
       description: "Số hợp đồng, để trống '' nếu không có",
@@ -94,6 +111,7 @@ const CONTRACT_RESPONSE_SCHEMA = {
     },
   },
   required: [
+    "documentType",
     "contractNumber",
     "signedDate",
     "expiryDate",
@@ -378,7 +396,17 @@ export async function extractContractFromBuffer({
             expiryIso = calculateExpiryDateFromDuration(signedIso, normalizedDuration);
           }
 
+          const docTypeRaw = String(parsedJson.documentType ?? "contract").toLowerCase();
+          const documentType = docTypeRaw.includes("appendix") || docTypeRaw.includes("phụ lục")
+            ? ("appendix" as const)
+            : ("contract" as const);
+          const baseContractNumber = String(parsedJson.baseContractNumber ?? "").trim();
+          const appendixNumber = String(parsedJson.appendixNumber ?? "").trim();
+
           const extracted: ExtractedContract = {
+            documentType,
+            baseContractNumber,
+            appendixNumber,
             contractNumber: String(parsedJson.contractNumber ?? "").trim(),
             signedDate: signedIso,
             expiryDate: expiryIso,

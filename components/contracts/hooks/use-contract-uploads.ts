@@ -33,6 +33,26 @@ export function useContractUploads({
     ]);
   }
 
+  function toggleFileKind(id: string) {
+    setFiles((current) =>
+      current.map((item) =>
+        item.id === id
+          ? { ...item, kind: item.kind === "appendix" ? "document" : "appendix" }
+          : item,
+      ),
+    );
+  }
+
+  function setFileKind(id: string, kind: FileKind) {
+    setFiles((current) =>
+      current.map((item) => (item.id === id ? { ...item, kind } : item)),
+    );
+  }
+
+  function removeFileById(id: string) {
+    setFiles((current) => current.filter((item) => item.id !== id));
+  }
+
   async function uploadOne(contractId: string, pending: PendingFile) {
     patchFile(pending.id, { status: "uploading", progress: 0, error: undefined });
 
@@ -161,6 +181,9 @@ export function useContractUploads({
     hasFiles,
     busy,
     mergeFiles,
+    toggleFileKind,
+    setFileKind,
+    removeFileById,
     runUploads,
     retryUploads,
     resetUploads,
