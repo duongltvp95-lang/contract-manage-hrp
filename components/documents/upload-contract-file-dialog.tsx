@@ -174,8 +174,11 @@ export function UploadContractFileDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+      <DialogContent
+        className="sm:max-w-md max-h-[calc(100svh-2rem)] overflow-y-auto"
+        data-testid="upload-contract-file-dialog"
+      >
+        <DialogHeader className="pr-8 text-left">
           <DialogTitle>
             {replacingFileId ? "Tải lên tệp thay thế" : "Thêm tài liệu vào hợp đồng"}
           </DialogTitle>

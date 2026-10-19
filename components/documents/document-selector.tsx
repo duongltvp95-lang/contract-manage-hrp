@@ -47,9 +47,9 @@ export function DocumentSelector({
   const appendices = files.filter((file) => file.kind === "appendix");
 
   return (
-    <ScrollArea className="w-full lg:w-56 lg:shrink-0 lg:border-r">
-      <div className="p-2 space-y-2" data-testid="document-selector">
-        {onAddFile && (
+    <div className="flex w-full flex-col border-b bg-muted/5 lg:w-56 lg:shrink-0 lg:border-b-0 lg:border-r">
+      {onAddFile && (
+        <div className="shrink-0 border-b bg-background/95 p-2 backdrop-blur">
           <Button
             type="button"
             variant="outline"
@@ -61,25 +61,29 @@ export function DocumentSelector({
             <Plus className="h-3.5 w-3.5" />
             Thêm tài liệu
           </Button>
-        )}
-        <FileGroup
-          label="Tài liệu"
-          files={documents}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          disabled={disabled}
-          onDeleteFile={onDeleteFile}
-        />
-        <FileGroup
-          label="Phụ lục hợp đồng"
-          files={appendices}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          disabled={disabled}
-          onDeleteFile={onDeleteFile}
-        />
-      </div>
-    </ScrollArea>
+        </div>
+      )}
+      <ScrollArea className="flex-1 max-h-48 lg:max-h-none">
+        <div className="p-2 space-y-2" data-testid="document-selector">
+          <FileGroup
+            label="Tài liệu"
+            files={documents}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            disabled={disabled}
+            onDeleteFile={onDeleteFile}
+          />
+          <FileGroup
+            label="Phụ lục hợp đồng"
+            files={appendices}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            disabled={disabled}
+            onDeleteFile={onDeleteFile}
+          />
+        </div>
+      </ScrollArea>
+    </div>
   );
 }
 

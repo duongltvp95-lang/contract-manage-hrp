@@ -62,7 +62,7 @@ export default async function RootLayout({
           disableTransitionOnChange
         >
           {children}
-          <Toaster richColors closeButton position="top-right" />
+          <Toaster richColors closeButton position="bottom-right" />
         </ThemeProvider>
       </body>
     </html>
