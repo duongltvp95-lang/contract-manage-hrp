@@ -110,11 +110,8 @@ export function useContractUploads({
 
   async function runUploads(contractId: string, queue: PendingFile[]) {
     if (queue.length === 0) {
-      setPhase("redirecting");
+      setPhase("idle");
       onSuccess(contractId);
-      setTimeout(() => {
-        setPhase("idle");
-      }, 4000);
       return;
     }
 
@@ -136,12 +133,8 @@ export function useContractUploads({
     );
 
     if (failures.length === 0) {
-      setPhase("redirecting");
+      setPhase("idle");
       onSuccess(contractId);
-      // Safety timeout: nếu trang không unload sau 4 giây (hoặc quay lại), tự trở về idle
-      setTimeout(() => {
-        setPhase("idle");
-      }, 4000);
       return;
     }
 

@@ -218,9 +218,18 @@ export function ContractForm({
     savedContractId,
   } = useContractUploads({
     onSuccess: (contractId) => {
-      toast.success("Đã tạo hợp đồng");
-      router.push(`/contracts/${contractId}`);
+      toast.success("Đã tạo hợp đồng thành công!", {
+        description: "Dữ liệu và tệp đính kèm đã được lưu. Bạn có thể tiếp tục thêm hợp đồng mới.",
+        action: {
+          label: "Xem hợp đồng",
+          onClick: () => router.push(`/contracts/${contractId}`),
+        },
+        duration: 8000,
+      });
       resetFormStateRef.current();
+      if (typeof window !== "undefined") {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
     },
   });
 
