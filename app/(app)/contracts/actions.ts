@@ -609,7 +609,11 @@ export async function extractContractAction(
         }
       }
 
-      if (extracted.contractNumber && actionDeadline - Date.now() >= 1_500) {
+      if (
+        extracted.documentType !== "appendix" &&
+        extracted.contractNumber &&
+        actionDeadline - Date.now() >= 1_500
+      ) {
         duplicate = await withIoAbort(
           (signal) =>
             findDuplicateContract(

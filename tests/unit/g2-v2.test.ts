@@ -14,6 +14,7 @@ import { clientLog } from "@/lib/ai/log-client";
 import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
 import {
   ALLOWED_MIME_TYPES,
+  detectAppendixMetadata,
   extractContractFromBuffer,
   getGeminiModels,
   MAX_AI_FILE_SIZE_BYTES,
@@ -480,5 +481,74 @@ describe("G2 v2 — extractPdfText (sửa BUG-1)", () => {
     );
     const result = await extractPdfText(minimalPdf);
     expect(result).toBeNull();
+  });
+});
+
+describe("G2 v2 — detectAppendixMetadata (Phân loại chính xác Phụ lục và Hợp đồng)", () => {
+  it("nhận diện đúng hợp đồng chính khi không có dấu hiệu phụ lục", () => {
+    const res = detectAppendixMetadata({
+      filename: "Hop_dong_kinh_te_12_2026.pdf",
+      pdfText: "HỢP ĐỒNG KINH TẾ\nSố: 12/2026/HĐKT\nGiữa Công ty TNHH HRP và Đối tác ABC...",
+      rawExtracted: {
+        documentType: "contract",
+        contractNumber: "12/2026/HĐKT",
+        summary: "Hợp đồng cung cấp dịch vụ quản lý nhân sự",
+      },
+    });
+
+    expect(res.documentType).toBe("contract");
+    expect(res.baseContractNumber).toBe("");
+    expect(res.appendixNumber).toBe("");
+    expect(res.contractNumber).toBe("12/2026/HĐKT");
+  });
+
+  it("nhận diện phụ lục từ tên tệp (filename)", () => {
+    const res = detectAppendixMetadata({
+      filename: "Phu_luc_so_01_HD_12_2026.pdf",
+      pdfText: "",
+      rawExtracted: {
+        documentType: "contract", // Gemini bị nhầm lẫn là contract
+        contractNumber: "12/2026/HĐKT",
+        summary: "Điều chỉnh thời hạn",
+      },
+    });
+
+    expect(res.documentType).toBe("appendix");
+    expect(res.appendixNumber).toBe("01");
+    // Nhận diện contractNumber là số hợp đồng gốc bị trích xuất nhầm
+    expect(res.baseContractNumber).toBe("12/2026/HĐKT");
+  });
+
+  it("nhận diện phụ lục từ nội dung văn bản (text layer) và trích xuất số HĐ gốc từ điều khoản căn cứ", () => {
+    const res = detectAppendixMetadata({
+      filename: "document_scan.pdf",
+      pdfText:
+        "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nPHỤ LỤC HỢP ĐỒNG SỐ 02\nCăn cứ Hợp đồng kinh tế số: 2024.03.01/HRVN - DONGYANG ký ngày 01/03/2024...",
+      rawExtracted: {
+        documentType: "contract",
+        contractNumber: "",
+        summary: "Gia hạn thời hạn thực hiện",
+      },
+    });
+
+    expect(res.documentType).toBe("appendix");
+    expect(res.appendixNumber).toBe("02");
+    expect(res.baseContractNumber).toBe("2024.03.01/HRVN - DONGYANG");
+  });
+
+  it("nhận diện phụ lục từ AI summary", () => {
+    const res = detectAppendixMetadata({
+      filename: "scan_123.jpg",
+      pdfText: null,
+      rawExtracted: {
+        documentType: "contract",
+        contractNumber: "PL-01",
+        baseContractNumber: "99/2026/HĐKT",
+        summary: "Phụ lục số 01 về việc sửa đổi bảng giá dịch vụ",
+      },
+    });
+
+    expect(res.documentType).toBe("appendix");
+    expect(res.baseContractNumber).toBe("99/2026/HĐKT");
   });
 });

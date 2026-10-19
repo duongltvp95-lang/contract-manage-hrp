@@ -75,12 +75,29 @@ export function putFileWithProgress(
   });
 }
 
-export function newPendingFile(file: File, kind: FileKind = "document"): PendingFile {
+export function inferFileKindFromFilename(filename: string): FileKind {
+  const normalized = filename.toLowerCase();
+  const appendixPatterns = [
+    /(?:phu|phụ)[\s_\-]*(?:luc|lục)/i,
+    /appendix/i,
+    /addendum/i,
+    /plhd/i,
+    /\bpl\b/i,
+    /pl[\-_0-9]/i,
+    /(?:sua|sửa)[\s_\-]*(?:doi|đổi)/i,
+    /(?:bo|bổ)[\s_\-]*sung/i,
+    /(?:gia|gia)[\s_\-]*(?:han|hạn)/i,
+  ];
+  return appendixPatterns.some((pattern) => pattern.test(normalized)) ? "appendix" : "document";
+}
+
+export function newPendingFile(file: File, kind?: FileKind): PendingFile {
+  const resolvedKind = kind ?? inferFileKindFromFilename(file.name);
   return {
     id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
     file,
     status: "pending",
     progress: 0,
-    kind,
+    kind: resolvedKind,
   };
 }

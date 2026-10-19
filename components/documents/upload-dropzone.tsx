@@ -66,9 +66,12 @@ export function UploadDropzone({
     (accepted: File[], rejected: unknown[]) => {
       setRejections(describeRejections(rejected, maxUploadSizeMb));
       if (accepted.length === 0) return;
-      onFilesChange([...files, ...accepted.map((file) => newPendingFile(file, kind))]);
+      onFilesChange([
+        ...files,
+        ...accepted.map((file) => newPendingFile(file, showKindBadge ? undefined : kind)),
+      ]);
     },
-    [files, onFilesChange, maxUploadSizeMb, setRejections, kind],
+    [files, onFilesChange, maxUploadSizeMb, setRejections, kind, showKindBadge],
   );
 
   const { getRootProps, getInputProps, isDragActive, isDragReject } = useDropzone({

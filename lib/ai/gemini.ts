@@ -29,32 +29,44 @@ export { MAX_AI_FILE_SIZE_BYTES, MAX_AI_FILE_SIZE_MB };
 
 const EXTRACTION_SYSTEM_PROMPT = `Bạn là trợ lý AI chuyên gia phân tích hợp đồng kinh tế và pháp lý tại Việt Nam.
 Hãy đọc kỹ tài liệu đính kèm (có thể là văn bản Hợp đồng chính hoặc Phụ lục hợp đồng) và trích xuất các thông tin sau thành JSON cấu trúc chuẩn:
-- documentType: Phân loại tài liệu:
-  + "contract": Nếu tài liệu là văn bản Hợp đồng chính (Hợp đồng kinh tế, dịch vụ, mua bán, nguyên tắc...).
-  + "appendix": Nếu tài liệu là Phụ lục hợp đồng (hoặc văn bản sửa đổi, bổ sung, gia hạn hợp đồng).
-- baseContractNumber: Nếu tài liệu là Phụ lục hợp đồng ("appendix"), hãy trích xuất Số hợp đồng gốc được tham chiếu trong điều khoản căn cứ (ví dụ: "Căn cứ Hợp đồng số 24022024/HRVN - STAR ENGINEERS..." -> điền "24022024/HRVN - STAR ENGINEERS"). Nếu là hợp đồng chính thì để trống "".
-- appendixNumber: Số thứ tự phụ lục nếu có (ví dụ: "01", "02", "1", để trống "" nếu không có).
-- contractNumber: Số của tài liệu (nếu là hợp đồng thì là số hợp đồng; nếu là phụ lục thì là số phụ lục hoặc số hợp đồng ghi ở đầu văn bản, để trống "" nếu không có)
-- signedDate: Ngày ký hợp đồng theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2026-03-15", để trống "" nếu không tìm thấy)
-- expiryDate: Ngày hết hạn của hợp đồng theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2027-03-15").
+
+QUY TẮC BẮT BUỘC ĐỂ PHÂN LOẠI HỢP ĐỒNG VÀ PHỤ LỤC (CỰC KỲ QUAN TRỌNG):
+1. PHỤ LỤC HỢP ĐỒNG (documentType = "appendix"):
+- Dấu hiệu nhận biết:
+  + Tiêu đề văn bản ghi: "PHỤ LỤC", "PHỤ LỤC HỢP ĐỒNG", "PHỤ LỤC SỐ...", "VĂN BẢN SỬA ĐỔI BỔ SUNG", "THỎA THUẬN GIA HẠN", "THỎA THUẬN SỬA ĐỔI", "APPENDIX", "ADDENDUM", "AMENDMENT"...
+  + Hoặc tên tệp đính kèm có chứa các từ khóa: "phu luc", "phụ lục", "pl", "plhd", "appendix", "addendum"...
+  + Hoặc nội dung có các điều khoản dẫn chiếu căn cứ hợp đồng: "Căn cứ Hợp đồng số...", "Căn cứ Hợp đồng kinh tế số...", "Phụ lục này là bộ phận không thể tách rời của Hợp đồng số...", "Hai bên đồng ý sửa đổi, bổ sung Điều... của Hợp đồng số...".
+- KHI LÀ PHỤ LỤC:
+  + "documentType": BẮT BUỘC chọn "appendix". TUYỆT ĐỐI KHÔNG ĐƯỢC CHỌN "contract" dù trong nội dung có xuất hiện nhiều lần từ "Hợp đồng"!
+  + "baseContractNumber": BẮT BUỘC trích xuất chính xác Số hợp đồng gốc được nhắc đến trong phần căn cứ (ví dụ: "Căn cứ Hợp đồng số 2024.03.01/HRVN - DONGYANG..." -> điền "2024.03.01/HRVN - DONGYANG"). Nếu là hợp đồng chính thì để trống "".
+  + "appendixNumber": Số thứ tự của phụ lục nếu có (ví dụ: "01", "02", "1", "PL-01", để trống "" nếu không ghi rõ).
+  + "contractNumber": Số của phụ lục nếu có số riêng (ví dụ "PL-01/2024"); nếu không có số riêng thì điền số của hợp đồng gốc.
+
+2. HỢP ĐỒNG CHÍNH (documentType = "contract"):
+- Tiêu đề là "HỢP ĐỒNG", "HỢP ĐỒNG KINH TẾ", "HỢP ĐỒNG DỊCH VỤ", "HỢP ĐỒNG NGUYÊN TẮC", "HỢP ĐỒNG MUA BÁN", "CONTRACT", "AGREEMENT"... và KHÔNG PHẢI là phụ lục.
+- Đặt documentType = "contract", baseContractNumber = "", appendixNumber = "".
+
+CÁC TRƯỜNG THÔNG TIN KHÁC:
+- signedDate: Ngày ký tài liệu theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2026-03-15", để trống "" nếu không tìm thấy)
+- expiryDate: Ngày hết hạn theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2027-03-15").
   QUY TẮC BẮT BUỘC VỀ NGÀY HẾT HẠN:
-  + Nếu hợp đồng ghi rõ ngày hết hạn cụ thể, hãy điền ngày đó.
-  + Nếu hợp đồng KHÔNG ghi ngày hết hạn cụ thể nhưng có ngày ký/bắt đầu và thời hạn (ví dụ: ngày ký 24/02/2024, thời hạn 1 năm), bạn PHẢI tự tính toán ngày hết hạn tương ứng để điền vào đây (ví dụ: 2024-02-24 + 1 năm -> "2025-02-24", hoặc 6 tháng -> "2024-08-24"). TUYỆT ĐỐI không để trống nếu đã có ngày ký và thời hạn!
-  + Chỉ để trống "" nếu hợp đồng không có cả ngày hết hạn lẫn thời hạn, hoặc hợp đồng ghi "Không xác định thời hạn".
-- durationText: Thời hạn hiệu lực của hợp đồng ghi dạng khoảng thời gian như số tháng hoặc số năm (ví dụ: "6 tháng", "1 năm", "2 năm", "3 năm", "Không xác định thời hạn", để trống "" nếu không có).
+  + Nếu tài liệu ghi rõ ngày hết hạn cụ thể, hãy điền ngày đó.
+  + Nếu tài liệu KHÔNG ghi ngày hết hạn cụ thể nhưng có ngày ký/bắt đầu và thời hạn (ví dụ: ngày ký 24/02/2024, thời hạn 1 năm), bạn PHẢI tự tính toán ngày hết hạn tương ứng để điền vào đây (ví dụ: 2024-02-24 + 1 năm -> "2025-02-24", hoặc 6 tháng -> "2024-08-24"). TUYỆT ĐỐI không để trống nếu đã có ngày ký và thời hạn!
+  + Chỉ để trống "" nếu tài liệu không có cả ngày hết hạn lẫn thời hạn, hoặc ghi "Không xác định thời hạn".
+- durationText: Thời hạn hiệu lực ghi dạng khoảng thời gian như số tháng hoặc số năm (ví dụ: "6 tháng", "1 năm", "2 năm", "3 năm", "Không xác định thời hạn", để trống "" nếu không có).
   QUY TẮC BẮT BUỘC VỀ THỜI HẠN:
   + TUYỆT ĐỐI KHÔNG ghi dạng khoảng ngày "Từ ngày ... đến ngày ..." hay ngày tháng cụ thể vào trường này.
-  + Nếu hợp đồng chỉ ghi khoảng ngày bắt đầu và kết thúc (ví dụ: từ ngày 20/12/2025 đến ngày 20/12/2026), bạn PHẢI tự tính toán và quy đổi ra số tháng hoặc số năm tương ứng (ví dụ: tròn 12 tháng -> "1 năm", 24 tháng -> "2 năm", 6 tháng -> "6 tháng").
+  + Nếu tài liệu chỉ ghi khoảng ngày bắt đầu và kết thúc (ví dụ: từ ngày 20/12/2025 đến ngày 20/12/2026), bạn PHẢI tự tính toán và quy đổi ra số tháng hoặc số năm tương ứng (ví dụ: tròn 12 tháng -> "1 năm", 24 tháng -> "2 năm", 6 tháng -> "6 tháng").
   + Chuẩn hóa cách ghi: 12 tháng -> "1 năm", 24 tháng -> "2 năm", 36 tháng -> "3 năm", "01 năm" -> "1 năm", "02 năm" -> "2 năm".
-- companyName: Tên công ty nội bộ của chúng tôi (dù hợp đồng ghi là Bên A hay Bên B).
+- companyName: Tên công ty nội bộ của chúng tôi (dù tài liệu ghi là Bên A hay Bên B).
   QUY TẮC QUAN TRỌNG: Chúng tôi có 2 công ty nội bộ trên hệ thống:
   1) "CÔNG TY TNHH HRP VIỆT NAM" (quy ước viết tắt là HRP)
   2) "CÔNG TY TNHH HR PARTNER VIỆT NAM" (quy ước viết tắt là HR VN)
-  Bất kể hợp đồng ghi công ty của chúng tôi là Bên A hay Bên B, hãy điền tên công ty của chúng tôi vào "companyName". TUYỆT ĐỐI KHÔNG ĐIỀN VÀO "partnerName"!
-- partnerName: Tên công ty/pháp nhân ĐỐI TÁC BÊN NGOÀI (bên còn lại trong hợp đồng giao dịch với công ty của chúng tôi, dù là Bên A hay Bên B). TUYỆT ĐỐI KHÔNG điền HRP, HRP Việt Nam, HR VN hay HR Partner Việt Nam vào đây.
-- partnerTaxCode: Mã số thuế của ĐỐI TÁC BÊN NGOÀI nếu có trong hợp đồng (chuỗi số, ví dụ: "0101234567", để trống "" nếu không có)
-- partnerAddress: Địa chỉ trụ sở của ĐỐI TÁC BÊN NGOÀI nếu có trong hợp đồng (để trống "" nếu không có)
-- summary: Tóm tắt ngắn gọn nội dung và phạm vi hợp đồng trong 1-2 câu tiếng Việt.
+  Bất kể tài liệu ghi công ty của chúng tôi là Bên A hay Bên B, hãy điền tên công ty của chúng tôi vào "companyName". TUYỆT ĐỐI KHÔNG ĐIỀN VÀO "partnerName"!
+- partnerName: Tên công ty/pháp nhân ĐỐI TÁC BÊN NGOÀI (bên còn lại giao dịch với công ty của chúng tôi, dù là Bên A hay Bên B). TUYỆT ĐỐI KHÔNG điền HRP, HRP Việt Nam, HR VN hay HR Partner Việt Nam vào đây.
+- partnerTaxCode: Mã số thuế của ĐỐI TÁC BÊN NGOÀI nếu có (chuỗi số, ví dụ: "0101234567", để trống "" nếu không có)
+- partnerAddress: Địa chỉ trụ sở của ĐỐI TÁC BÊN NGOÀI nếu có (để trống "" nếu không có)
+- summary: Tóm tắt ngắn gọn nội dung và phạm vi của văn bản trong 1-2 câu tiếng Việt.
 
 Chỉ trả về JSON hợp lệ khớp với cấu trúc trên.`;
 
@@ -63,19 +75,20 @@ const CONTRACT_RESPONSE_SCHEMA = {
   properties: {
     documentType: {
       type: "STRING",
-      description: "Phân loại tài liệu: 'contract' (hợp đồng) hoặc 'appendix' (phụ lục)",
+      enum: ["contract", "appendix"],
+      description: "Phân loại tài liệu: 'appendix' (Phụ lục hợp đồng) hoặc 'contract' (Hợp đồng chính)",
     },
     baseContractNumber: {
       type: "STRING",
-      description: "Số hợp đồng gốc mà phụ lục tham chiếu tới, để trống '' nếu là hợp đồng",
+      description: "Số hợp đồng gốc mà phụ lục tham chiếu tới, để trống '' nếu là hợp đồng chính",
     },
     appendixNumber: {
       type: "STRING",
-      description: "Số thứ tự phụ lục nếu có (vd '01'), để trống '' nếu không có",
+      description: "Số thứ tự phụ lục nếu có (vd '01', '02'), để trống '' nếu không có",
     },
     contractNumber: {
       type: "STRING",
-      description: "Số hợp đồng, để trống '' nếu không có",
+      description: "Số hợp đồng hoặc số phụ lục, để trống '' nếu không có",
     },
     signedDate: {
       type: "STRING",
@@ -107,7 +120,7 @@ const CONTRACT_RESPONSE_SCHEMA = {
     },
     summary: {
       type: "STRING",
-      description: "Tóm tắt ngắn gọn nội dung và phạm vi hợp đồng trong 1-2 câu",
+      description: "Tóm tắt ngắn gọn nội dung và phạm vi tài liệu trong 1-2 câu",
     },
   },
   required: [
@@ -201,6 +214,123 @@ export function normalizeDateToIso(dateStr?: string): string {
       : "";
   }
   return "";
+}
+
+/**
+ * Phân tích đa lớp (AI + Heuristics + Filename + Text) để đảm bảo không bỏ sót Phụ lục hợp đồng.
+ */
+export function detectAppendixMetadata({
+  filename = "",
+  pdfText = "",
+  rawExtracted,
+}: {
+  filename?: string;
+  pdfText?: string | null;
+  rawExtracted: {
+    documentType?: string;
+    contractNumber?: string;
+    baseContractNumber?: string;
+    appendixNumber?: string;
+    summary?: string;
+  };
+}): {
+  documentType: "contract" | "appendix";
+  baseContractNumber: string;
+  appendixNumber: string;
+  contractNumber: string;
+} {
+  const normFilename = (filename || "").toLowerCase();
+  const normSummary = (rawExtracted.summary || "").toLowerCase();
+  const normDocType = (rawExtracted.documentType || "").toLowerCase();
+  const textSample = (pdfText || "").slice(0, 4000).toLowerCase();
+
+  const appendixPatterns = [
+    /(?:phu|phụ)[\s_\-]*(?:luc|lục)/i,
+    /appendix/i,
+    /addendum/i,
+    /plhd/i,
+    /\bpl\b/i,
+    /pl[\-_0-9]/i,
+    /(?:sua|sửa)[\s_\-]*(?:doi|đổi)/i,
+    /(?:bo|bổ)[\s_\-]*sung/i,
+    /(?:gia|gia)[\s_\-]*(?:han|hạn)/i,
+  ];
+
+  const hasAppendixInFilename = appendixPatterns.some((p) => p.test(normFilename));
+  const hasAppendixInSummary = appendixPatterns.some((p) => p.test(normSummary));
+  const hasAppendixInText = appendixPatterns.some((p) => p.test(textSample));
+  const isDocTypeAppendix = normDocType.includes("appendix") || normDocType.includes("phụ lục");
+  const hasAppendixNumber = Boolean(rawExtracted.appendixNumber && rawExtracted.appendixNumber.trim().length > 0);
+  const hasBaseContract = Boolean(rawExtracted.baseContractNumber && rawExtracted.baseContractNumber.trim().length > 0);
+
+  const isAppendix =
+    isDocTypeAppendix ||
+    hasAppendixInFilename ||
+    hasAppendixInSummary ||
+    hasAppendixInText ||
+    hasAppendixNumber ||
+    hasBaseContract;
+
+  if (!isAppendix) {
+    return {
+      documentType: "contract",
+      baseContractNumber: "",
+      appendixNumber: "",
+      contractNumber: rawExtracted.contractNumber || "",
+    };
+  }
+
+  let baseContractNumber = (rawExtracted.baseContractNumber || "").trim();
+  let appendixNumber = (rawExtracted.appendixNumber || "").trim();
+  let contractNumber = (rawExtracted.contractNumber || "").trim();
+
+  // 1. Trích xuất appendixNumber nếu chưa có
+  if (!appendixNumber) {
+    const appNumMatch =
+      normFilename.match(/(?:phu|phụ)[\s_\-]*(?:luc|lục)[_\s\-]*(?:so|số)?[_\s\-]*([0-9a-zA-Z]+)/i) ||
+      normFilename.match(/(?:pl|appendix)[_\s\-]*(?:so|số)?[_\s\-]*([0-9a-zA-Z]+)/i) ||
+      textSample.match(/(?:phụ\s*lục(?:\s*hợp\s*đồng)?|phu\s*luc)\s*(?:số|so)?\s*[:\s]*([0-9a-zA-Z\-_]+)/i);
+    if (appNumMatch && appNumMatch[1]) {
+      appendixNumber = appNumMatch[1].trim();
+    }
+  }
+
+  // 2. Trích xuất baseContractNumber từ text PDF hoặc fallback từ contractNumber / filename
+  if (!baseContractNumber) {
+    const baseMatch = (pdfText || "").match(
+      /(?:căn\s*cứ\s*hợp\s*đồng[^\n:]*[:\s]+|kèm\s*theo\s*hợp\s*đồng[^\n:]*[:\s]+|bộ\s*phận\s*không\s*tách\s*rời\s*của\s*hợp\s*đồng[^\n:]*[:\s]+)([A-Za-z0-9_\-\.\/\s]{3,60}?)(?:[\n,;]|ký\s*ngày|giữa)/i,
+    );
+    if (baseMatch && baseMatch[1]) {
+      baseContractNumber = baseMatch[1].trim();
+    } else if (
+      contractNumber &&
+      !contractNumber.toLowerCase().includes("phụ lục") &&
+      !contractNumber.toLowerCase().startsWith("pl")
+    ) {
+      baseContractNumber = contractNumber;
+    } else {
+      const filenameBaseMatch = normFilename.match(
+        /(?:hd|hđ|hop[\s_\-]*dong|hợp[\s_\-]*đồng)[_\s\-:]*([0-9a-zA-Z\-_.\/]+)/i,
+      );
+      if (filenameBaseMatch && filenameBaseMatch[1]) {
+        baseContractNumber = filenameBaseMatch[1].trim().replace(/\.pdf$/i, "");
+      }
+    }
+  }
+
+  // 3. Nếu contractNumber đang trùng với baseContractNumber mà có appendixNumber, định dạng lại số phụ lục
+  if (contractNumber === baseContractNumber && appendixNumber) {
+    contractNumber = `PL-${appendixNumber}`;
+  } else if (!contractNumber && appendixNumber) {
+    contractNumber = `PL-${appendixNumber}`;
+  }
+
+  return {
+    documentType: "appendix",
+    baseContractNumber,
+    appendixNumber,
+    contractNumber,
+  };
 }
 
 /**
@@ -307,6 +437,8 @@ export async function extractContractFromBuffer({
     const startTime = Date.now();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
+    const filenameHint = filename ? `Tên tệp đính kèm: "${filename}"\n\n` : "";
+
     // Build parts dựa trên luồng đã chọn.
     const parts: Array<Record<string, unknown>> = [];
 
@@ -318,11 +450,11 @@ export async function extractContractFromBuffer({
           fileUri: geminiFileUri,
         },
       });
-      parts.push({ text: EXTRACTION_SYSTEM_PROMPT });
+      parts.push({ text: `${filenameHint}${EXTRACTION_SYSTEM_PROMPT}` });
     } else if (pdfTextForModel) {
       // PDF có text layer: gửi văn bản thuần kèm system prompt đầy đủ.
       parts.push({
-        text: `Đây là nội dung văn bản được trích xuất từ tài liệu PDF:\n\n${pdfTextForModel}\n\n---\nYêu cầu trích xuất thông tin từ nội dung trên:`,
+        text: `${filenameHint}Đây là nội dung văn bản được trích xuất từ tài liệu PDF:\n\n${pdfTextForModel}\n\n---\nYêu cầu trích xuất thông tin từ nội dung trên:`,
       });
       parts.push({ text: EXTRACTION_SYSTEM_PROMPT });
     } else {
@@ -333,7 +465,7 @@ export async function extractContractFromBuffer({
           data: base64Data!,
         },
       });
-      parts.push({ text: EXTRACTION_SYSTEM_PROMPT });
+      parts.push({ text: `${filenameHint}${EXTRACTION_SYSTEM_PROMPT}` });
     }
 
     const requestBody = {
@@ -397,17 +529,29 @@ export async function extractContractFromBuffer({
           }
 
           const docTypeRaw = String(parsedJson.documentType ?? "contract").toLowerCase();
-          const documentType = docTypeRaw.includes("appendix") || docTypeRaw.includes("phụ lục")
-            ? ("appendix" as const)
-            : ("contract" as const);
-          const baseContractNumber = String(parsedJson.baseContractNumber ?? "").trim();
-          const appendixNumber = String(parsedJson.appendixNumber ?? "").trim();
+          const docTypeCandidate =
+            docTypeRaw.includes("appendix") || docTypeRaw.includes("phụ lục")
+              ? ("appendix" as const)
+              : ("contract" as const);
+
+          // Tinh chỉnh và chuẩn hóa phân loại Hợp đồng / Phụ lục qua bộ lọc đa lớp (AI + Heuristic + Filename + Text)
+          const classification = detectAppendixMetadata({
+            filename,
+            pdfText: pdfTextForModel,
+            rawExtracted: {
+              documentType: docTypeCandidate,
+              contractNumber: String(parsedJson.contractNumber ?? "").trim(),
+              baseContractNumber: String(parsedJson.baseContractNumber ?? "").trim(),
+              appendixNumber: String(parsedJson.appendixNumber ?? "").trim(),
+              summary: String(parsedJson.summary ?? "").trim(),
+            },
+          });
 
           const extracted: ExtractedContract = {
-            documentType,
-            baseContractNumber,
-            appendixNumber,
-            contractNumber: String(parsedJson.contractNumber ?? "").trim(),
+            documentType: classification.documentType,
+            baseContractNumber: classification.baseContractNumber,
+            appendixNumber: classification.appendixNumber,
+            contractNumber: classification.contractNumber,
             signedDate: signedIso,
             expiryDate: expiryIso,
             durationText: normalizedDuration,

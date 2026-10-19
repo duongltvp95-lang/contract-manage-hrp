@@ -27,6 +27,7 @@ export function ContractFileAttachments({
   failedCount,
   onRetryUploads,
   onExtractAi,
+  onExtractAllAi,
   isExtractingAi = false,
   onToggleFileKind,
   appendixNotice,
@@ -42,6 +43,7 @@ export function ContractFileAttachments({
   failedCount: number;
   onRetryUploads: () => void;
   onExtractAi?: (file: PendingFile) => void;
+  onExtractAllAi?: (files: PendingFile[]) => void;
   isExtractingAi?: boolean;
   onToggleFileKind?: (fileId: string) => void;
   appendixNotice?: {
@@ -97,19 +99,27 @@ export function ContractFileAttachments({
                 type="button"
                 size="sm"
                 disabled={busy || isExtractingAi || isAttachingToExisting}
-                onClick={() => onExtractAi(files[0])}
+                onClick={() => {
+                  if (onExtractAllAi && files.length > 1) {
+                    onExtractAllAi(files);
+                  } else if (onExtractAi && files.length > 0) {
+                    onExtractAi(files[0]);
+                  }
+                }}
                 className="bg-purple-600 hover:bg-purple-700 text-white shrink-0 shadow-sm"
                 data-testid="ai-extract-button"
               >
                 {isExtractingAi ? (
                   <>
                     <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    AI đang phân tích...
+                    AI đang phân tích & phân loại...
                   </>
                 ) : (
                   <>
                     <Sparkles className="mr-1.5 h-4 w-4" />
-                    Điền tự động bằng AI
+                    {files.length > 1
+                      ? `Phân tích tất cả (${files.length} tệp) bằng AI`
+                      : "Điền tự động bằng AI"}
                   </>
                 )}
               </Button>
