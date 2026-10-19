@@ -13,150 +13,202 @@ export type CleanupQueueRow = {
   status: CleanupStatus;
   attempts: number;
   last_error: string | null;
+  claimed_at: string | null;
   created_at: string;
   updated_at: string;
 };
 
+const MAX_BATCH_SIZE = 200;
+const DEFAULT_RUN_BUDGET_MS = 48_000;
+const DB_TIMEOUT_MS = 3_000;
+const R2_TIMEOUT_MS = 4_000;
+const RESPONSE_RESERVE_MS = 2_000;
+const MIN_JOB_BUDGET_MS = DB_TIMEOUT_MS + R2_TIMEOUT_MS + DB_TIMEOUT_MS + RESPONSE_RESERVE_MS;
+const STALE_CLAIM_MS = 5 * 60_000;
+
+type CleanupCandidate = { id: string; object_key: string; attempts: number; created_at: string };
+type ClaimResult = { status?: string; object_key?: string };
+
+function requestSignal(deadline: number, reserveMs = RESPONSE_RESERVE_MS): AbortSignal | null {
+  const timeoutMs = Math.min(DB_TIMEOUT_MS, deadline - Date.now() - reserveMs);
+  return timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : null;
+}
+
+function clampInteger(value: number | undefined, fallback: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(Math.trunc(value!), min), max);
+}
+
 /**
- * Enqueues an R2 object key into the durable cleanup outbox table.
- *
- * Called when:
- * 1. A file was deleted from the database, but immediate R2 deletion failed.
- * 2. An upload DB insert failed (and row is confirmed not committed), but immediate compensating delete failed.
- *
- * Errors during enqueue are logged but never thrown, ensuring the primary user flow is not interrupted.
+ * Records a cleanup intent under the same per-object advisory lock used by file
+ * insertion/deletion and worker claims. The RPC refuses to enqueue keys that
+ * are currently referenced by contract_files.
  */
 export async function enqueueR2Cleanup(input: {
   objectKey: string;
-  reason: CleanupReason;
+  reason: Exclude<CleanupReason, "file_deleted">;
   lastError?: string | null;
 }): Promise<boolean> {
   try {
     const admin = createAdminClient();
-    const { error: insertError } = await admin.from("r2_cleanup_queue").insert({
-      object_key: input.objectKey,
-      reason: input.reason,
-      status: "pending",
-      last_error: input.lastError ?? null,
-      attempts: 0,
-    });
+    const signal = AbortSignal.timeout(DB_TIMEOUT_MS);
+    const { data, error } = await admin
+      .rpc("enqueue_r2_cleanup_if_unreferenced", {
+        p_object_key: input.objectKey,
+        p_reason: input.reason,
+        p_last_error: input.lastError ?? null,
+      })
+      .abortSignal(signal);
 
-    if (insertError) {
-      console.error(
-        "[storage-cleanup:enqueueR2Cleanup] Không thể ghi nhận tác vụ cleanup vào PostgREST",
-        insertError,
-      );
+    if (error) {
+      console.error("[storage-cleanup:enqueueR2Cleanup] Không thể ghi nhận cleanup intent", error);
       return false;
     }
-    return true;
+    return data === true;
   } catch (error) {
-    console.error("[storage-cleanup:enqueueR2Cleanup] Lỗi ngoại lệ khi ghi nhận tác vụ cleanup", error);
+    console.error("[storage-cleanup:enqueueR2Cleanup] Lỗi khi ghi nhận cleanup intent", error);
     return false;
   }
 }
 
 /**
- * Processes pending items from the R2 cleanup outbox queue.
- *
- * Reconciles with the database before deleting:
- * For `upload_db_failed`, if an active `contract_files` row is found referencing the key,
- * the task is cancelled rather than deleting a valid in-use file.
- * If the database verification query encounters an error, the object is NOT deleted;
- * the job is marked failed to retry on the next scheduled run.
+ * Processes cleanup intents with bounded database and R2 I/O. Each job is
+ * claimed under a per-object transaction lock; all reasons are reconciled
+ * against contract_files before R2 is touched. Claim leases recover jobs after
+ * a serverless invocation is interrupted.
  */
 export async function processR2CleanupQueue(options?: {
   limit?: number;
   maxAttempts?: number;
+  totalBudgetMs?: number;
 }): Promise<{ processed: number; succeeded: number; failed: number }> {
-  const limit = options?.limit ?? 20;
-  const maxAttempts = options?.maxAttempts ?? 5;
+  const limit = clampInteger(options?.limit, 20, 1, MAX_BATCH_SIZE);
+  const maxAttempts = clampInteger(options?.maxAttempts, 5, 1, 20);
+  const totalBudgetMs = clampInteger(options?.totalBudgetMs, DEFAULT_RUN_BUDGET_MS, 5_000, 52_000);
+  const deadline = Date.now() + totalBudgetMs;
 
   let admin: ReturnType<typeof createAdminClient>;
   try {
     admin = createAdminClient();
-  } catch (err) {
-    console.error("[storage-cleanup:process] Không thể khởi tạo admin client", err);
+  } catch (error) {
+    console.error("[storage-cleanup:process] Không thể khởi tạo admin client", error);
     return { processed: 0, succeeded: 0, failed: 0 };
   }
 
-  const { data: jobs, error } = await admin
-    .from("r2_cleanup_queue")
-    .select("id, object_key, reason, attempts, status")
-    .in("status", ["pending", "failed"])
-    .lt("attempts", maxAttempts)
-    .order("created_at", { ascending: true })
-    .limit(limit);
+  const candidatesSignal = requestSignal(deadline, MIN_JOB_BUDGET_MS);
+  if (!candidatesSignal) return { processed: 0, succeeded: 0, failed: 0 };
 
-  if (error || !jobs || jobs.length === 0) {
-    return { processed: 0, succeeded: 0, failed: 0 };
+  const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
+  const [retryResult, staleResult] = await Promise.all([
+    admin
+      .from("r2_cleanup_queue")
+      .select("id, object_key, attempts, created_at")
+      .in("status", ["pending", "failed"])
+      .lt("attempts", maxAttempts)
+      .order("created_at", { ascending: true })
+      .limit(limit)
+      .abortSignal(candidatesSignal),
+    admin
+      .from("r2_cleanup_queue")
+      .select("id, object_key, attempts, created_at")
+      .eq("status", "processing")
+      .lt("claimed_at", staleBefore)
+      .lt("attempts", maxAttempts)
+      .order("created_at", { ascending: true })
+      .limit(limit)
+      .abortSignal(candidatesSignal),
+  ]);
+
+  if (retryResult.error || staleResult.error) {
+    console.error("[storage-cleanup:process] Không thể đọc cleanup queue", retryResult.error ?? staleResult.error);
+    return { processed: 0, succeeded: 0, failed: 1 };
   }
 
+  const jobs = new Map<string, CleanupCandidate>();
+  for (const job of [...(retryResult.data ?? []), ...(staleResult.data ?? [])] as CleanupCandidate[]) {
+    jobs.set(job.id, job);
+  }
+  const candidates = [...jobs.values()]
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))
+    .slice(0, limit);
+
+  let processed = 0;
   let succeeded = 0;
   let failed = 0;
 
-  for (const job of jobs as { id: string; object_key: string; reason: CleanupReason; attempts: number }[]) {
-    // For upload_db_failed, verify the file isn't referenced by any active contract_files row
-    if (job.reason === "upload_db_failed") {
-      const { data: existingRow, error: verifyError } = await admin
-        .from("contract_files")
-        .select("id")
-        .eq("object_key", job.object_key)
-        .maybeSingle();
+  for (const job of candidates) {
+    if (deadline - Date.now() < MIN_JOB_BUDGET_MS) break;
 
-      if (verifyError) {
-        // Lỗi khi truy vấn xác minh DB: KHÔNG xóa R2 vì trạng thái chưa rõ.
-        // Ghi nhận lỗi và thử lại ở chu kỳ tiếp theo.
+    try {
+      const claimSignal = requestSignal(deadline, R2_TIMEOUT_MS + DB_TIMEOUT_MS + RESPONSE_RESERVE_MS);
+      if (!claimSignal) break;
+      const { data, error: claimError } = await admin
+        .rpc("claim_r2_cleanup_job", {
+          p_job_id: job.id,
+          p_max_attempts: maxAttempts,
+          p_stale_after_seconds: STALE_CLAIM_MS / 1000,
+        })
+        .abortSignal(claimSignal);
+
+      if (claimError) {
+        console.error("[storage-cleanup:process] Không thể claim cleanup job", claimError);
         failed++;
-        await admin
-          .from("r2_cleanup_queue")
-          .update({
-            status: "failed",
-            attempts: job.attempts + 1,
-            last_error: `DB verification error: ${verifyError.message}`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", job.id);
         continue;
       }
 
-      if (existingRow) {
-        await admin
-          .from("r2_cleanup_queue")
-          .update({
-            status: "cancelled",
-            last_error: "Object is referenced by active contract file",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", job.id);
+      const claim = data as ClaimResult | null;
+      if (claim?.status === "cancelled") {
+        processed++;
         succeeded++;
         continue;
       }
-    }
+      if (claim?.status !== "claimed" || !claim.object_key) continue;
 
-    try {
-      await deleteObject(job.object_key);
-      await admin
-        .from("r2_cleanup_queue")
-        .update({
-          status: "completed",
-          updated_at: new Date().toISOString(),
+      processed++;
+      let deleteError: unknown = null;
+      const deleteTimeoutMs = Math.min(
+        R2_TIMEOUT_MS,
+        deadline - Date.now() - DB_TIMEOUT_MS - RESPONSE_RESERVE_MS,
+      );
+
+      if (deleteTimeoutMs <= 0) {
+        deleteError = new Error("Cleanup run budget exhausted before R2 deletion");
+      } else {
+        try {
+          await deleteObject(claim.object_key, { timeoutMs: deleteTimeoutMs });
+        } catch (error) {
+          deleteError = error;
+        }
+      }
+
+      const finishSignal = requestSignal(deadline, 0);
+      if (!finishSignal) {
+        failed++;
+        console.error("[storage-cleanup:process] Hết ngân sách trước khi cập nhật trạng thái job", job.id);
+        continue;
+      }
+
+      const { data: finished, error: finishError } = await admin
+        .rpc("finish_r2_cleanup_job", {
+          p_job_id: job.id,
+          p_succeeded: deleteError === null,
+          p_last_error: deleteError instanceof Error ? deleteError.message : deleteError ? String(deleteError) : null,
         })
-        .eq("id", job.id);
-      succeeded++;
-    } catch (delError) {
+        .abortSignal(finishSignal);
+
+      if (finishError || finished !== true) {
+        failed++;
+        console.error("[storage-cleanup:process] Không thể ghi trạng thái cleanup job", finishError ?? job.id);
+      } else if (deleteError) {
+        failed++;
+      } else {
+        succeeded++;
+      }
+    } catch (error) {
       failed++;
-      const errorMessage = delError instanceof Error ? delError.message : String(delError);
-      await admin
-        .from("r2_cleanup_queue")
-        .update({
-          status: "failed",
-          attempts: job.attempts + 1,
-          last_error: errorMessage,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", job.id);
+      console.error("[storage-cleanup:process] Lỗi xử lý cleanup job", job.id, error);
     }
   }
 
-  return { processed: jobs.length, succeeded, failed };
+  return { processed, succeeded, failed };
 }

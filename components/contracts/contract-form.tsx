@@ -12,6 +12,7 @@ import {
   getContractWarnings,
   type CreateContractInput,
 } from "@schemas/contract";
+import { MAX_AI_FILE_SIZE_BYTES, MAX_AI_FILE_SIZE_MB } from "@schemas/file";
 
 import {
   createContractAction,
@@ -266,8 +267,8 @@ export function ContractForm({
   }, [isEdit, savedContractId, resetFormState]);
 
   async function handleExtractAi(fileItem: PendingFile) {
-    if (fileItem.file.size > 20 * 1024 * 1024) {
-      toast.error("Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI.", {
+    if (fileItem.file.size > MAX_AI_FILE_SIZE_BYTES) {
+      toast.error(`Dung lượng tệp vượt quá giới hạn ${MAX_AI_FILE_SIZE_MB} MB cho phép đối với phân tích AI.`, {
         id: "ai-extract",
       });
       return;

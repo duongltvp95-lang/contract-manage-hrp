@@ -24,8 +24,8 @@ import { aiLog } from "@/lib/ai/log";
 const UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta/files";
 const FILES_URL = "https://generativelanguage.googleapis.com/v1beta/files";
 
-/** Thời gian timeout cho upload (15s) — ngân sách an toàn dưới giới hạn 60s của Vercel. */
-const UPLOAD_TIMEOUT_MS = 15_000;
+/** Trần timeout upload Files API; caller giảm tiếp theo ngân sách action còn lại. */
+const UPLOAD_TIMEOUT_MS = 20_000;
 /** Thời gian timeout cho delete (3s) — thao tác dọn dẹp nhẹ, không chặn lâu. */
 const DELETE_TIMEOUT_MS = 3_000;
 

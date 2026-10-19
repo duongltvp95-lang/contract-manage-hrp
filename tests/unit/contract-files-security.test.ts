@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 const mockCreateClient = vi.fn();
 const mockCreateAdminClient = vi.fn();
+const mockRpc = vi.fn();
 const mockDeleteObject = vi.fn();
 const mockHeadObject = vi.fn();
 const mockCreateUploadUrl = vi.fn();
@@ -60,10 +61,26 @@ function createChainableMock(resolvedData: unknown, error: unknown = null) {
   chain.delete = vi.fn().mockReturnValue(chain);
   chain.update = vi.fn().mockReturnValue(chain);
   chain.insert = vi.fn().mockReturnValue(chain);
+  chain.abortSignal = vi.fn().mockReturnValue(chain);
   chain.single = vi.fn().mockResolvedValue({ data: resolvedData, error });
   chain.maybeSingle = vi.fn().mockResolvedValue({ data: resolvedData, error });
   chain.then = (resolve: (val: unknown) => void) => resolve({ data: resolvedData, error });
   return chain;
+}
+
+function createRpcMock(data: unknown, error: unknown = null) {
+  const chain = {
+    abortSignal: vi.fn().mockReturnThis(),
+    then: (resolve: (val: unknown) => void) => resolve({ data, error }),
+  };
+  return chain;
+}
+
+function createAdminMock(from: (table: string) => unknown) {
+  return {
+    from,
+    rpc: (...args: unknown[]) => mockRpc(...args),
+  };
 }
 
 describe("Contract Files Security & Access Control", () => {
@@ -91,6 +108,8 @@ describe("Contract Files Security & Access Control", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRpc.mockReset();
+    mockRpc.mockImplementation(() => createRpcMock(null));
   });
 
   describe("[P1] getContractFileAccess & Archived Contracts", () => {
@@ -203,146 +222,122 @@ describe("Contract Files Security & Access Control", () => {
       expect(mockDeleteObject).not.toHaveBeenCalled();
     });
 
-    it("xóa hàng DB trước; nếu xóa DB thất bại thì KHÔNG xóa object R2", async () => {
-      const filesMock = createChainableMock({
-        id: fileId,
-        contract_id: contractId,
-        object_key: "contracts/key.pdf",
-        organization_id: orgId,
-        original_filename: "doc.pdf",
-      });
-      // Override delete method to fail
-      filesMock.delete = vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          eq: vi.fn().mockResolvedValue({
-            error: { message: "database error", code: "42501" },
-          }),
-        }),
-      });
-
-      mockCreateAdminClient.mockReturnValue({
-        from: (table: string) => {
+    it("không xóa R2 nếu transaction xóa DB/outbox thất bại", async () => {
+      mockCreateAdminClient.mockReturnValue(
+        createAdminMock((table) => {
           if (table === "contract_files") {
-            return filesMock;
+            return createChainableMock({
+              id: fileId,
+              contract_id: contractId,
+              object_key: objectKey,
+              organization_id: orgId,
+              original_filename: "doc.pdf",
+            });
           }
-          if (table === "contracts") {
-            return createChainableMock({ id: contractId, archived_at: null });
-          }
+          if (table === "contracts") return createChainableMock({ id: contractId, archived_at: null });
           return createChainableMock(null);
-        },
-      });
+        }),
+      );
+      mockRpc.mockImplementationOnce(() => createRpcMock(null, { message: "database error", code: "42501" }));
 
       const res = await deleteContractFile(fileId, orgId, adminEmail);
       expect(res.ok).toBe(false);
-      expect(filesMock.delete).toHaveBeenCalled();
+      expect(mockRpc).toHaveBeenCalledWith("delete_contract_file_with_cleanup", {
+        p_file_id: fileId,
+        p_organization_id: orgId,
+        p_object_key: objectKey,
+      });
       expect(mockDeleteObject).not.toHaveBeenCalled();
     });
 
     it("xóa R2 sau khi xóa DB thành công bằng service-role client", async () => {
-      const filesMock = createChainableMock({
-        id: fileId,
-        contract_id: contractId,
-        object_key: "contracts/key.pdf",
-        organization_id: orgId,
-        original_filename: "doc.pdf",
-      });
-      filesMock.delete = vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          eq: vi.fn().mockResolvedValue({ error: null }),
-        }),
-      });
-
-      mockCreateAdminClient.mockReturnValue({
-        from: (table: string) => {
+      mockCreateAdminClient.mockReturnValue(createAdminMock((table: string) => {
           if (table === "contract_files") {
-            return filesMock;
+            return createChainableMock({
+              id: fileId,
+              contract_id: contractId,
+              object_key: objectKey,
+              organization_id: orgId,
+              original_filename: "doc.pdf",
+            });
           }
           if (table === "contracts") {
             return createChainableMock({ id: contractId, archived_at: null });
           }
           return createChainableMock(null);
-        },
-      });
+        }));
 
       mockDeleteObject.mockResolvedValue(undefined);
+      mockRpc
+        .mockImplementationOnce(() => createRpcMock({ id: fileId, contract_id: contractId, object_key: objectKey, cleanup_id: "job-1" }))
+        .mockImplementationOnce(() => createRpcMock(true));
 
       const res = await deleteContractFile(fileId, orgId, adminEmail);
       expect(res.ok).toBe(true);
-      expect(filesMock.delete).toHaveBeenCalled();
-      expect(mockDeleteObject).toHaveBeenCalledWith("contracts/key.pdf");
+      expect(mockRpc).toHaveBeenNthCalledWith(1, "delete_contract_file_with_cleanup", expect.any(Object));
+      expect(mockDeleteObject).toHaveBeenCalledWith(objectKey, { timeoutMs: 3_000 });
+      expect(mockRpc).toHaveBeenNthCalledWith(2, "finish_r2_cleanup_job", {
+        p_job_id: "job-1",
+        p_succeeded: true,
+        p_last_error: null,
+      });
     });
 
     it("nếu xóa R2 thất bại sau khi xóa DB, đưa vào hàng đợi r2_cleanup_queue", async () => {
-      const filesMock = createChainableMock({
-        id: fileId,
-        contract_id: contractId,
-        object_key: "contracts/key.pdf",
-        organization_id: orgId,
-        original_filename: "doc.pdf",
-      });
-      filesMock.delete = vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          eq: vi.fn().mockResolvedValue({ error: null }),
-        }),
-      });
-
-      const queueInsertMock = vi.fn().mockResolvedValue({ error: null });
-
-      mockCreateAdminClient.mockReturnValue({
-        from: (table: string) => {
+      mockCreateAdminClient.mockReturnValue(createAdminMock((table: string) => {
           if (table === "contract_files") {
-            return filesMock;
+            return createChainableMock({
+              id: fileId,
+              contract_id: contractId,
+              object_key: objectKey,
+              organization_id: orgId,
+              original_filename: "doc.pdf",
+            });
           }
           if (table === "contracts") {
             return createChainableMock({ id: contractId, archived_at: null });
           }
-          if (table === "r2_cleanup_queue") {
-            return { insert: queueInsertMock };
-          }
           return createChainableMock(null);
-        },
-      });
+        }));
 
       mockDeleteObject.mockRejectedValue(new Error("R2 network timeout"));
+      mockRpc
+        .mockImplementationOnce(() => createRpcMock({ id: fileId, contract_id: contractId, object_key: objectKey, cleanup_id: "job-2" }))
+        .mockImplementationOnce(() => createRpcMock(true));
 
       const res = await deleteContractFile(fileId, orgId, adminEmail);
       expect(res.ok).toBe(true);
-      expect(queueInsertMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          object_key: "contracts/key.pdf",
-          reason: "file_deleted",
-          status: "pending",
-        }),
-      );
+      expect(mockRpc).toHaveBeenNthCalledWith(1, "delete_contract_file_with_cleanup", expect.any(Object));
+      expect(mockRpc).toHaveBeenNthCalledWith(2, "finish_r2_cleanup_job", {
+        p_job_id: "job-2",
+        p_succeeded: false,
+        p_last_error: "R2 network timeout",
+      });
     });
   });
 
-  describe("[P2] completeUpload: Xử lý lỗi DB và xóa bù object mồ côi", () => {
-    it("khi DB insert thất bại và hàng chưa ghi, xóa bù object trên R2", async () => {
+  describe("[P1] completeUpload: ghi hàng và khóa cleanup nguyên tử", () => {
+    it("khi RPC ghi hàng thất bại và hàng chưa tồn tại, enqueue cleanup dưới advisory lock", async () => {
       mockCreateClient.mockReturnValue({
         from: (table: string) => {
           if (table === "contracts") {
             return createChainableMock({ id: contractId, archived_at: null });
           }
-          if (table === "contract_files") {
-            return createChainableMock(null, { message: "insert failed", code: "23505" });
-          }
           return createChainableMock(null);
         },
+        rpc: (...args: unknown[]) => mockRpc(...args),
       });
 
-      // Admin client kiểm tra DB: hàng không tồn tại
-      mockCreateAdminClient.mockReturnValue({
-        from: () => createChainableMock(null),
-      });
+      mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(null)));
+      mockRpc
+        .mockImplementationOnce(() => createRpcMock(null, { message: "insert failed", code: "23505" }))
+        .mockImplementationOnce(() => createRpcMock(true));
 
       mockHeadObject.mockResolvedValue({
         exists: true,
         contentLength: 1024,
         etag: "etag-123",
       });
-
-      mockDeleteObject.mockResolvedValue(undefined);
 
       const res = await completeUpload({
         organizationId: orgId,
@@ -357,26 +352,45 @@ describe("Contract Files Security & Access Control", () => {
       });
 
       expect(res.ok).toBe(false);
-      expect(mockDeleteObject).toHaveBeenCalledWith(objectKey);
+      expect(mockDeleteObject).not.toHaveBeenCalled();
+      expect(mockRpc).toHaveBeenNthCalledWith(1, "complete_contract_file_upload", expect.objectContaining({
+        p_object_key: objectKey,
+        p_bucket: "mock-bucket",
+      }));
+      expect(mockRpc).toHaveBeenNthCalledWith(2, "enqueue_r2_cleanup_if_unreferenced", expect.objectContaining({
+        p_object_key: objectKey,
+        p_reason: "upload_db_failed",
+      }));
     });
 
-    it("khi DB insert báo lỗi nhưng hàng thực tế ĐÃ commit, KHÔNG xóa object R2", async () => {
+    it("khi RPC lỗi sau commit, trả lại hàng đã tồn tại thay vì dọn object", async () => {
       mockCreateClient.mockReturnValue({
         from: (table: string) => {
           if (table === "contracts") {
             return createChainableMock({ id: contractId, archived_at: null });
           }
-          if (table === "contract_files") {
-            return createChainableMock(null, { message: "socket hang up", code: "ECONNRESET" });
-          }
           return createChainableMock(null);
         },
+        rpc: (...args: unknown[]) => mockRpc(...args),
       });
 
       // Admin client kiểm tra DB: hàng THỰC TẾ ĐÃ ĐƯỢC COMMIT!
-      mockCreateAdminClient.mockReturnValue({
-        from: () => createChainableMock({ id: fileId }),
-      });
+      mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock({
+        id: fileId,
+        organization_id: orgId,
+        contract_id: contractId,
+        object_key: objectKey,
+        original_filename: "test.pdf",
+        mime_type: "application/pdf",
+        file_size: 1024,
+        checksum: "etag-123",
+        created_by: "user-1",
+        kind: "document",
+        storage_provider: "r2",
+        bucket: "mock-bucket",
+        created_at: "2026-10-19T00:00:00Z",
+      })));
+      mockRpc.mockImplementationOnce(() => createRpcMock(null, { message: "socket hang up", code: "ECONNRESET" }));
 
       mockHeadObject.mockResolvedValue({
         exists: true,
@@ -396,9 +410,10 @@ describe("Contract Files Security & Access Control", () => {
         fileSize: 1024,
       });
 
-      expect(res.ok).toBe(false);
-      // Object không được xoá bù vì hàng DB đã tồn tại
+      expect(res.ok).toBe(true);
+      // Object không được dọn vì hàng DB đã tồn tại
       expect(mockDeleteObject).not.toHaveBeenCalled();
+      expect(mockRpc).toHaveBeenCalledTimes(1);
     });
 
     it("khi DB insert báo lỗi và truy vấn xác minh DB cũng lỗi, KHÔNG xóa object R2 và đưa vào hàng đợi outbox", async () => {
@@ -407,27 +422,21 @@ describe("Contract Files Security & Access Control", () => {
           if (table === "contracts") {
             return createChainableMock({ id: contractId, archived_at: null });
           }
-          if (table === "contract_files") {
-            return createChainableMock(null, { message: "connection error", code: "ECONNRESET" });
-          }
           return createChainableMock(null);
         },
+        rpc: (...args: unknown[]) => mockRpc(...args),
       });
-
-      const queueInsertMock = vi.fn().mockResolvedValue({ error: null });
 
       // Admin client kiểm tra DB: TRUY VẤN XÁC MINH CŨNG BỊ LỖI
-      mockCreateAdminClient.mockReturnValue({
-        from: (table: string) => {
-          if (table === "contract_files") {
-            return createChainableMock(null, { message: "DB timeout", code: "57P01" });
-          }
-          if (table === "r2_cleanup_queue") {
-            return { insert: queueInsertMock };
-          }
-          return createChainableMock(null);
-        },
-      });
+      mockCreateAdminClient.mockReturnValue(createAdminMock((table: string) => {
+        if (table === "contract_files") {
+          return createChainableMock(null, { message: "DB timeout", code: "57P01" });
+        }
+        return createChainableMock(null);
+      }));
+      mockRpc
+        .mockImplementationOnce(() => createRpcMock(null, { message: "connection error", code: "ECONNRESET" }))
+        .mockImplementationOnce(() => createRpcMock(true));
 
       mockHeadObject.mockResolvedValue({
         exists: true,
@@ -450,96 +459,64 @@ describe("Contract Files Security & Access Control", () => {
       expect(res.ok).toBe(false);
       // TUYỆT ĐỐI KHÔNG XÓA R2 khi trạng thái DB chưa rõ!
       expect(mockDeleteObject).not.toHaveBeenCalled();
-      // Đưa vào queue để worker đối soát sau
-      expect(queueInsertMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          object_key: objectKey,
-          reason: "upload_db_failed",
-          status: "pending",
-        }),
-      );
+      // Đưa vào queue bằng RPC khóa cùng key trước khi worker xử lý
+      expect(mockRpc).toHaveBeenNthCalledWith(2, "enqueue_r2_cleanup_if_unreferenced", expect.objectContaining({
+        p_object_key: objectKey,
+        p_reason: "upload_db_failed",
+      }));
     });
   });
 
   describe("[P2] storage-cleanup service", () => {
     it("enqueueR2Cleanup ghi nhận tác vụ vào bảng r2_cleanup_queue", async () => {
-      const mockInsert = vi.fn().mockResolvedValue({ error: null });
-      mockCreateAdminClient.mockReturnValue({
-        from: () => ({ insert: mockInsert }),
-      });
+      mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(null)));
+      mockRpc.mockImplementationOnce(() => createRpcMock(true));
 
       const success = await enqueueR2Cleanup({
         objectKey: "test-key.pdf",
-        reason: "file_deleted",
+        reason: "upload_db_failed",
         lastError: "Timeout",
       });
 
       expect(success).toBe(true);
-      expect(mockInsert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          object_key: "test-key.pdf",
-          reason: "file_deleted",
-          status: "pending",
-          last_error: "Timeout",
-        }),
-      );
+      expect(mockRpc).toHaveBeenCalledWith("enqueue_r2_cleanup_if_unreferenced", {
+        p_object_key: "test-key.pdf",
+        p_reason: "upload_db_failed",
+        p_last_error: "Timeout",
+      });
     });
 
     it("enqueueR2Cleanup ghi nhận lỗi khi PostgREST trả về error", async () => {
-      const mockInsert = vi.fn().mockResolvedValue({ error: { message: "permission denied" } });
-      mockCreateAdminClient.mockReturnValue({
-        from: () => ({ insert: mockInsert }),
-      });
+      mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(null)));
+      mockRpc.mockImplementationOnce(() => createRpcMock(null, { message: "permission denied" }));
 
       const success = await enqueueR2Cleanup({
         objectKey: "test-key.pdf",
-        reason: "file_deleted",
+        reason: "upload_db_failed",
       });
 
       expect(success).toBe(false);
     });
 
-    it("processR2CleanupQueue: hủy tác vụ nếu object upload_db_failed đang được contract_files trỏ tới", async () => {
+    it("processR2CleanupQueue: hủy mọi loại job nếu object đang được contract_files trỏ tới", async () => {
       const mockJobs = [
         {
           id: "job-1",
           object_key: "in-use.pdf",
-          reason: "upload_db_failed",
           attempts: 0,
-          status: "pending",
+          created_at: "2026-10-18T00:00:00.000Z",
         },
       ];
 
-      const mockUpdate = vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ error: null }),
-      });
-
-      mockCreateAdminClient.mockReturnValue({
-        from: (table: string) => {
-          if (table === "r2_cleanup_queue") {
-            const chain = createChainableMock(mockJobs);
-            chain.update = mockUpdate;
-            return chain;
-          }
-          if (table === "contract_files") {
-            // Tệp đang được dùng bởi hợp đồng
-            return createChainableMock({ id: "file-existing" });
-          }
-          return createChainableMock(null);
-        },
-      });
+      mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(mockJobs)));
+      mockRpc.mockImplementationOnce(() => createRpcMock({ status: "cancelled" }));
 
       const result = await processR2CleanupQueue();
       expect(result.processed).toBe(1);
       expect(result.succeeded).toBe(1);
       // Không được gọi deleteObject trên R2
       expect(mockDeleteObject).not.toHaveBeenCalled();
-      // Job phải được đánh dấu cancelled
-      expect(mockUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "cancelled",
-        }),
-      );
+      expect(mockRpc).toHaveBeenCalledWith("claim_r2_cleanup_job", expect.objectContaining({ p_job_id: "job-1" }));
     });
 
     it("processR2CleanupQueue: xóa object R2 và đánh dấu completed khi hợp lệ", async () => {
@@ -547,82 +524,48 @@ describe("Contract Files Security & Access Control", () => {
         {
           id: "job-2",
           object_key: "orphan.pdf",
-          reason: "file_deleted",
           attempts: 0,
-          status: "pending",
+          created_at: "2026-10-18T00:00:00.000Z",
         },
       ];
 
-      const mockUpdate = vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ error: null }),
-      });
-
-      mockCreateAdminClient.mockReturnValue({
-        from: (table: string) => {
-          if (table === "r2_cleanup_queue") {
-            const chain = createChainableMock(mockJobs);
-            chain.update = mockUpdate;
-            return chain;
-          }
-          return createChainableMock(null);
-        },
-      });
+      mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(mockJobs)));
+      mockRpc
+        .mockImplementationOnce(() => createRpcMock({ status: "claimed", object_key: "orphan.pdf" }))
+        .mockImplementationOnce(() => createRpcMock(true));
 
       mockDeleteObject.mockResolvedValue(undefined);
 
       const result = await processR2CleanupQueue();
       expect(result.processed).toBe(1);
       expect(result.succeeded).toBe(1);
-      expect(mockDeleteObject).toHaveBeenCalledWith("orphan.pdf");
-      expect(mockUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "completed",
-        }),
-      );
+      expect(mockDeleteObject).toHaveBeenCalledWith("orphan.pdf", { timeoutMs: 4_000 });
+      expect(mockRpc).toHaveBeenNthCalledWith(2, "finish_r2_cleanup_job", expect.objectContaining({
+        p_job_id: "job-2",
+        p_succeeded: true,
+      }));
     });
 
-    it("processR2CleanupQueue: không xóa R2 nếu truy vấn đối soát DB gặp lỗi, đánh dấu job failed để thử lại", async () => {
+    it("processR2CleanupQueue: không xóa R2 nếu transaction claim/đối soát DB gặp lỗi", async () => {
       const mockJobs = [
         {
           id: "job-err",
           object_key: "uncertain.pdf",
-          reason: "upload_db_failed",
           attempts: 0,
-          status: "pending",
+          created_at: "2026-10-18T00:00:00.000Z",
         },
       ];
 
-      const mockUpdate = vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ error: null }),
-      });
-
-      mockCreateAdminClient.mockReturnValue({
-        from: (table: string) => {
-          if (table === "r2_cleanup_queue") {
-            const chain = createChainableMock(mockJobs);
-            chain.update = mockUpdate;
-            return chain;
-          }
-          if (table === "contract_files") {
-            // Lỗi DB khi đối soát
-            return createChainableMock(null, { message: "DB connection timeout" });
-          }
-          return createChainableMock(null);
-        },
-      });
+      mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(mockJobs)));
+      mockRpc.mockImplementationOnce(() => createRpcMock(null, { message: "DB verification error" }));
 
       const result = await processR2CleanupQueue();
-      expect(result.processed).toBe(1);
+      expect(result.processed).toBe(0);
       expect(result.failed).toBe(1);
       expect(result.succeeded).toBe(0);
       // KHÔNG được xóa R2 vì lỗi truy vấn đối soát
       expect(mockDeleteObject).not.toHaveBeenCalled();
-      expect(mockUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "failed",
-          last_error: expect.stringContaining("DB verification error"),
-        }),
-      );
+      expect(mockRpc).toHaveBeenCalledTimes(1);
     });
   });
 

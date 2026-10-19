@@ -34,6 +34,7 @@ import {
   ALLOWED_MIME_TYPES,
   extractContractFromBuffer,
   MAX_AI_FILE_SIZE_BYTES,
+  MAX_AI_FILE_SIZE_MB,
   resolveMimeType,
 } from "@/lib/ai/gemini";
 import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
@@ -324,7 +325,7 @@ export async function extractContractAction(
         return validationFailure("Dung lượng tệp quá lớn", [
           {
             path: "file",
-            message: "Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI.",
+            message: `Dung lượng tệp vượt quá giới hạn ${MAX_AI_FILE_SIZE_MB} MB cho phép đối với phân tích AI.`,
           },
         ]);
       }
@@ -340,7 +341,7 @@ export async function extractContractAction(
         ]);
       }
 
-      const downloadTimeoutMs = Math.min(10_000, Math.max(1_000, actionDeadline - Date.now() - 10_000));
+      const downloadTimeoutMs = Math.min(18_000, Math.max(1_000, actionDeadline - Date.now() - 12_000));
       const downloaded = await getObjectBuffer(objectKey, { timeoutMs: downloadTimeoutMs });
       cleanupR2(objectKey);
 
@@ -376,7 +377,7 @@ export async function extractContractAction(
         return validationFailure("Dung lượng tệp quá lớn", [
           {
             path: "file",
-            message: "Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI.",
+            message: `Dung lượng tệp vượt quá giới hạn ${MAX_AI_FILE_SIZE_MB} MB cho phép đối với phân tích AI.`,
           },
         ]);
       }
@@ -421,7 +422,10 @@ export async function extractContractAction(
         mimeType,
         filename,
         apiKey,
-        timeoutMs: Math.min(10_000, Math.floor(remainingAiBudgetMs / 2)),
+        timeoutMs: Math.min(
+          20_000,
+          Math.max(1_000, remainingAiBudgetMs - 6_000),
+        ),
       });
       if (uploadRes.ok) {
         geminiFileName = uploadRes.data.name;

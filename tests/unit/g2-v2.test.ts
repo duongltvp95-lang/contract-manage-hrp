@@ -387,7 +387,7 @@ describe("G2 v2 — extractContractFromBuffer với 3 nhánh", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("từ chối tệp vượt quá 20 MB mà không gọi fetch", async () => {
+  it("từ chối tệp vượt quá giới hạn AI mà không gọi fetch", async () => {
     const hugeBuffer = Buffer.alloc(MAX_AI_FILE_SIZE_BYTES + 1);
     const result = await extractContractFromBuffer({
       buffer: hugeBuffer,
@@ -396,7 +396,7 @@ describe("G2 v2 — extractContractFromBuffer với 3 nhánh", () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.message).toContain("20 MB");
+      expect(result.message).toContain("50 MB");
     }
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -444,8 +444,8 @@ describe("G2 v2 — Cấu hình MIME & Kích thước", () => {
     expect(ALLOWED_MIME_TYPES.has("text/plain")).toBe(false);
   });
 
-  it("MAX_AI_FILE_SIZE_BYTES là 20 MB", () => {
-    expect(MAX_AI_FILE_SIZE_BYTES).toBe(20 * 1024 * 1024);
+  it("MAX_AI_FILE_SIZE_BYTES là 50 MB", () => {
+    expect(MAX_AI_FILE_SIZE_BYTES).toBe(50 * 1024 * 1024);
   });
 });
 

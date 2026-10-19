@@ -6,6 +6,7 @@ import { createUploadUrl } from "@/lib/r2/presign";
 import {
   ALLOWED_MIME_TYPES,
   MAX_AI_FILE_SIZE_BYTES,
+  MAX_AI_FILE_SIZE_MB,
   resolveMimeType,
 } from "@/lib/ai/gemini";
 
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
 
   if (fileSize > MAX_AI_FILE_SIZE_BYTES) {
     return NextResponse.json(
-      { error: "Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI." },
+      { error: `Dung lượng tệp vượt quá giới hạn ${MAX_AI_FILE_SIZE_MB} MB cho phép đối với phân tích AI.` },
       { status: 400 },
     );
   }

@@ -11,7 +11,6 @@ import {
 import { DEFAULT_SORT, resolveExpiryPreset, sanitizeSearchTerm, type ContractsQuery } from "@/lib/contracts-query";
 import { getCurrentUser } from "@/lib/auth";
 import { canDeleteEntities, BULK_DELETE_LIMIT } from "@/lib/delete-permissions";
-import { deleteObject } from "@/lib/r2/objects";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { formatDateOnly } from "@/lib/format";
@@ -809,10 +808,9 @@ export async function archiveContract(
  * Round 19 — hard-delete a contract (owner-only, email-gated).
  *
  * The delete admin is resolved from the session and must match
- * `DELETE_ADMIN_EMAILS`. The contract is org-checked, then every R2 object is
- * removed BEFORE any row: a storage failure leaves the database untouched. The
- * rows are deleted with the service-role client — the session has no DELETE
- * grant by hardening.
+ * `DELETE_ADMIN_EMAILS`. A service-role RPC deletes the contract and its file
+ * rows while adding all R2 cleanup intents in one transaction. The scheduled
+ * worker removes the private objects after the database commit.
  */
 export async function deleteContract(
   id: string,
@@ -835,41 +833,15 @@ export async function deleteContract(
     return dbError("deleteContract", error);
   }
 
-  const { data: files, error: filesError } = await admin
-    .from("contract_files")
-    .select("object_key")
-    .eq("contract_id", id);
+  const { data: deleted, error: deleteError } = await admin
+    .rpc("delete_contract_with_r2_cleanup", {
+      p_contract_id: id,
+      p_organization_id: organizationId,
+    })
+    .abortSignal(AbortSignal.timeout(5_000));
 
-  if (filesError) {
-    return dbError("deleteContract", filesError);
-  }
-
-  // Remove every object first; any failure stops before a single row changes.
-  try {
-    for (const file of (files ?? []) as { object_key: string }[]) {
-      await deleteObject(file.object_key);
-    }
-  } catch (error) {
-    return dbError("deleteContract", error);
-  }
-
-  const { error: filesDeleteError } = await admin
-    .from("contract_files")
-    .delete()
-    .eq("contract_id", id);
-
-  if (filesDeleteError) {
-    return dbError("deleteContract", filesDeleteError);
-  }
-
-  const { error: contractDeleteError } = await admin
-    .from("contracts")
-    .delete()
-    .eq("id", id);
-
-  if (contractDeleteError) {
-    return dbError("deleteContract", contractDeleteError);
-  }
+  if (deleteError) return dbError("deleteContract", deleteError);
+  if (!deleted) return err("not_found", "Hợp đồng đã được xoá hoặc không còn tồn tại");
 
   await recordCurrentUserAudit({
     action: "delete_contract",

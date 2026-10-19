@@ -1,6 +1,7 @@
 import "server-only";
 
 import { type ExtractedContract } from "@schemas/contract";
+import { MAX_AI_FILE_SIZE_BYTES, MAX_AI_FILE_SIZE_MB } from "@schemas/file";
 import { err, ok, type ServiceResult } from "@/lib/services/types";
 import { normalizeDurationText } from "@/lib/ai/matching";
 import { aiLog } from "@/lib/ai/log";
@@ -24,7 +25,7 @@ export const ALLOWED_MIME_TYPES = new Set([
   "image/webp",
 ]);
 
-export const MAX_AI_FILE_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
+export { MAX_AI_FILE_SIZE_BYTES, MAX_AI_FILE_SIZE_MB };
 
 const EXTRACTION_SYSTEM_PROMPT = `Bạn là trợ lý AI chuyên gia phân tích hợp đồng kinh tế và pháp lý tại Việt Nam.
 Hãy đọc kỹ tài liệu hợp đồng đính kèm và trích xuất các thông tin sau thành JSON cấu trúc chuẩn:
@@ -228,7 +229,7 @@ export async function extractContractFromBuffer({
   if (buffer.length > MAX_AI_FILE_SIZE_BYTES) {
     return err(
       "validation",
-      "Dung lượng tệp vượt quá giới hạn 20 MB cho phép đối với phân tích AI.",
+      `Dung lượng tệp vượt quá giới hạn ${MAX_AI_FILE_SIZE_MB} MB cho phép đối với phân tích AI.`,
     );
   }
 

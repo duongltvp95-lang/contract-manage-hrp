@@ -229,7 +229,7 @@ export async function completeUpload(
     return err("forbidden", "objectKey không khớp với hợp đồng");
   }
 
-  const head = await headObject(objectKey);
+  const head = await headObject(objectKey, { timeoutMs: 5_000 });
   if (!head.exists) {
     return err(
       "upload_incomplete",
@@ -252,7 +252,21 @@ export async function completeUpload(
   const actualSize = head.contentLength ?? 0;
 
   if (actualSize > MAX_UPLOAD_SIZE_BYTES) {
-    await deleteObject(objectKey);
+    try {
+      await deleteObject(objectKey, { timeoutMs: 3_000 });
+    } catch (cleanupError) {
+      const queued = await enqueueR2Cleanup({
+        objectKey,
+        reason: "upload_db_failed",
+        lastError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      });
+      if (!queued) {
+        console.error("[service:completeUpload] Không thể xóa hoặc ghi cleanup intent cho tệp vượt giới hạn", {
+          objectKey,
+          cleanupError,
+        });
+      }
+    }
 
     return err(
       "validation",
@@ -261,80 +275,72 @@ export async function completeUpload(
   }
 
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("contract_files")
-    .insert({
-      id: fileId,
-      organization_id: organizationId,
-      contract_id: contractId,
-      storage_provider: "r2",
-      bucket: getR2Bucket(),
-      object_key: objectKey,
-      original_filename: input.filename,
-      mime_type: input.mimeType,
+  const { data: rpcData, error: persistError } = await supabase
+    .rpc("complete_contract_file_upload", {
+      p_file_id: fileId,
+      p_organization_id: organizationId,
+      p_contract_id: contractId,
+      p_object_key: objectKey,
+      p_bucket: getR2Bucket(),
+      p_original_filename: input.filename,
+      p_mime_type: input.mimeType,
       // The measured size, not the declared one.
-      file_size: actualSize > 0 ? actualSize : input.fileSize,
-      checksum: head.etag,
-      created_by: userId,
-      kind: input.kind ?? "document",
+      p_file_size: actualSize > 0 ? actualSize : input.fileSize,
+      p_checksum: head.etag,
+      p_created_by: userId,
+      p_kind: input.kind ?? "document",
     })
-    .select(CONTRACT_FILE_COLUMNS)
-    .single();
+    .abortSignal(AbortSignal.timeout(5_000));
 
-  if (error) {
-    // Riêng lỗi ghi DB: xác minh trạng thái hàng trước khi xóa bù
-    // để tránh xóa nhầm object trong trường hợp DB đã ghi thành công nhưng phản hồi bị lỗi mạng.
-    // CHỈ xóa khi truy vấn thành công và xác nhận không có hàng (isConfirmedMissing = true).
-    // Nếu truy vấn gặp lỗi (checkError) hoặc trạng thái chưa rõ, GIỮ object và đưa vào queue để tác vụ thử lại.
-    let isConfirmedMissing = false;
-    let isRowCommitted = false;
-    let checkErrorMessage: string | null = null;
-
+  let row: ContractFileRow | null = rpcData as ContractFileRow | null;
+  if (persistError) {
+    // A timeout can hide a committed RPC response. Return the committed row if
+    // it exists; otherwise enqueue cleanup under the same object-key lock.
+    let verificationError: unknown = null;
     try {
       const admin = createAdminClient();
-      const { data: existingRow, error: checkError } = await admin
+      const verifyQuery = admin
         .from("contract_files")
-        .select("id")
+        .select(CONTRACT_FILE_COLUMNS)
         .eq("id", fileId)
-        .maybeSingle();
+        .abortSignal(AbortSignal.timeout(3_000));
+      const { data: existingRow, error: checkError } = await verifyQuery.maybeSingle();
 
       if (checkError) {
-        checkErrorMessage = checkError.message;
-      } else if (existingRow) {
-        isRowCommitted = true;
-      } else {
-        isConfirmedMissing = true;
+        verificationError = checkError;
+      } else if (
+        existingRow &&
+        existingRow.organization_id === organizationId &&
+        existingRow.contract_id === contractId &&
+        existingRow.object_key === objectKey
+      ) {
+        row = existingRow as ContractFileRow;
       }
-    } catch (checkErr) {
-      checkErrorMessage = checkErr instanceof Error ? checkErr.message : String(checkErr);
+    } catch (checkError) {
+      verificationError = checkError;
     }
 
-    if (isConfirmedMissing) {
-      // Hàng được xác nhận chắc chắn chưa tồn tại trong DB -> xóa bù object trên R2
-      try {
-        await deleteObject(objectKey);
-      } catch (cleanupErr) {
-        // Nếu xóa bù thất bại (ví dụ mạng R2 lỗi), đưa vào hàng đợi cleanup bền vững
-        await enqueueR2Cleanup({
-          objectKey,
-          reason: "upload_db_failed",
-          lastError: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
-        });
-      }
-    } else if (!isRowCommitted) {
-      // Trạng thái chưa rõ ràng (truy vấn DB xác minh gặp lỗi) -> KHÔNG xóa R2!
-      // Giữ object và đưa vào hàng đợi outbox để worker đối soát và thử lại sau khi DB ổn định.
-      await enqueueR2Cleanup({
+    if (!row) {
+      const queued = await enqueueR2Cleanup({
         objectKey,
         reason: "upload_db_failed",
-        lastError: `DB verification failed (${checkErrorMessage}); retained object for retry`,
+        lastError: verificationError
+          ? `DB verification failed: ${verificationError instanceof Error ? verificationError.message : String(verificationError)}`
+          : persistError.message,
       });
+      if (!queued) {
+        console.error(
+          "[service:completeUpload] Không xác nhận được hàng DB và cũng không ghi được cleanup intent; object cần được đối soát thủ công",
+          { objectKey, persistError, verificationError },
+        );
+      }
+      return dbError("completeUpload", persistError);
     }
-
-    return dbError("completeUpload", error);
   }
 
-  const row = data as ContractFileRow;
+  if (!row) {
+    return dbError("completeUpload", new Error("RPC complete_contract_file_upload returned no row"));
+  }
 
   // `completeUpload` runs with a signed-in session user as the actor.
   await recordCurrentUserAudit({
@@ -538,30 +544,51 @@ export async function deleteContractFile(
     return err("validation", "Không thể xoá tệp của hợp đồng đã được lưu trữ");
   }
 
-  // Delete DB row FIRST with service-role client (authenticated has no DELETE grant).
-  // If DB deletion fails, R2 object is left completely untouched.
-  const { error: deleteError } = await admin
-    .from("contract_files")
-    .delete()
-    .eq("id", fileId)
-    .eq("organization_id", organizationId);
+  // The RPC deletes the row and inserts a processing cleanup intent in one
+  // transaction under the same per-object lock used by upload completion.
+  const { data: deletionData, error: deleteError } = await admin.rpc(
+    "delete_contract_file_with_cleanup",
+    {
+      p_file_id: fileId,
+      p_organization_id: organizationId,
+      p_object_key: file.object_key,
+    },
+  ).abortSignal(AbortSignal.timeout(5_000));
 
   if (deleteError) {
+    if (deleteError.code === "55000") {
+      return err("validation", "Hợp đồng đã thay đổi trạng thái; không thể xoá tệp");
+    }
     return dbError("deleteContractFile", deleteError);
   }
-
-  // DB deletion succeeded; delete R2 object
-  try {
-    await deleteObject(file.object_key);
-  } catch (r2Error) {
-    console.error("[service:deleteContractFile] R2 delete failed; enqueuing for background cleanup", r2Error);
-    await enqueueR2Cleanup({
-      objectKey: file.object_key,
-      reason: "file_deleted",
-      lastError: r2Error instanceof Error ? r2Error.message : String(r2Error),
-    });
+  if (!deletionData) {
+    return err("not_found", "Tệp đã được xoá hoặc không còn tồn tại");
   }
 
-  return ok({ id: file.id, contractId: file.contract_id });
+  const deletion = deletionData as { id: string; contract_id: string; object_key: string; cleanup_id: string };
+  let r2Error: unknown = null;
+  try {
+    await deleteObject(file.object_key, { timeoutMs: 3_000 });
+  } catch (error) {
+    r2Error = error;
+    console.error("[service:deleteContractFile] R2 delete failed; durable cleanup intent remains queued", error);
+  }
+
+  try {
+    const { error: finishError } = await admin
+      .rpc("finish_r2_cleanup_job", {
+        p_job_id: deletion.cleanup_id,
+        p_succeeded: r2Error === null,
+        p_last_error: r2Error instanceof Error ? r2Error.message : r2Error ? String(r2Error) : null,
+      })
+      .abortSignal(AbortSignal.timeout(3_000));
+    if (finishError) {
+      console.error("[service:deleteContractFile] Không thể cập nhật trạng thái cleanup job", finishError);
+    }
+  } catch (finishError) {
+    console.error("[service:deleteContractFile] Ngoại lệ khi cập nhật trạng thái cleanup job", finishError);
+  }
+
+  return ok({ id: deletion.id, contractId: deletion.contract_id });
 }
 
