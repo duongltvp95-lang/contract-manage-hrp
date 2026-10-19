@@ -40,6 +40,7 @@ import {
 import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
 import { aiLog } from "@/lib/ai/log";
 import {
+  calculateExpiryDateFromDuration,
   cleanEntityName,
   findBestMatchingCompany,
   findBestMatchingPartner,
@@ -483,6 +484,14 @@ export async function extractContractAction(
       signedDate: extracted.signedDate,
       expiryDate: extracted.expiryDate,
     });
+
+    // Tự động tính ngày hết hạn nếu thiếu nhưng có ngày ký và thời hạn
+    if (!extracted.expiryDate && extracted.signedDate && extracted.durationText) {
+      extracted.expiryDate = calculateExpiryDateFromDuration(
+        extracted.signedDate,
+        extracted.durationText,
+      );
+    }
 
     // Phân định quy cách rõ ràng giữa Công ty nội bộ (HRP / HR VN) và Đối tác:
     // Nếu thấy 1 trong 2 công ty của chúng ta (bất kể hợp đồng ghi Bên A hay Bên B) -> điền vào companyName.

@@ -23,6 +23,7 @@ import { putFileWithProgress, type PendingFile } from "@/lib/upload";
 import { formatDateOnly } from "@/lib/format";
 import { isInternalCompanyId, getInternalCompanyName } from "@/lib/companies";
 import { clientLog } from "@/lib/ai/log-client";
+import { calculateExpiryDateFromDuration } from "@/lib/ai/matching";
 import { DateField } from "@/components/contracts/date-field";
 import { ContractCompanyField } from "@/components/contracts/contract-company-field";
 import { ContractFileAttachments } from "@/components/contracts/contract-file-attachments";
@@ -356,8 +357,13 @@ export function ContractForm({
         filledFields.push("Ngày ký");
       }
 
-      if (data.expiryDate) {
-        form.setValue("expiryDate", data.expiryDate, {
+      let calculatedExpiry = data.expiryDate;
+      if (!calculatedExpiry && data.signedDate && data.durationText) {
+        calculatedExpiry = calculateExpiryDateFromDuration(data.signedDate, data.durationText);
+      }
+
+      if (calculatedExpiry) {
+        form.setValue("expiryDate", calculatedExpiry, {
           shouldValidate: true,
           shouldDirty: true,
         });
@@ -591,7 +597,17 @@ export function ContractForm({
             <DateField
               id="signedDate"
               value={field.value}
-              onChange={field.onChange}
+              onChange={(nextDate) => {
+                field.onChange(nextDate);
+                const currentDuration = form.getValues("durationText");
+                const currentExpiry = form.getValues("expiryDate");
+                if (nextDate && !currentExpiry && currentDuration) {
+                  const autoExpiry = calculateExpiryDateFromDuration(nextDate, currentDuration);
+                  if (autoExpiry) {
+                    form.setValue("expiryDate", autoExpiry, { shouldValidate: true, shouldDirty: true });
+                  }
+                }
+              }}
               disabled={busy}
             />
             <FormMessage />
@@ -627,6 +643,18 @@ export function ContractForm({
                 placeholder='VD: 6 tháng, 1 năm, 2 năm hoặc "Không xác định thời hạn"'
                 disabled={busy}
                 {...field}
+                onBlur={(e) => {
+                  field.onBlur();
+                  const currentSigned = form.getValues("signedDate");
+                  const currentExpiry = form.getValues("expiryDate");
+                  const currentDuration = e.target.value;
+                  if (currentSigned && !currentExpiry && currentDuration) {
+                    const autoExpiry = calculateExpiryDateFromDuration(currentSigned, currentDuration);
+                    if (autoExpiry) {
+                      form.setValue("expiryDate", autoExpiry, { shouldValidate: true, shouldDirty: true });
+                    }
+                  }
+                }}
               />
             </FormControl>
             <FormDescription>

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ExtractedContractSchema } from "@schemas/contract";
 import {
   calculateDurationBetweenDates,
+  calculateExpiryDateFromDuration,
   cleanEntityName,
   extractDatesFromText,
   findBestMatchingCompany,
@@ -344,6 +345,48 @@ describe("AI Contract Extractor & Matching Unit Tests", () => {
       expect(calculateDurationBetweenDates("2025-12-20", "2026-06-20")).toBe("6 tháng");
       expect(calculateDurationBetweenDates("2025-12-20", "2027-12-20")).toBe("2 năm");
       expect(calculateDurationBetweenDates("2025-12-20", "2028-12-20")).toBe("3 năm");
+    });
+
+    describe("calculateExpiryDateFromDuration", () => {
+      it("calculates expiry date for 1 year from 24/02/2024 to 2025-02-24", () => {
+        expect(calculateExpiryDateFromDuration("2024-02-24", "1 năm")).toBe("2025-02-24");
+        expect(calculateExpiryDateFromDuration("2024-02-24", "01 năm")).toBe("2025-02-24");
+        expect(calculateExpiryDateFromDuration("2024-02-24", "12 tháng")).toBe("2025-02-24");
+        expect(
+          calculateExpiryDateFromDuration("2024-02-24", "Thời hạn 01 (một) năm kể từ ngày ký"),
+        ).toBe("2025-02-24");
+      });
+
+      it("calculates expiry date for multiple years", () => {
+        expect(calculateExpiryDateFromDuration("2024-02-24", "2 năm")).toBe("2026-02-24");
+        expect(calculateExpiryDateFromDuration("2024-02-24", "24 tháng")).toBe("2026-02-24");
+        expect(calculateExpiryDateFromDuration("2024-02-24", "3 năm")).toBe("2027-02-24");
+      });
+
+      it("calculates expiry date for months", () => {
+        expect(calculateExpiryDateFromDuration("2024-02-24", "6 tháng")).toBe("2024-08-24");
+        expect(calculateExpiryDateFromDuration("2024-02-24", "06 tháng")).toBe("2024-08-24");
+        expect(calculateExpiryDateFromDuration("2024-02-24", "3 tháng")).toBe("2024-05-24");
+        expect(calculateExpiryDateFromDuration("2024-02-24", "18 tháng")).toBe("2025-08-24");
+      });
+
+      it("handles leap year boundaries correctly", () => {
+        expect(calculateExpiryDateFromDuration("2024-02-29", "1 năm")).toBe("2025-02-28");
+        expect(calculateExpiryDateFromDuration("2024-02-29", "4 năm")).toBe("2028-02-29");
+      });
+
+      it("handles date ranges embedded in duration text", () => {
+        expect(
+          calculateExpiryDateFromDuration("2024-02-24", "từ 24/02/2024 đến 24/02/2025"),
+        ).toBe("2025-02-24");
+      });
+
+      it("returns empty string for indefinite duration or missing inputs", () => {
+        expect(calculateExpiryDateFromDuration("2024-02-24", "Không xác định thời hạn")).toBe("");
+        expect(calculateExpiryDateFromDuration("2024-02-24", "Vô thời hạn")).toBe("");
+        expect(calculateExpiryDateFromDuration("", "1 năm")).toBe("");
+        expect(calculateExpiryDateFromDuration("2024-02-24", "")).toBe("");
+      });
     });
   });
 });

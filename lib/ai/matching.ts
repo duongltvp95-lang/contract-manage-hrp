@@ -370,3 +370,81 @@ export function normalizeDurationText(input: DurationInput): string {
 
   return raw;
 }
+
+/**
+ * Automatically calculates ISO expiryDate (YYYY-MM-DD) from signedDate (YYYY-MM-DD)
+ * and durationText (e.g. "1 năm", "6 tháng", "2 năm", "12 tháng", "1 năm 6 tháng", "30 ngày", or date range).
+ * Returns empty string "" if cannot calculate or contract is indefinite.
+ */
+export function calculateExpiryDateFromDuration(
+  signedDate?: string | null,
+  durationText?: string | null,
+): string {
+  if (!signedDate) return "";
+  const signed = signedDate.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(signed)) return "";
+
+  const duration = (durationText ?? "").trim();
+  if (!duration) return "";
+
+  // 1. Indefinite / Open-ended contracts -> no expiry date
+  if (/không\s*xác\s*định|vô\s*thời\s*hạn|không\s*thời\s*hạn/i.test(duration)) {
+    return "";
+  }
+
+  // 2. If duration contains date range, e.g. "Từ ... đến [ngày]"
+  const dates = extractDatesFromText(duration);
+  if (dates.length >= 2) {
+    return dates[dates.length - 1]; // End date
+  }
+
+  // Parse YYYY-MM-DD components
+  const [sYear, sMonth, sDay] = signed.split("-").map((v) => parseInt(v, 10));
+
+  // Match years, months, and days
+  const yearMatch = duration.match(/\b(0?[1-9]|[1-4][0-9])\s*(?:\([^\)]+\)\s*)?năm\b/i);
+  const monthMatch = duration.match(/\b(0?[1-9]|[1-9][0-9])\s*(?:\([^\)]+\)\s*)?tháng\b/i);
+  const dayMatch = duration.match(/\b(0?[1-9]|[1-9][0-9]{1,2})\s*(?:\([^\)]+\)\s*)?ngày\b/i);
+
+  let yearsToAdd = 0;
+  let monthsToAdd = 0;
+  let daysToAdd = 0;
+
+  if (yearMatch) {
+    yearsToAdd = parseInt(yearMatch[1], 10);
+  }
+  if (monthMatch) {
+    monthsToAdd = parseInt(monthMatch[1], 10);
+  }
+  if (!yearMatch && !monthMatch && dayMatch) {
+    daysToAdd = parseInt(dayMatch[1], 10);
+  }
+
+  if (yearsToAdd === 0 && monthsToAdd === 0 && daysToAdd === 0) {
+    return "";
+  }
+
+  // Calculate target month and year
+  let targetYear = sYear + yearsToAdd;
+  let targetMonth = sMonth + monthsToAdd; // 1-indexed
+
+  while (targetMonth > 12) {
+    targetYear += Math.floor((targetMonth - 1) / 12);
+    targetMonth = ((targetMonth - 1) % 12) + 1;
+  }
+
+  // Handle month boundary (e.g. Feb 29 on leap year + 1 year -> Feb 28)
+  const maxDaysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+  const targetDay = Math.min(sDay, maxDaysInTargetMonth);
+
+  const targetDate = new Date(Date.UTC(targetYear, targetMonth - 1, targetDay));
+  if (daysToAdd > 0) {
+    targetDate.setUTCDate(targetDate.getUTCDate() + daysToAdd);
+  }
+
+  const y = targetDate.getUTCFullYear();
+  const m = String(targetDate.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(targetDate.getUTCDate()).padStart(2, "0");
+
+  return `${y}-${m}-${d}`;
+}

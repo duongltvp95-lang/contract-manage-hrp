@@ -3,7 +3,7 @@ import "server-only";
 import { type ExtractedContract } from "@schemas/contract";
 import { MAX_AI_FILE_SIZE_BYTES, MAX_AI_FILE_SIZE_MB } from "@schemas/file";
 import { err, ok, type ServiceResult } from "@/lib/services/types";
-import { normalizeDurationText } from "@/lib/ai/matching";
+import { calculateExpiryDateFromDuration, normalizeDurationText } from "@/lib/ai/matching";
 import { aiLog } from "@/lib/ai/log";
 
 export function getGeminiModels(): string[] {
@@ -31,7 +31,11 @@ const EXTRACTION_SYSTEM_PROMPT = `Bạn là trợ lý AI chuyên gia phân tích
 Hãy đọc kỹ tài liệu hợp đồng đính kèm và trích xuất các thông tin sau thành JSON cấu trúc chuẩn:
 - contractNumber: Số hợp đồng (chuỗi ký tự, ví dụ: "12/2026/HĐKT", để trống "" nếu không có)
 - signedDate: Ngày ký hợp đồng theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2026-03-15", để trống "" nếu không tìm thấy)
-- expiryDate: Ngày hết hạn của hợp đồng theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2027-03-15", để trống "" nếu không có hoặc không xác định)
+- expiryDate: Ngày hết hạn của hợp đồng theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2027-03-15").
+  QUY TẮC BẮT BUỘC VỀ NGÀY HẾT HẠN:
+  + Nếu hợp đồng ghi rõ ngày hết hạn cụ thể, hãy điền ngày đó.
+  + Nếu hợp đồng KHÔNG ghi ngày hết hạn cụ thể nhưng có ngày ký/bắt đầu và thời hạn (ví dụ: ngày ký 24/02/2024, thời hạn 1 năm), bạn PHẢI tự tính toán ngày hết hạn tương ứng để điền vào đây (ví dụ: 2024-02-24 + 1 năm -> "2025-02-24", hoặc 6 tháng -> "2024-08-24"). TUYỆT ĐỐI không để trống nếu đã có ngày ký và thời hạn!
+  + Chỉ để trống "" nếu hợp đồng không có cả ngày hết hạn lẫn thời hạn, hoặc hợp đồng ghi "Không xác định thời hạn".
 - durationText: Thời hạn hiệu lực của hợp đồng ghi dạng khoảng thời gian như số tháng hoặc số năm (ví dụ: "6 tháng", "1 năm", "2 năm", "3 năm", "Không xác định thời hạn", để trống "" nếu không có).
   QUY TẮC BẮT BUỘC VỀ THỜI HẠN:
   + TUYỆT ĐỐI KHÔNG ghi dạng khoảng ngày "Từ ngày ... đến ngày ..." hay ngày tháng cụ thể vào trường này.
@@ -362,12 +366,17 @@ export async function extractContractFromBuffer({
           const parsedJson = (JSON.parse(cleanedText) ?? {}) as Record<string, unknown>;
 
           const signedIso = normalizeDateToIso(String(parsedJson.signedDate ?? ""));
-          const expiryIso = normalizeDateToIso(String(parsedJson.expiryDate ?? ""));
+          let expiryIso = normalizeDateToIso(String(parsedJson.expiryDate ?? ""));
           const normalizedDuration = normalizeDurationText({
             durationText: String(parsedJson.durationText ?? "").trim(),
             signedDate: signedIso,
             expiryDate: expiryIso,
           });
+
+          // Tự động tính ngày hết hạn nếu chưa có nhưng đã có ngày ký và thời hạn
+          if (!expiryIso && signedIso && normalizedDuration) {
+            expiryIso = calculateExpiryDateFromDuration(signedIso, normalizedDuration);
+          }
 
           const extracted: ExtractedContract = {
             contractNumber: String(parsedJson.contractNumber ?? "").trim(),
