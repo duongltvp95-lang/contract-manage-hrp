@@ -30,21 +30,22 @@ export { MAX_AI_FILE_SIZE_BYTES, MAX_AI_FILE_SIZE_MB };
 const EXTRACTION_SYSTEM_PROMPT = `Bạn là trợ lý AI chuyên gia phân tích hợp đồng kinh tế và pháp lý tại Việt Nam.
 Hãy đọc kỹ tài liệu đính kèm (có thể là văn bản Hợp đồng chính hoặc Phụ lục hợp đồng) và trích xuất các thông tin sau thành JSON cấu trúc chuẩn:
 
-QUY TẮC BẮT BUỘC ĐỂ PHÂN LOẠI HỢP ĐỒNG VÀ PHỤ LỤC (CỰC KỲ QUAN TRỌNG):
-1. PHỤ LỤC HỢP ĐỒNG (documentType = "appendix"):
-- Dấu hiệu nhận biết:
-  + Tiêu đề văn bản ghi: "PHỤ LỤC", "PHỤ LỤC HỢP ĐỒNG", "PHỤ LỤC SỐ...", "VĂN BẢN SỬA ĐỔI BỔ SUNG", "THỎA THUẬN GIA HẠN", "THỎA THUẬN SỬA ĐỔI", "APPENDIX", "ADDENDUM", "AMENDMENT"...
-  + Hoặc tên tệp đính kèm có chứa các từ khóa: "phu luc", "phụ lục", "pl", "plhd", "appendix", "addendum"...
-  + Hoặc nội dung có các điều khoản dẫn chiếu căn cứ hợp đồng: "Căn cứ Hợp đồng số...", "Căn cứ Hợp đồng kinh tế số...", "Phụ lục này là bộ phận không thể tách rời của Hợp đồng số...", "Hai bên đồng ý sửa đổi, bổ sung Điều... của Hợp đồng số...".
-- KHI LÀ PHỤ LỤC:
-  + "documentType": BẮT BUỘC chọn "appendix". TUYỆT ĐỐI KHÔNG ĐƯỢC CHỌN "contract" dù trong nội dung có xuất hiện nhiều lần từ "Hợp đồng"!
-  + "baseContractNumber": BẮT BUỘC trích xuất chính xác Số hợp đồng gốc được nhắc đến trong phần căn cứ (ví dụ: "Căn cứ Hợp đồng số 2024.03.01/HRVN - DONGYANG..." -> điền "2024.03.01/HRVN - DONGYANG"). Nếu là hợp đồng chính thì để trống "".
-  + "appendixNumber": Số thứ tự của phụ lục nếu có (ví dụ: "01", "02", "1", "PL-01", để trống "" nếu không ghi rõ).
-  + "contractNumber": Số của phụ lục nếu có số riêng (ví dụ "PL-01/2024"); nếu không có số riêng thì điền số của hợp đồng gốc.
+QUY ƯỚC BẮT BUỘC VỀ PHÂN LOẠI (CỰC KỲ QUAN TRỌNG):
+QUY ƯỚC CỦA HỆ THỐNG: MỌI PHỤ LỤC HỢP ĐỒNG ĐỀU SẼ CÓ TIÊU ĐỀ "PHỤ LỤC HỢP ĐỒNG" (HOẶC "PHỤ LỤC") Ở TRANG ĐẦU TIÊN (TRANG 1).
 
-2. HỢP ĐỒNG CHÍNH (documentType = "contract"):
-- Tiêu đề là "HỢP ĐỒNG", "HỢP ĐỒNG KINH TẾ", "HỢP ĐỒNG DỊCH VỤ", "HỢP ĐỒNG NGUYÊN TẮC", "HỢP ĐỒNG MUA BÁN", "CONTRACT", "AGREEMENT"... và KHÔNG PHẢI là phụ lục.
-- Đặt documentType = "contract", baseContractNumber = "", appendixNumber = "".
+1. PHÂN LOẠI TÀI LIỆU (documentType):
+- BƯỚC 1: HÃY NHÌN VÀO DÒNG TIÊU ĐỀ Ở NỬA TRÊN CỦA TRANG ĐẦU TIÊN (TRANG 1):
+  + Nếu trang 1 có dòng chữ tiêu đề: "PHỤ LỤC HỢP ĐỒNG", "PHỤ LỤC", "PHỤ LỤC HỢP ĐỒNG SỐ...", "PHỤ LỤC SỐ...", "APPENDIX", "ADDENDUM", "VĂN BẢN SỬA ĐỔI BỔ SUNG", "THỎA THUẬN GIA HẠN", "THỎA THUẬN SỬA ĐỔI":
+    -> ĐÂY CHẮC CHẮN 100% LÀ PHỤ LỤC HỢP ĐỒNG!
+    -> "documentType": BẮT BUỘC CHỌN "appendix". TUYỆT ĐỐI KHÔNG ĐƯỢC CHỌN "contract"!
+    -> "firstPageTitle": Ghi chính xác tiêu đề ở trang 1 (ví dụ: "PHỤ LỤC HỢP ĐỒNG SỐ 01" hoặc "PHỤ LỤC HỢP ĐỒNG").
+    -> "baseContractNumber": BẮT BUỘC trích xuất chính xác Số hợp đồng gốc được nhắc đến trong phần căn cứ (ví dụ: "Căn cứ Hợp đồng số 2024.03.01/HRVN - DONGYANG..." -> điền "2024.03.01/HRVN - DONGYANG", hoặc "Căn cứ Hợp đồng dịch vụ số 24022024/HRVN - STAR ENGINEERS..." -> điền "24022024/HRVN - STAR ENGINEERS"). Dù trong phần căn cứ có ghi "Căn cứ Hợp đồng...", đó là HỢP ĐỒNG GỐC, KHÔNG PHẢI số của phụ lục này!
+    -> "appendixNumber": Số thứ tự của phụ lục nếu có (ví dụ: "01", "02", "1", "PL-01", nếu không có để trống "").
+    -> "contractNumber": Số của phụ lục nếu có số riêng (ví dụ "PL-01"); nếu không có số riêng thì để trống "" hoặc điền "PL-" + appendixNumber.
+    -> "summary": BẮT ĐẦU bằng cụm từ: "Phụ lục hợp đồng..." (Ví dụ: "Phụ lục hợp đồng về việc gia hạn thời hạn...").
+
+  + CHỈ KHI TRANG ĐẦU TIÊN CÓ TIÊU ĐỀ LÀ "HỢP ĐỒNG", "HỢP ĐỒNG KINH TẾ", "HỢP ĐỒNG DỊCH VỤ", "HỢP ĐỒNG NGUYÊN TẮC", "HỢP ĐỒNG MUA BÁN", "CONTRACT", "AGREEMENT" VÀ HOÀN TOÀN KHÔNG CÓ CHỮ "PHỤ LỤC" Ở TRANG 1:
+    -> Mới được đặt documentType = "contract", firstPageTitle = "HỢP ĐỒNG...", baseContractNumber = "", appendixNumber = "".
 
 CÁC TRƯỜNG THÔNG TIN KHÁC:
 - signedDate: Ngày ký tài liệu theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2026-03-15", để trống "" nếu không tìm thấy)
@@ -73,10 +74,14 @@ Chỉ trả về JSON hợp lệ khớp với cấu trúc trên.`;
 const CONTRACT_RESPONSE_SCHEMA = {
   type: "OBJECT",
   properties: {
+    firstPageTitle: {
+      type: "STRING",
+      description: "Dòng tiêu đề chính của văn bản ở TRANG ĐẦU TIÊN (ví dụ: 'PHỤ LỤC HỢP ĐỒNG', 'PHỤ LỤC HỢP ĐỒNG SỐ 01', 'HỢP ĐỒNG DỊCH VỤ')",
+    },
     documentType: {
       type: "STRING",
       enum: ["contract", "appendix"],
-      description: "Phân loại tài liệu: 'appendix' (Phụ lục hợp đồng) hoặc 'contract' (Hợp đồng chính)",
+      description: "Phân loại tài liệu: BẮT BUỘC chọn 'appendix' nếu TRANG ĐẦU TIÊN có tiêu đề 'PHỤ LỤC HỢP ĐỒNG' hoặc chứa chữ 'PHỤ LỤC'. Chỉ chọn 'contract' nếu tiêu đề trang đầu tiên là Hợp đồng chính.",
     },
     baseContractNumber: {
       type: "STRING",
@@ -124,6 +129,7 @@ const CONTRACT_RESPONSE_SCHEMA = {
     },
   },
   required: [
+    "firstPageTitle",
     "documentType",
     "contractNumber",
     "signedDate",
@@ -218,6 +224,7 @@ export function normalizeDateToIso(dateStr?: string): string {
 
 /**
  * Phân tích đa lớp (AI + Heuristics + Filename + Text) để đảm bảo không bỏ sót Phụ lục hợp đồng.
+ * Quy ước: Phụ lục hợp đồng sẽ có tiêu đề "PHỤ LỤC HỢP ĐỒNG" (hoặc "PHỤ LỤC") ở trang đầu tiên.
  */
 export function detectAppendixMetadata({
   filename = "",
@@ -227,6 +234,7 @@ export function detectAppendixMetadata({
   filename?: string;
   pdfText?: string | null;
   rawExtracted: {
+    firstPageTitle?: string;
     documentType?: string;
     contractNumber?: string;
     baseContractNumber?: string;
@@ -234,6 +242,7 @@ export function detectAppendixMetadata({
     summary?: string;
   };
 }): {
+  firstPageTitle: string;
   documentType: "contract" | "appendix";
   baseContractNumber: string;
   appendixNumber: string;
@@ -242,7 +251,9 @@ export function detectAppendixMetadata({
   const normFilename = (filename || "").toLowerCase();
   const normSummary = (rawExtracted.summary || "").toLowerCase();
   const normDocType = (rawExtracted.documentType || "").toLowerCase();
+  const normTitle = (rawExtracted.firstPageTitle || "").toLowerCase();
   const textSample = (pdfText || "").slice(0, 4000).toLowerCase();
+  const page1Text = (pdfText || "").slice(0, 2500).toLowerCase();
 
   const appendixPatterns = [
     /(?:phu|phụ)[\s_\-]*(?:luc|lục)/i,
@@ -256,6 +267,8 @@ export function detectAppendixMetadata({
     /(?:gia|gia)[\s_\-]*(?:han|hạn)/i,
   ];
 
+  const hasAppendixInTitle = appendixPatterns.some((p) => p.test(normTitle));
+  const hasAppendixOnPage1 = appendixPatterns.some((p) => p.test(page1Text));
   const hasAppendixInFilename = appendixPatterns.some((p) => p.test(normFilename));
   const hasAppendixInSummary = appendixPatterns.some((p) => p.test(normSummary));
   const hasAppendixInText = appendixPatterns.some((p) => p.test(textSample));
@@ -264,6 +277,8 @@ export function detectAppendixMetadata({
   const hasBaseContract = Boolean(rawExtracted.baseContractNumber && rawExtracted.baseContractNumber.trim().length > 0);
 
   const isAppendix =
+    hasAppendixInTitle ||
+    hasAppendixOnPage1 ||
     isDocTypeAppendix ||
     hasAppendixInFilename ||
     hasAppendixInSummary ||
@@ -273,6 +288,7 @@ export function detectAppendixMetadata({
 
   if (!isAppendix) {
     return {
+      firstPageTitle: rawExtracted.firstPageTitle || "",
       documentType: "contract",
       baseContractNumber: "",
       appendixNumber: "",
@@ -287,7 +303,12 @@ export function detectAppendixMetadata({
   // 1. Trích xuất appendixNumber nếu chưa có
   if (!appendixNumber) {
     const appNumMatch =
-      normFilename.match(/(?:phu|phụ)[\s_\-]*(?:luc|lục)[_\s\-]*(?:so|số)?[_\s\-]*([0-9a-zA-Z]+)/i) ||
+      normTitle.match(
+        /(?:phu|phụ)[\s_\-]*(?:luc|lục)(?:[\s_\-]*(?:hop|hợp)[\s_\-]*(?:dong|đồng))?[_\s\-]*(?:so|số)?[:\s_\-]*([0-9a-zA-Z]+)/i,
+      ) ||
+      normFilename.match(
+        /(?:phu|phụ)[\s_\-]*(?:luc|lục)(?:[\s_\-]*(?:hop|hợp)[\s_\-]*(?:dong|đồng))?[_\s\-]*(?:so|số)?[:\s_\-]*([0-9a-zA-Z]+)/i,
+      ) ||
       normFilename.match(/(?:pl|appendix)[_\s\-]*(?:so|số)?[_\s\-]*([0-9a-zA-Z]+)/i) ||
       textSample.match(/(?:phụ\s*lục(?:\s*hợp\s*đồng)?|phu\s*luc)\s*(?:số|so)?\s*[:\s]*([0-9a-zA-Z\-_]+)/i);
     if (appNumMatch && appNumMatch[1]) {
@@ -298,7 +319,7 @@ export function detectAppendixMetadata({
   // 2. Trích xuất baseContractNumber từ text PDF hoặc fallback từ contractNumber / filename
   if (!baseContractNumber) {
     const baseMatch = (pdfText || "").match(
-      /(?:căn\s*cứ\s*hợp\s*đồng[^\n:]*[:\s]+|kèm\s*theo\s*hợp\s*đồng[^\n:]*[:\s]+|bộ\s*phận\s*không\s*tách\s*rời\s*của\s*hợp\s*đồng[^\n:]*[:\s]+)([A-Za-z0-9_\-\.\/\s]{3,60}?)(?:[\n,;]|ký\s*ngày|giữa)/i,
+      /(?:căn\s*cứ\s*(?:vào\s*)?hợp\s*đồng[^\n:]*[:\s]+|kèm\s*theo\s*hợp\s*đồng[^\n:]*[:\s]+|bộ\s*phận\s*không\s*tách\s*rời\s*của\s*hợp\s*đồng[^\n:]*[:\s]+|sửa\s*đổi[^\n:]*hợp\s*đồng[^\n:]*[:\s]+)([A-Za-z0-9_\-\.\/\s]{3,60}?)(?:[\n,;]|ký\s*ngày|giữa)/i,
     );
     if (baseMatch && baseMatch[1]) {
       baseContractNumber = baseMatch[1].trim();
@@ -323,9 +344,14 @@ export function detectAppendixMetadata({
     contractNumber = `PL-${appendixNumber}`;
   } else if (!contractNumber && appendixNumber) {
     contractNumber = `PL-${appendixNumber}`;
+  } else if (!contractNumber) {
+    contractNumber = "Phụ lục";
   }
 
   return {
+    firstPageTitle:
+      rawExtracted.firstPageTitle ||
+      (appendixNumber ? `Phụ lục hợp đồng số ${appendixNumber}` : "Phụ lục hợp đồng"),
     documentType: "appendix",
     baseContractNumber,
     appendixNumber,
@@ -392,8 +418,9 @@ export async function extractContractFromBuffer({
 
   let base64Data: string | null = null;
   let pdfTextForModel: string | null = null;
+  let extractedPdfText: string | null = null;
 
-  if (!useFilesApi && resolvedMime === "application/pdf") {
+  if (resolvedMime === "application/pdf") {
     try {
       // Dành tối thiểu 6s cho bước gọi model Gemini phía sau
       const remainingBeforePdf = extractDeadline - Date.now() - 6_000;
@@ -402,7 +429,10 @@ export async function extractContractFromBuffer({
         const pdfTimeout = Math.min(8_000, remainingBeforePdf);
         const pdfResult = await extractPdfText(buffer, pdfTimeout);
         if (pdfResult) {
-          pdfTextForModel = pdfResult.text;
+          extractedPdfText = pdfResult.text;
+          if (!useFilesApi) {
+            pdfTextForModel = pdfResult.text;
+          }
         }
       }
     } catch {
@@ -537,8 +567,9 @@ export async function extractContractFromBuffer({
           // Tinh chỉnh và chuẩn hóa phân loại Hợp đồng / Phụ lục qua bộ lọc đa lớp (AI + Heuristic + Filename + Text)
           const classification = detectAppendixMetadata({
             filename,
-            pdfText: pdfTextForModel,
+            pdfText: extractedPdfText || pdfTextForModel,
             rawExtracted: {
+              firstPageTitle: String(parsedJson.firstPageTitle ?? "").trim(),
               documentType: docTypeCandidate,
               contractNumber: String(parsedJson.contractNumber ?? "").trim(),
               baseContractNumber: String(parsedJson.baseContractNumber ?? "").trim(),
@@ -548,6 +579,7 @@ export async function extractContractFromBuffer({
           });
 
           const extracted: ExtractedContract = {
+            firstPageTitle: classification.firstPageTitle,
             documentType: classification.documentType,
             baseContractNumber: classification.baseContractNumber,
             appendixNumber: classification.appendixNumber,

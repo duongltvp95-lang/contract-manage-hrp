@@ -551,4 +551,38 @@ describe("G2 v2 — detectAppendixMetadata (Phân loại chính xác Phụ lục
     expect(res.documentType).toBe("appendix");
     expect(res.baseContractNumber).toBe("99/2026/HĐKT");
   });
+
+  it("nhận diện phụ lục theo quy ước tiêu đề 'PHỤ LỤC HỢP ĐỒNG' ở trang đầu tiên (firstPageTitle)", () => {
+    const res = detectAppendixMetadata({
+      filename: "scan_001.pdf",
+      pdfText: "",
+      rawExtracted: {
+        firstPageTitle: "PHỤ LỤC HỢP ĐỒNG SỐ 01",
+        documentType: "contract", // Gemini bị nhầm lẫn
+        contractNumber: "24022024/HRVN - STAR ENGINEERS", // Gemini nhầm số HĐ gốc thành contractNumber
+        summary: "Phụ lục điều chỉnh thời hạn",
+      },
+    });
+
+    expect(res.documentType).toBe("appendix");
+    expect(res.appendixNumber).toBe("01");
+    expect(res.baseContractNumber).toBe("24022024/HRVN - STAR ENGINEERS");
+    expect(res.contractNumber).toBe("PL-01");
+  });
+
+  it("nhận diện phụ lục khi trang 1 có tiêu đề 'PHỤ LỤC HỢP ĐỒNG' trong text layer dù tên file là tài liệu chung", () => {
+    const res = detectAppendixMetadata({
+      filename: "tai_lieu_ky_ket.pdf",
+      pdfText:
+        "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n\nPHỤ LỤC HỢP ĐỒNG\n\nCăn cứ Hợp đồng dịch vụ số 24022024/HRVN - STAR ENGINEERS ngày 24/02/2024...",
+      rawExtracted: {
+        documentType: "contract",
+        contractNumber: "24022024/HRVN - STAR ENGINEERS",
+        summary: "Thỏa thuận bổ sung hợp đồng",
+      },
+    });
+
+    expect(res.documentType).toBe("appendix");
+    expect(res.baseContractNumber).toBe("24022024/HRVN - STAR ENGINEERS");
+  });
 });

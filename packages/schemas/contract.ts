@@ -148,6 +148,7 @@ export const ExtractedContractSchema = z.object({
   companyName: z.string().optional().default(""),
   summary: z.string().optional().default(""),
   // Document classification & appendix metadata
+  firstPageTitle: z.string().optional().default(""),
   documentType: z.enum(["contract", "appendix"]).optional().default("contract"),
   baseContractNumber: z.string().optional().default(""),
   appendixNumber: z.string().optional().default(""),

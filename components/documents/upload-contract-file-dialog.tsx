@@ -25,7 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatBytes } from "@/lib/format";
-import { putFileWithProgress } from "@/lib/upload";
+import { inferFileKindFromFilename, putFileWithProgress } from "@/lib/upload";
 import type { FileKind } from "@schemas/file";
 
 const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
@@ -83,6 +83,8 @@ export function UploadContractFileDialog({
     }
 
     setSelectedFile(file);
+    const inferred = inferFileKindFromFilename(file.name);
+    setKind(inferred);
   };
 
   const handleUpload = async () => {
