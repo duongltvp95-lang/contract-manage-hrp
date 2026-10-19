@@ -10,7 +10,7 @@
   "crons": [
     {
       "path": "/api/cron/storage-cleanup",
-      "schedule": "0 * * * *"
+      "schedule": "0 */4 * * *"
     }
   ],
   "github": {
