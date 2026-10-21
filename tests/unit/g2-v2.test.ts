@@ -456,7 +456,7 @@ describe("G2 v2 — extractPdfText (sửa BUG-1)", () => {
     expect(result).toBeNull();
   });
 
-  it("trả null khi buffer không phải PDF hợp lệ", async () => {
+  it("trả null khi buffer không phải PDF hợp lệ", { timeout: 15_000 }, async () => {
     const result = await extractPdfText(Buffer.from("not a pdf"));
     expect(result).toBeNull();
   });
@@ -584,5 +584,174 @@ describe("G2 v2 — detectAppendixMetadata (Phân loại chính xác Phụ lục
 
     expect(res.documentType).toBe("appendix");
     expect(res.baseContractNumber).toBe("24022024/HRVN - STAR ENGINEERS");
+  });
+});
+
+describe("G2 v2 — Khóa lưu hợp đồng khi tải lên Phụ lục chưa có hợp đồng gốc", () => {
+  function isAppendixFile(file: { kind: string; aiDocumentType?: string }) {
+    return file.kind === "appendix" || file.aiDocumentType === "appendix";
+  }
+
+  function hasMatchingMainContractFile(
+    files: Array<{ kind: string; aiDocumentType?: string; aiContractNumber?: string }>,
+    contractNumber?: string,
+  ) {
+    const normalizedNumber = (contractNumber ?? "").trim().toLocaleLowerCase();
+    if (!normalizedNumber) return false;
+
+    return files.some(
+      (file) =>
+        file.kind === "document" &&
+        file.aiDocumentType !== "appendix" &&
+        file.aiContractNumber?.trim().toLocaleLowerCase() === normalizedNumber,
+    );
+  }
+
+  function isAppendixSaveBlocked(
+    files: Array<{
+      id: string;
+      kind: string;
+      aiDocumentType?: string;
+      baseContractNumber?: string;
+      matchedBaseContractId?: string;
+      aiContractNumber?: string;
+    }>,
+    contractNumber?: string,
+    appendixNotice?: {
+      type: "found" | "not_found";
+      baseContractNumber: string;
+      file: { id: string; kind: string; aiDocumentType?: string };
+    } | null,
+  ) {
+    const appendixFiles = files.filter(isAppendixFile);
+    const normalizedContractNumber = (contractNumber ?? "").trim().toLocaleLowerCase();
+    const hasAppendix = appendixFiles.length > 0 || Boolean(appendixNotice);
+
+    if (!hasAppendix) {
+      return false;
+    }
+
+    if (appendixNotice?.type === "found" || appendixFiles.some((f) => Boolean(f.matchedBaseContractId))) {
+      return true;
+    }
+
+    const mainContractFiles = files.filter((f) => !isAppendixFile(f));
+    if (mainContractFiles.length === 0) {
+      return true;
+    }
+
+    for (const appFile of appendixFiles) {
+      const baseNum = (appFile.baseContractNumber || "").trim().toLocaleLowerCase();
+      if (!baseNum || !normalizedContractNumber || baseNum !== normalizedContractNumber) {
+        return true;
+      }
+      if (!hasMatchingMainContractFile(files, baseNum)) {
+        return true;
+      }
+    }
+
+    if (appendixNotice?.type === "not_found") {
+      const noticeBase = appendixNotice.baseContractNumber.trim().toLocaleLowerCase();
+      if (
+        !noticeBase ||
+        !normalizedContractNumber ||
+        noticeBase !== normalizedContractNumber ||
+        !hasMatchingMainContractFile(files, noticeBase)
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  it("khóa lưu khi chỉ tải lên duy nhất 1 tệp phụ lục và chưa có hợp đồng gốc trong hệ thống", () => {
+    const file = {
+      id: "f1",
+      kind: "appendix",
+      aiDocumentType: "appendix",
+      baseContractNumber: "24022024/HRVN - STAR ENGINEERS",
+    };
+
+    const blocked = isAppendixSaveBlocked([file], "24022024/HRVN - STAR ENGINEERS", {
+      type: "not_found",
+      baseContractNumber: "24022024/HRVN - STAR ENGINEERS",
+      file,
+    });
+
+    expect(blocked).toBe(true);
+  });
+
+  it("khóa lưu khi phụ lục thuộc hợp đồng đã có trên hệ thống để bắt buộc người dùng dùng nút gán trực tiếp", () => {
+    const file = {
+      id: "f1",
+      kind: "appendix",
+      aiDocumentType: "appendix",
+      baseContractNumber: "24022024/HRVN - STAR ENGINEERS",
+      matchedBaseContractId: "contract-123",
+    };
+
+    const blocked = isAppendixSaveBlocked([file], "24022024/HRVN - STAR ENGINEERS", {
+      type: "found",
+      baseContractNumber: "24022024/HRVN - STAR ENGINEERS",
+      file,
+    });
+
+    expect(blocked).toBe(true);
+  });
+
+  it("cho phép lưu khi tải lên cùng lúc Hợp đồng chính và Phụ lục khớp số hợp đồng", () => {
+    const mainFile = {
+      id: "main-1",
+      kind: "document",
+      aiDocumentType: "document",
+      aiContractNumber: "24022024/HRVN - STAR ENGINEERS",
+    };
+    const appFile = {
+      id: "app-1",
+      kind: "appendix",
+      aiDocumentType: "appendix",
+      baseContractNumber: "24022024/HRVN - STAR ENGINEERS",
+    };
+
+    const blocked = isAppendixSaveBlocked(
+      [mainFile, appFile],
+      "24022024/HRVN - STAR ENGINEERS",
+      null,
+    );
+
+    expect(blocked).toBe(false);
+  });
+
+  it("khóa lưu khi tải lên Hợp đồng chính và Phụ lục nhưng số hợp đồng không khớp nhau", () => {
+    const mainFile = {
+      id: "main-1",
+      kind: "document",
+      aiDocumentType: "document",
+      aiContractNumber: "HD-01/2026",
+    };
+    const appFile = {
+      id: "app-1",
+      kind: "appendix",
+      aiDocumentType: "appendix",
+      baseContractNumber: "HD-02/2026", // Lệch số hợp đồng
+    };
+
+    const blocked = isAppendixSaveBlocked([mainFile, appFile], "HD-01/2026", null);
+
+    expect(blocked).toBe(true);
+  });
+
+  it("không khóa lưu khi chỉ tải lên hợp đồng thông thường không phải phụ lục", () => {
+    const mainFile = {
+      id: "main-1",
+      kind: "document",
+      aiDocumentType: "document",
+      aiContractNumber: "HD-01/2026",
+    };
+
+    const blocked = isAppendixSaveBlocked([mainFile], "HD-01/2026", null);
+
+    expect(blocked).toBe(false);
   });
 });

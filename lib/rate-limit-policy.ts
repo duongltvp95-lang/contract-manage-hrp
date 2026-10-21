@@ -9,8 +9,15 @@
 export const RATE_LIMIT_WINDOW_SECONDS = 60;
 export const RATE_LIMIT_MAX_REQUESTS = 60;
 
-/** One bucket per endpoint, so hammering the viewer cannot lock out uploading. */
-export type RateLimitBucket = "files:upload-url" | "files:view-url" | "ai:upload-url";
+/** Separate per-user budgets; expensive model calls have a much tighter limit. */
+export const RATE_LIMIT_POLICIES = {
+  "files:upload-url": { maxRequests: 60 },
+  "files:view-url": { maxRequests: 60 },
+  "ai:upload-url": { maxRequests: 60 },
+  "ai:extract": { maxRequests: 10 },
+} as const;
+
+export type RateLimitBucket = keyof typeof RATE_LIMIT_POLICIES;
 
 export type RateLimitVerdict = {
   allowed: boolean;
@@ -18,6 +25,10 @@ export type RateLimitVerdict = {
   remaining: number;
   resetAt: string;
 };
+
+export function getRateLimitPolicy(bucket: RateLimitBucket) {
+  return RATE_LIMIT_POLICIES[bucket];
+}
 
 /** Standard `X-RateLimit-*` headers, sent on success and on 429 alike. */
 export function rateLimitHeaders(

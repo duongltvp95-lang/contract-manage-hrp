@@ -25,7 +25,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatBytes } from "@/lib/format";
-import { inferFileKindFromFilename, putFileWithProgress } from "@/lib/upload";
+import {
+  inferFileKindFromFilename,
+  putFileWithProgress,
+  requestContractUploadUrl,
+  resolveUploadMimeType,
+} from "@/lib/upload";
 import type { FileKind } from "@schemas/file";
 
 const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
@@ -75,8 +80,7 @@ export function UploadContractFileDialog({
       return;
     }
 
-    const validMimes = ["application/pdf", "image/png", "image/jpeg", "image/jpg"];
-    if (!validMimes.includes(file.type) && !file.name.toLowerCase().endsWith(".pdf")) {
+    if (!resolveUploadMimeType(file)) {
       setError("Chỉ chấp nhận tệp định dạng PDF, PNG hoặc JPG.");
       setSelectedFile(null);
       return;
@@ -98,33 +102,23 @@ export function UploadContractFileDialog({
     setError(null);
 
     try {
-      // 1. Xin URL presigned PUT từ server
-      const presignResponse = await fetch("/api/files/upload-url", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contractId,
-          filename: selectedFile.name,
-          mimeType: selectedFile.type || "application/pdf",
-          fileSize: selectedFile.size,
-          kind,
-        }),
-      });
-
-      if (!presignResponse.ok) {
-        const payload = await presignResponse.json().catch(() => null);
-        throw new Error(payload?.error ?? `Lỗi khởi tạo tải lên (HTTP ${presignResponse.status})`);
+      const mimeType = resolveUploadMimeType(selectedFile);
+      if (!mimeType) {
+        throw new Error("Chỉ chấp nhận tệp định dạng PDF, PNG hoặc JPG.");
       }
 
-      const { fileId, objectKey, uploadUrl } = (await presignResponse.json()) as {
-        fileId: string;
-        objectKey: string;
-        uploadUrl: string;
-      };
+      // 1. Xin URL presigned PUT từ server
+      const { fileId, objectKey, uploadUrl } = await requestContractUploadUrl({
+        contractId,
+        filename: selectedFile.name,
+        mimeType,
+        fileSize: selectedFile.size,
+        kind,
+      });
 
       // 2. Upload tệp trực tiếp lên Cloudflare R2
       await putFileWithProgress(uploadUrl, selectedFile, {
-        contentType: selectedFile.type || "application/pdf",
+        contentType: mimeType,
         onProgress: (p) => setProgress(p.percent),
       });
 
@@ -134,7 +128,7 @@ export function UploadContractFileDialog({
         fileId,
         objectKey,
         filename: selectedFile.name,
-        mimeType: selectedFile.type || "application/pdf",
+        mimeType,
         fileSize: selectedFile.size,
         kind,
       });

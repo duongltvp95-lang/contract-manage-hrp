@@ -3,19 +3,20 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { dbError, ok, type ServiceResult } from "@/lib/services/types";
 import {
-  RATE_LIMIT_MAX_REQUESTS,
+  getRateLimitPolicy,
   RATE_LIMIT_WINDOW_SECONDS,
   type RateLimitBucket,
   type RateLimitVerdict,
 } from "@/lib/rate-limit-policy";
 
 /**
- * Per-user rate limiting for the file API routes — W1-WEB-041.
+ * Per-user rate limiting for file APIs and paid AI extraction — W1-WEB-041.
  *
  * The counter lives in PostgreSQL (see
  * `supabase/migrations/20261003110000_add_rate_limit.sql`), because Vercel
  * serverless instances are ephemeral and horizontally scaled: an in-process
- * counter would let a burst through by landing on different instances.
+ * counter would let a burst through by landing on different instances. Each
+ * bucket's limit is defined in `lib/rate-limit-policy.ts` and enforced by SQL.
  *
  * The user id is resolved inside the SQL function from `auth.uid()`. This module
  * never passes it, so a caller can only ever spend their own quota.
@@ -42,14 +43,18 @@ type RpcRow = {
 
 export async function consumeRateLimit(
   bucket: RateLimitBucket,
+  options?: { abortSignal?: AbortSignal },
 ): Promise<ServiceResult<RateLimitVerdict>> {
+  const policy = getRateLimitPolicy(bucket);
   const supabase = await createClient();
 
-  const { data, error } = await supabase.rpc("consume_rate_limit", {
+  const request = supabase.rpc("consume_rate_limit", {
     p_bucket: bucket,
-    p_limit: RATE_LIMIT_MAX_REQUESTS,
+    p_limit: policy.maxRequests,
     p_window_seconds: RATE_LIMIT_WINDOW_SECONDS,
   });
+  if (options?.abortSignal) request.abortSignal(options.abortSignal);
+  const { data, error } = await request;
 
   if (error) {
     return dbError("consumeRateLimit", error);
@@ -63,7 +68,7 @@ export async function consumeRateLimit(
 
   return ok({
     allowed: row.allowed === true,
-    limit: RATE_LIMIT_MAX_REQUESTS,
+    limit: policy.maxRequests,
     remaining: Math.max(0, Number(row.remaining ?? 0)),
     resetAt: row.reset_at ?? new Date().toISOString(),
   });

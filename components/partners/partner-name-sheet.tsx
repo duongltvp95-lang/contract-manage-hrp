@@ -80,6 +80,8 @@ export type PartnerNameSheetProps = {
   }) | null;
   /** Called with the saved row, before the refresh. */
   onSaved?: (row: PartnerDetail) => void;
+  /** Suggested values to prefill after an explicit create action. */
+  initialValues?: Pick<CreatePartnerInput, "name" | "address" | "taxCode">;
   /** Optional trigger; omit when the sheet is opened programmatically. */
   trigger?: ReactNode;
   open?: boolean;
@@ -90,6 +92,7 @@ export function PartnerNameSheet({
   mode,
   partner = null,
   onSaved,
+  initialValues,
   trigger,
   open,
   onOpenChange,
@@ -124,6 +127,20 @@ export function PartnerNameSheet({
       companyIds: [],
     },
   });
+
+  useEffect(() => {
+    if (!sheetOpen || mode !== "create") return;
+    form.reset({
+      name: initialValues?.name ?? "",
+      address: initialValues?.address ?? "",
+      taxCode: initialValues?.taxCode ?? "",
+      region: "",
+      abbreviation: "",
+      status: "active",
+      companyIds: [],
+    });
+    setFormError(null);
+  }, [sheetOpen, mode, initialValues?.name, initialValues?.address, initialValues?.taxCode, form.reset]);
 
   // Load the org's companies when the sheet OPENS (not on mount — the partners
   // list mounts one sheet per row, and fetching per row would fire a storm of

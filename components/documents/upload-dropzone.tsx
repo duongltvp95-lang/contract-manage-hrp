@@ -1,7 +1,7 @@
 "use client";
 
 import { FileText, ImageIcon, Loader2, Sparkles, Trash2, UploadCloud, XCircle, CheckCircle2 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
 import { useDropzone } from "react-dropzone";
 
 import { Button } from "@/components/ui/button";
@@ -44,7 +44,7 @@ export function UploadDropzone({
   isExtractingAi = false,
 }: {
   files: PendingFile[];
-  onFilesChange: (files: PendingFile[]) => void;
+  onFilesChange: Dispatch<SetStateAction<PendingFile[]>>;
   maxUploadSizeMb: number;
   disabled?: boolean;
   accept?: Record<string, string[]>;
@@ -66,12 +66,12 @@ export function UploadDropzone({
     (accepted: File[], rejected: unknown[]) => {
       setRejections(describeRejections(rejected, maxUploadSizeMb));
       if (accepted.length === 0) return;
-      onFilesChange([
-        ...files,
-        ...accepted.map((file) => newPendingFile(file, showKindBadge ? undefined : kind)),
-      ]);
+      const addedFiles = accepted.map((file) =>
+        newPendingFile(file, showKindBadge ? undefined : kind),
+      );
+      onFilesChange((current) => [...current, ...addedFiles]);
     },
-    [files, onFilesChange, maxUploadSizeMb, setRejections, kind, showKindBadge],
+    [onFilesChange, maxUploadSizeMb, setRejections, kind, showKindBadge],
   );
 
   const { getRootProps, getInputProps, isDragActive, isDragReject } = useDropzone({
@@ -83,7 +83,7 @@ export function UploadDropzone({
   });
 
   const removeFile = (id: string) =>
-    onFilesChange(files.filter((f) => f.id !== id));
+    onFilesChange((current) => current.filter((file) => file.id !== id));
 
   return (
     <div className="space-y-3">

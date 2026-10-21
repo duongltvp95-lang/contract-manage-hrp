@@ -60,6 +60,7 @@ export function PartnerCombobox({
   partners,
   selectedPartner = null,
   onPartnerCreated,
+  aiSuggestion,
   disabled,
   placeholder = "Chọn đối tác",
   id,
@@ -73,6 +74,8 @@ export function PartnerCombobox({
   selectedPartner?: { id: string; name: string; tax_code?: string | null } | null;
   /** Called with a partner created from inside the combobox. */
   onPartnerCreated: (partner: PartnerRow) => void;
+  /** Extracted values to prefill when the user explicitly chooses to add it. */
+  aiSuggestion?: { name: string; address?: string; taxCode?: string };
   disabled?: boolean;
   placeholder?: string;
   id?: string;
@@ -264,7 +267,7 @@ export function PartnerCombobox({
               }}
             >
               <Plus className="mr-2 h-4 w-4" />
-              Thêm đối tác
+              {aiSuggestion?.name ? `Thêm “${aiSuggestion.name}”` : "Thêm đối tác"}
             </Button>
           </div>
         </PopoverContent>
@@ -273,6 +276,7 @@ export function PartnerCombobox({
       {/* Opened from inside the popover, so it is driven programmatically. */}
       <PartnerNameSheet
         mode="create"
+        initialValues={aiSuggestion}
         open={createOpen}
         onOpenChange={setCreateOpen}
         onSaved={(partner) => {

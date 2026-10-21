@@ -39,9 +39,15 @@ export const MAX_UPLOAD_SIZE_MB =
 
 export const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 
-/** Gemini PDF processing limit documented by Google: 50 MB / 1,000 pages. */
+/** Product-side maximum accepted by the contract AI flow. */
 export const MAX_AI_FILE_SIZE_MB = 50;
 export const MAX_AI_FILE_SIZE_BYTES = MAX_AI_FILE_SIZE_MB * 1024 * 1024;
+
+/** Files at or below this limit can be sent to a Server Action without R2 staging. */
+export const AI_DIRECT_ACTION_MAX_BYTES = 2 * 1024 * 1024;
+
+/** Larger files use Gemini Files API instead of base64 inlineData. */
+export const AI_GEMINI_FILES_API_MIN_BYTES = AI_DIRECT_ACTION_MAX_BYTES;
 
 export const MIME_TYPE_ERROR = `Định dạng tệp không được hỗ trợ. Chỉ chấp nhận: ${ALLOWED_MIME_TYPES.join(", ")}`;
 export const FILE_SIZE_ERROR = `Tệp vượt quá giới hạn ${MAX_UPLOAD_SIZE_MB} MB`;

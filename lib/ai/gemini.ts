@@ -1,6 +1,6 @@
 import "server-only";
 
-import { type ExtractedContract } from "@schemas/contract";
+import { ExtractedContractSchema, type ExtractedContract } from "@schemas/contract";
 import { MAX_AI_FILE_SIZE_BYTES, MAX_AI_FILE_SIZE_MB } from "@schemas/file";
 import { err, ok, type ServiceResult } from "@/lib/services/types";
 import { calculateExpiryDateFromDuration, normalizeDurationText } from "@/lib/ai/matching";
@@ -17,6 +17,8 @@ export function getGeminiModels(): string[] {
   }
   return defaults;
 }
+
+const MAX_MODEL_ATTEMPTS = 2;
 
 export const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
@@ -252,26 +254,31 @@ export function detectAppendixMetadata({
   const normSummary = (rawExtracted.summary || "").toLowerCase();
   const normDocType = (rawExtracted.documentType || "").toLowerCase();
   const normTitle = (rawExtracted.firstPageTitle || "").toLowerCase();
-  const textSample = (pdfText || "").slice(0, 4000).toLowerCase();
-  const page1Text = (pdfText || "").slice(0, 2500).toLowerCase();
+  const page1Text = (pdfText || "").slice(0, 800).toLowerCase();
 
-  const appendixPatterns = [
+  const explicitAppendixPatterns = [
     /(?:phu|phụ)[\s_\-]*(?:luc|lục)/i,
     /appendix/i,
     /addendum/i,
     /plhd/i,
-    /\bpl\b/i,
-    /pl[\-_0-9]/i,
+  ];
+  const filenameAppendixPatterns = [
+    ...explicitAppendixPatterns,
+    /(?:^|[^a-z0-9])pl(?:[-_\s]?\d+)?(?:[^a-z0-9]|$)/i,
+  ];
+  const amendmentTitlePatterns = [
     /(?:sua|sửa)[\s_\-]*(?:doi|đổi)/i,
     /(?:bo|bổ)[\s_\-]*sung/i,
-    /(?:gia|gia)[\s_\-]*(?:han|hạn)/i,
+    /gia[\s_\-]*(?:han|hạn)/i,
   ];
 
-  const hasAppendixInTitle = appendixPatterns.some((p) => p.test(normTitle));
-  const hasAppendixOnPage1 = appendixPatterns.some((p) => p.test(page1Text));
-  const hasAppendixInFilename = appendixPatterns.some((p) => p.test(normFilename));
-  const hasAppendixInSummary = appendixPatterns.some((p) => p.test(normSummary));
-  const hasAppendixInText = appendixPatterns.some((p) => p.test(textSample));
+  const hasAppendixInTitle =
+    explicitAppendixPatterns.some((pattern) => pattern.test(normTitle)) ||
+    amendmentTitlePatterns.some((pattern) => pattern.test(normTitle));
+  const page1Heading = page1Text.slice(0, 800);
+  const hasAppendixOnPage1 = explicitAppendixPatterns.some((pattern) => pattern.test(page1Heading));
+  const hasAppendixInFilename = filenameAppendixPatterns.some((pattern) => pattern.test(normFilename));
+  const hasAppendixInSummary = /^(?:phu|phụ)[\s_\-]*(?:luc|lục)|^(?:appendix|addendum)\b/i.test(normSummary.trim());
   const isDocTypeAppendix = normDocType.includes("appendix") || normDocType.includes("phụ lục");
   const hasAppendixNumber = Boolean(rawExtracted.appendixNumber && rawExtracted.appendixNumber.trim().length > 0);
   const hasBaseContract = Boolean(rawExtracted.baseContractNumber && rawExtracted.baseContractNumber.trim().length > 0);
@@ -282,7 +289,6 @@ export function detectAppendixMetadata({
     isDocTypeAppendix ||
     hasAppendixInFilename ||
     hasAppendixInSummary ||
-    hasAppendixInText ||
     hasAppendixNumber ||
     hasBaseContract;
 
@@ -310,7 +316,7 @@ export function detectAppendixMetadata({
         /(?:phu|phụ)[\s_\-]*(?:luc|lục)(?:[\s_\-]*(?:hop|hợp)[\s_\-]*(?:dong|đồng))?[_\s\-]*(?:so|số)?[:\s_\-]*([0-9a-zA-Z]+)/i,
       ) ||
       normFilename.match(/(?:pl|appendix)[_\s\-]*(?:so|số)?[_\s\-]*([0-9a-zA-Z]+)/i) ||
-      textSample.match(/(?:phụ\s*lục(?:\s*hợp\s*đồng)?|phu\s*luc)\s*(?:số|so)?\s*[:\s]*([0-9a-zA-Z\-_]+)/i);
+      page1Text.match(/(?:phụ\s*lục(?:\s*hợp\s*đồng)?|phu\s*luc)\s*(?:số|so)?\s*[:\s]*([0-9a-zA-Z\-_]+)/i);
     if (appNumMatch && appNumMatch[1]) {
       appendixNumber = appNumMatch[1].trim();
     }
@@ -373,6 +379,7 @@ export async function extractContractFromBuffer({
   geminiFileName,
   geminiFileUri,
   remainingBudgetMs = 32_000,
+  traceId,
 }: {
   buffer: Buffer;
   mimeType: string;
@@ -383,6 +390,8 @@ export async function extractContractFromBuffer({
   geminiFileUri?: string;
   /** Ngân sách thời gian tối đa còn lại cho bước extract (ms) */
   remainingBudgetMs?: number;
+  /** Correlates stage logs for one extraction without logging contract content. */
+  traceId?: string;
 }): Promise<ServiceResult<ExtractedContract>> {
   const extractStartTime = Date.now();
   const extractDeadline = extractStartTime + remainingBudgetMs;
@@ -420,24 +429,62 @@ export async function extractContractFromBuffer({
   let pdfTextForModel: string | null = null;
   let extractedPdfText: string | null = null;
 
-  if (resolvedMime === "application/pdf") {
+  if (resolvedMime === "application/pdf" && !useFilesApi) {
+    const pdfStartTime = Date.now();
     try {
-      // Dành tối thiểu 6s cho bước gọi model Gemini phía sau
+      // Giới hạn parse cục bộ để tiết kiệm ngân sách; file nhị phân sẽ được
+      // gửi trực tiếp qua Files API khi vượt ngưỡng, nên không cần parse thêm.
       const remainingBeforePdf = extractDeadline - Date.now() - 6_000;
       if (remainingBeforePdf >= 2_000) {
         const { extractPdfText } = await import("@/lib/ai/pdf-text");
-        const pdfTimeout = Math.min(8_000, remainingBeforePdf);
-        const pdfResult = await extractPdfText(buffer, pdfTimeout);
+        const pdfTimeout = Math.min(1_500, remainingBeforePdf);
+        const pdfResult = await extractPdfText(
+          buffer,
+          pdfTimeout,
+          { maxPages: 10, maxCharacters: 12_000 },
+        );
         if (pdfResult) {
           extractedPdfText = pdfResult.text;
-          if (!useFilesApi) {
-            pdfTextForModel = pdfResult.text;
-          }
+          pdfTextForModel = pdfResult.text;
+          aiLog.info("Đọc lớp văn bản PDF hoàn tất", {
+            traceId,
+            elapsedMs: Date.now() - pdfStartTime,
+            sizeBytes: buffer.length,
+            pageCount: pdfResult.pageCount,
+            textCharacters: pdfResult.text.length,
+            isTruncated: Boolean(pdfResult.isTruncated),
+            usedFilesApi: false,
+          });
+        } else {
+          aiLog.info("PDF không có lớp văn bản dùng được", {
+            traceId,
+            elapsedMs: Date.now() - pdfStartTime,
+            sizeBytes: buffer.length,
+            usedFilesApi: false,
+          });
         }
+      } else {
+        aiLog.warn("Bỏ qua đọc lớp văn bản PDF do hết ngân sách", {
+          traceId,
+          elapsedMs: Date.now() - pdfStartTime,
+          usedFilesApi: false,
+        });
       }
-    } catch {
+    } catch (error) {
       // PDF.js lỗi → fallback xuống luồng base64
+      aiLog.warn("Đọc lớp văn bản PDF thất bại, tiếp tục bằng tài liệu gốc", {
+        traceId,
+        elapsedMs: Date.now() - pdfStartTime,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        usedFilesApi: false,
+      });
     }
+  } else if (resolvedMime === "application/pdf") {
+    aiLog.info("Bỏ qua PDF parser cục bộ vì tệp dùng Gemini Files API", {
+      traceId,
+      sizeBytes: buffer.length,
+      usedFilesApi: true,
+    });
   }
 
   if (!useFilesApi && !pdfTextForModel) {
@@ -447,7 +494,7 @@ export async function extractContractFromBuffer({
   let lastError = "Không thể kết nối tới dịch vụ AI Google Gemini.";
 
   // Thử tối đa các models trong danh sách nếu ngân sách thời gian thực tế vẫn còn đủ
-  const models = getGeminiModels().slice(0, 3);
+  const models = getGeminiModels().slice(0, MAX_MODEL_ATTEMPTS);
 
   for (const model of models) {
     const remainingTime = extractDeadline - Date.now();
@@ -455,6 +502,7 @@ export async function extractContractFromBuffer({
     // Nếu thời gian còn lại dưới 6 giây, dừng ngay để không vượt quá giới hạn 60s của Vercel
     if (remainingTime < 6_000) {
       aiLog.warn("Hết ngân sách thời gian trích xuất AI, dừng fallback", {
+        traceId,
         model,
         elapsedSoFar: Date.now() - extractStartTime,
         remainingBudgetMs,
@@ -501,6 +549,9 @@ export async function extractContractFromBuffer({
     const requestBody = {
       contents: [{ parts }],
       generationConfig: {
+        // Kết quả JSON chỉ có metadata ngắn; giới hạn token tránh model sinh
+        // phần giải thích dài ngoài nhu cầu và giảm thời gian trả kết quả.
+        maxOutputTokens: 2_048,
         responseMimeType: "application/json",
         responseSchema: CONTRACT_RESPONSE_SCHEMA,
       },
@@ -508,6 +559,7 @@ export async function extractContractFromBuffer({
 
     try {
       aiLog.info("Đang trích xuất với model", {
+        traceId,
         model,
         useFilesApi,
         modelTimeoutMs,
@@ -535,6 +587,7 @@ export async function extractContractFromBuffer({
         const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!rawText) {
           aiLog.warn("Model trả về nội dung rỗng", {
+            traceId,
             model,
             elapsedMs: Date.now() - startTime,
           });
@@ -594,14 +647,21 @@ export async function extractContractFromBuffer({
             summary: String(parsedJson.summary ?? "").trim(),
           };
 
+          const validated = ExtractedContractSchema.safeParse(extracted);
+          if (!validated.success) {
+            throw new Error("Dữ liệu trích xuất không khớp schema hợp đồng");
+          }
+
           aiLog.info("Trích xuất thành công", {
+            traceId,
             model,
             elapsedMs: Date.now() - startTime,
             useFilesApi,
           });
-          return ok(extracted);
+          return ok(validated.data);
         } catch (parseErr) {
           aiLog.error("Parse JSON thất bại", {
+            traceId,
             model,
             rawTextLength: rawText.length,
             errorMessage: String(parseErr),
@@ -617,8 +677,9 @@ export async function extractContractFromBuffer({
       lastError = errorPayload?.error?.message ?? `Lỗi HTTP ${response.status} từ Gemini API`;
 
       // If the model is 503 (high demand) or 404 (model unavailable) or 429, continue to next fallback model
-      if (response.status === 503 || response.status === 404 || response.status === 429) {
+      if (response.status === 404 || response.status === 429 || response.status >= 500) {
         aiLog.warn("Model gặp lỗi HTTP, chuyển fallback", {
+          traceId,
           model,
           statusCode: response.status,
           lastError,
@@ -639,6 +700,7 @@ export async function extractContractFromBuffer({
           ? networkError.message
           : "Lỗi kết nối mạng";
       aiLog.warn("Model gặp lỗi mạng, chuyển fallback", {
+        traceId,
         model,
         lastError,
         elapsedMs: Date.now() - startTime,

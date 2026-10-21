@@ -1,7 +1,7 @@
 "use client";
 
-import { AlertCircle, Loader2, RotateCcw, Sparkles, Upload } from "lucide-react";
-import type { FileKind } from "@schemas/file";
+import { AlertCircle, CheckCircle2, Loader2, RotateCcw, Sparkles, Upload } from "lucide-react";
+import type { Dispatch, SetStateAction } from "react";
 import type { MatchedBaseContract } from "@schemas/contract";
 import { UploadDropzone } from "@/components/documents/upload-dropzone";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -20,7 +20,7 @@ import { newPendingFile, type PendingFile } from "@/lib/upload";
  */
 export function ContractFileAttachments({
   files,
-  onMergeFiles,
+  onFilesChange,
   maxUploadSizeMb,
   busy,
   uploadError,
@@ -28,15 +28,17 @@ export function ContractFileAttachments({
   onRetryUploads,
   onExtractAi,
   onExtractAllAi,
+  onCancelAiBatch,
   isExtractingAi = false,
   onToggleFileKind,
   appendixNotice,
   onAttachToExistingContract,
   isAttachingToExisting = false,
-  onDismissAppendixNotice,
+  appendixSaveBlocked,
+  appendixBaseNumbers,
 }: {
   files: PendingFile[];
-  onMergeFiles: (kind: FileKind, next: PendingFile[]) => void;
+  onFilesChange: Dispatch<SetStateAction<PendingFile[]>>;
   maxUploadSizeMb: number;
   busy: boolean;
   uploadError: string | null;
@@ -44,6 +46,7 @@ export function ContractFileAttachments({
   onRetryUploads: () => void;
   onExtractAi?: (file: PendingFile) => void;
   onExtractAllAi?: (files: PendingFile[]) => void;
+  onCancelAiBatch?: () => void;
   isExtractingAi?: boolean;
   onToggleFileKind?: (fileId: string) => void;
   appendixNotice?: {
@@ -54,8 +57,28 @@ export function ContractFileAttachments({
   } | null;
   onAttachToExistingContract?: (baseContractId: string, file: PendingFile) => void;
   isAttachingToExisting?: boolean;
-  onDismissAppendixNotice?: () => void;
+  appendixSaveBlocked: boolean;
+  appendixBaseNumbers: string[];
 }) {
+  const hasAppendixFiles = files.some(
+    (file) => file.kind === "appendix" || file.aiDocumentType === "appendix",
+  );
+  const appendixMatchesExistingContract = files.some(
+    (file) =>
+      (file.kind === "appendix" || file.aiDocumentType === "appendix") &&
+      Boolean(file.matchedBaseContractId),
+  );
+  const appendixReferences = [...new Set(appendixBaseNumbers)];
+  const hasMainFile = files.some(
+    (file) => file.kind === "document" && file.aiDocumentType !== "appendix",
+  );
+  const hasUnverifiedMainFile = files.some(
+    (file) =>
+      file.kind === "document" &&
+      file.aiDocumentType !== "appendix" &&
+      !file.aiContractNumber,
+  );
+
   return (
     <>
       <Card>
@@ -68,7 +91,7 @@ export function ContractFileAttachments({
         <CardContent className="space-y-4">
           <UploadDropzone
             files={files}
-            onFilesChange={(next) => onMergeFiles("document", next)}
+            onFilesChange={onFilesChange}
             maxUploadSizeMb={maxUploadSizeMb}
             kind="document"
             disabled={busy || isExtractingAi || isAttachingToExisting}
@@ -95,34 +118,48 @@ export function ContractFileAttachments({
                   </p>
                 </div>
               </div>
-              <Button
-                type="button"
-                size="sm"
-                disabled={busy || isExtractingAi || isAttachingToExisting}
-                onClick={() => {
-                  if (onExtractAllAi && files.length > 1) {
-                    onExtractAllAi(files);
-                  } else if (onExtractAi && files.length > 0) {
-                    onExtractAi(files[0]);
-                  }
-                }}
-                className="bg-purple-600 hover:bg-purple-700 text-white shrink-0 shadow-sm"
-                data-testid="ai-extract-button"
-              >
-                {isExtractingAi ? (
-                  <>
-                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    AI đang phân tích & phân loại...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="mr-1.5 h-4 w-4" />
-                    {files.length > 1
-                      ? `Phân tích tất cả (${files.length} tệp) bằng AI`
-                      : "Điền tự động bằng AI"}
-                  </>
-                )}
-              </Button>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={busy || isExtractingAi || isAttachingToExisting}
+                  onClick={() => {
+                    if (onExtractAllAi && files.length > 1) {
+                      onExtractAllAi(files);
+                    } else if (onExtractAi && files.length > 0) {
+                      onExtractAi(files[0]);
+                    }
+                  }}
+                  className="bg-purple-600 hover:bg-purple-700 text-white shadow-sm"
+                  data-testid="ai-extract-button"
+                >
+                  {isExtractingAi ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      AI đang phân tích & phân loại...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="mr-1.5 h-4 w-4" />
+                      {files.length > 1
+                        ? `Phân tích tất cả (${files.length} tệp) bằng AI`
+                        : "Điền tự động bằng AI"}
+                    </>
+                  )}
+                </Button>
+                {isExtractingAi && files.length > 1 && onCancelAiBatch ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy || isAttachingToExisting}
+                    onClick={onCancelAiBatch}
+                    data-testid="ai-extract-stop-button"
+                  >
+                    Dừng sau tệp hiện tại
+                  </Button>
+                ) : null}
+              </div>
             </div>
           )}
         </CardContent>
@@ -141,6 +178,9 @@ export function ContractFileAttachments({
               <strong className="text-blue-700 dark:text-blue-300">&ldquo;{appendixNotice.baseContractNumber}&rdquo;</strong>
               {appendixNotice.baseContract?.partnerName ? ` (Đối tác: ${appendixNotice.baseContract.partnerName})` : ""}.
               Hợp đồng này đã có sẵn trên hệ thống!
+            </p>
+            <p className="text-xs opacity-90">
+              Nút lưu đang khóa để tránh tạo hồ sơ phụ lục riêng. Gán phụ lục trực tiếp vào hợp đồng gốc.
             </p>
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {onAttachToExistingContract && appendixNotice.baseContract && (
@@ -165,34 +205,54 @@ export function ContractFileAttachments({
                   )}
                 </Button>
               )}
-              {onDismissAppendixNotice && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={isAttachingToExisting || busy}
-                  onClick={onDismissAppendixNotice}
-                >
-                  Giữ lại để tạo Hợp đồng mới
-                </Button>
-              )}
             </div>
           </AlertDescription>
         </Alert>
       )}
 
-      {appendixNotice && appendixNotice.type === "not_found" && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Chưa tìm thấy hợp đồng gốc để gán phụ lục</AlertTitle>
-          <AlertDescription className="space-y-1">
-            <p>
-              Tệp <strong>&ldquo;{appendixNotice.file.file.name}&rdquo;</strong> là phụ lục của hợp đồng{" "}
-              <strong>&ldquo;{appendixNotice.baseContractNumber}&rdquo;</strong>, nhưng hiện tại <strong>chưa có hợp đồng này được tải lên hệ thống để gán</strong>.
-            </p>
-            <p className="text-xs opacity-90">
-              Bạn vui lòng tải lên hợp đồng gốc <strong>&ldquo;{appendixNotice.baseContractNumber}&rdquo;</strong> trước hoặc tiếp tục nhập thông tin để tạo hợp đồng mới.
-            </p>
+      {hasAppendixFiles && appendixNotice?.type !== "found" && (
+        <Alert
+          variant={appendixSaveBlocked ? "destructive" : "default"}
+          className={!appendixSaveBlocked
+            ? "border-emerald-200 bg-emerald-50/70 dark:border-emerald-900/50 dark:bg-emerald-950/20"
+            : undefined}
+        >
+          {appendixSaveBlocked
+            ? <AlertCircle className="h-4 w-4" />
+            : <CheckCircle2 className="h-4 w-4 text-emerald-600" />}
+          <AlertTitle>
+            {appendixSaveBlocked
+              ? appendixMatchesExistingContract
+                ? "Phụ lục thuộc hợp đồng đã có trên hệ thống"
+                : !hasMainFile
+                  ? "Chưa thể lưu: Chưa có hợp đồng gốc trên hệ thống"
+                  : "Chưa thể lưu phụ lục khi thiếu hợp đồng chính phù hợp"
+              : "Đã có hợp đồng chính phù hợp trong danh sách tệp"}
+          </AlertTitle>
+          <AlertDescription>
+            {appendixSaveBlocked
+              ? appendixMatchesExistingContract
+                ? "Gán phụ lục trực tiếp vào hợp đồng gốc để tránh tạo hồ sơ trùng."
+                : !hasMainFile
+                  ? appendixReferences.length > 0
+                    ? `Tệp tải lên là Phụ lục của hợp đồng số "${appendixReferences.join(", ")}", nhưng chưa có hợp đồng này được tải lên hệ thống từ trước. Bạn không thể lưu hợp đồng khi chưa có hợp đồng gốc.`
+                    : "Tệp tải lên được nhận diện là Phụ lục hợp đồng nhưng chưa có hợp đồng gốc được tải lên hệ thống từ trước. Bạn không thể lưu hợp đồng khi chưa có hợp đồng gốc."
+                  : appendixReferences.length > 0
+                  ? `Phụ lục tham chiếu số hợp đồng ${appendixReferences.join(", ")}. Hãy thêm hợp đồng chính tương ứng vào cùng biểu mẫu và xác nhận số hợp đồng trước khi lưu.`
+                  : files.some(
+                    (file) =>
+                      (file.kind === "appendix" || file.aiDocumentType === "appendix") &&
+                      !file.baseContractNumber,
+                  )
+                  ? "Hãy chạy AI phân tích phụ lục để xác định số hợp đồng gốc, đồng thời thêm tệp hợp đồng chính phù hợp trước khi lưu."
+                  : hasUnverifiedMainFile
+                  ? "Đã có tệp chính, nhưng chưa xác nhận đó là hợp đồng gốc. Hãy chạy AI trên tệp hợp đồng chính và kiểm tra số hợp đồng khớp với phụ lục."
+                  : hasMainFile
+                  ? `Số hợp đồng AI đọc từ tệp chính chưa khớp số gốc của phụ lục${appendixReferences.length ? ` (${appendixReferences.join(", ")})` : ""}. Hãy kiểm tra lại các tệp.`
+                  : appendixReferences.length > 0
+                  ? `Hãy thêm và phân tích hợp đồng chính số ${appendixReferences.join(", ")} trước khi lưu phụ lục.`
+                  : "Hãy thêm tệp hợp đồng chính vào cùng biểu mẫu và nhập số hợp đồng trước khi lưu phụ lục."
+              : "Hợp đồng chính và các phụ lục sẽ được gán chung một hồ sơ khi lưu."}
           </AlertDescription>
         </Alert>
       )}
@@ -201,11 +261,13 @@ export function ContractFileAttachments({
       <div className="sr-only">
         <input
           type="file"
+          disabled={busy || isExtractingAi || isAttachingToExisting}
           data-testid="appendix-dropzone-input"
           onChange={(e) => {
             if (e.target.files) {
               const added = Array.from(e.target.files).map((f) => newPendingFile(f, "appendix"));
-              onMergeFiles("appendix", added);
+              onFilesChange((current) => [...current, ...added]);
+              e.currentTarget.value = "";
             }
           }}
         />

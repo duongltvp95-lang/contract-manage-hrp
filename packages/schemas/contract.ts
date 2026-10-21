@@ -169,7 +169,6 @@ export type ExtractedContractResult = ExtractedContract & {
   matchedCompanyId?: string | null;
   matchedPartnerName?: string | null;
   matchedCompanyName?: string | null;
-  isNewPartner?: boolean;
   isDuplicate?: boolean;
   duplicateContractId?: string | null;
   matchedBaseContract?: MatchedBaseContract | null;

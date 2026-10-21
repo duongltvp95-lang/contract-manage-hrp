@@ -3,7 +3,12 @@
 import { useCallback, useState } from "react";
 import type { FileKind } from "@schemas/file";
 import { completeUploadAction } from "@/app/(app)/contracts/actions";
-import { putFileWithProgress, type PendingFile } from "@/lib/upload";
+import {
+  putFileWithProgress,
+  requestContractUploadUrl,
+  resolveUploadMimeType,
+  type PendingFile,
+} from "@/lib/upload";
 
 export type Phase = "idle" | "saving" | "uploading" | "redirecting" | "done" | "failed";
 
@@ -26,26 +31,41 @@ export function useContractUploads({
     );
   }
 
-  function mergeFiles(kind: FileKind, next: PendingFile[]) {
-    setFiles((current) => [
-      ...current.filter((item) => item.kind !== kind),
-      ...next,
-    ]);
-  }
-
   function toggleFileKind(id: string) {
     setFiles((current) =>
       current.map((item) =>
         item.id === id
-          ? { ...item, kind: item.kind === "appendix" ? "document" : "appendix" }
+          ? {
+              ...item,
+              kind: item.kind === "appendix" ? "document" : "appendix",
+            }
           : item,
       ),
     );
   }
 
-  function setFileKind(id: string, kind: FileKind) {
+  function setFileClassification(
+    id: string,
+    kind: FileKind,
+    metadata?: {
+      contractNumber?: string;
+      baseContractNumber?: string;
+      matchedBaseContractId?: string;
+    },
+  ) {
     setFiles((current) =>
-      current.map((item) => (item.id === id ? { ...item, kind } : item)),
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              kind,
+              aiDocumentType: kind,
+              aiContractNumber: kind === "document" ? metadata?.contractNumber?.trim() : undefined,
+              baseContractNumber: kind === "appendix" ? metadata?.baseContractNumber : undefined,
+              matchedBaseContractId: kind === "appendix" ? metadata?.matchedBaseContractId : undefined,
+            }
+          : item,
+      ),
     );
   }
 
@@ -55,36 +75,23 @@ export function useContractUploads({
 
   async function uploadOne(contractId: string, pending: PendingFile) {
     patchFile(pending.id, { status: "uploading", progress: 0, error: undefined });
-
-    // 1. Ask the server for a presigned PUT (authorization happens there)
-    const presignResponse = await fetch("/api/files/upload-url", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contractId,
-        filename: pending.file.name,
-        mimeType: pending.file.type,
-        fileSize: pending.file.size,
-        kind: pending.kind,
-      }),
-    });
-
-    if (!presignResponse.ok) {
-      const payload = await presignResponse.json().catch(() => null);
-      throw new Error(
-        payload?.error ?? `Không lấy được URL tải lên (HTTP ${presignResponse.status})`,
-      );
+    const mimeType = resolveUploadMimeType(pending.file);
+    if (!mimeType) {
+      throw new Error("Không xác định được định dạng tệp. Chỉ chấp nhận PDF, PNG hoặc JPG.");
     }
 
-    const { fileId, objectKey, uploadUrl } = (await presignResponse.json()) as {
-      fileId: string;
-      objectKey: string;
-      uploadUrl: string;
-    };
+    // 1. Ask the server for a presigned PUT (authorization happens there)
+    const { fileId, objectKey, uploadUrl } = await requestContractUploadUrl({
+      contractId,
+      filename: pending.file.name,
+      mimeType,
+      fileSize: pending.file.size,
+      kind: pending.kind,
+    });
 
     // 2. Upload the bytes straight to R2
     await putFileWithProgress(uploadUrl, pending.file, {
-      contentType: pending.file.type,
+      contentType: mimeType,
       onProgress: (progress) => patchFile(pending.id, { progress: progress.percent }),
     });
 
@@ -96,7 +103,7 @@ export function useContractUploads({
       fileId,
       objectKey,
       filename: pending.file.name,
-      mimeType: pending.file.type,
+      mimeType,
       fileSize: pending.file.size,
       kind: pending.kind,
     });
@@ -119,18 +126,41 @@ export function useContractUploads({
     setUploadError(null);
 
     const failures: string[] = [];
-
-    await Promise.all(
-      queue.map(async (pending) => {
-        try {
-          await uploadOne(contractId, pending);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Tải lên thất bại";
-          failures.push(`${pending.file.name}: ${message}`);
-          patchFile(pending.id, { status: "error", error: message });
+    const retryQueue = queue.filter((item) => item.status === "pending" || item.status === "error");
+    const uploadGroup = async (group: PendingFile[]) => {
+      let nextIndex = 0;
+      const uploadWorker = async () => {
+        while (nextIndex < group.length) {
+          const pending = group[nextIndex];
+          if (!pending) return;
+          nextIndex += 1;
+          try {
+            await uploadOne(contractId, pending);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Tải lên thất bại";
+            failures.push(`${pending.file.name}: ${message}`);
+            patchFile(pending.id, { status: "error", error: message });
+          }
         }
-      }),
-    );
+      };
+
+      // Giới hạn số PUT đồng thời để tránh nghẽn mạng khi chọn nhiều PDF lớn.
+      await Promise.all(
+        Array.from({ length: Math.min(2, group.length) }, () => uploadWorker()),
+      );
+    };
+
+    const documentQueue = retryQueue.filter((item) => item.kind === "document");
+    const appendixQueue = retryQueue.filter((item) => item.kind === "appendix");
+    await uploadGroup(documentQueue);
+
+    if (failures.length === 0) {
+      await uploadGroup(appendixQueue);
+    } else if (appendixQueue.length > 0) {
+      const message = "Tạm dừng tải phụ lục vì hợp đồng chính chưa tải lên thành công.";
+      failures.push(message);
+      appendixQueue.forEach((item) => patchFile(item.id, { status: "error", error: message }));
+    }
 
     if (failures.length === 0) {
       setPhase("idle");
@@ -173,9 +203,8 @@ export function useContractUploads({
     failedCount,
     hasFiles,
     busy,
-    mergeFiles,
     toggleFileKind,
-    setFileKind,
+    setFileClassification,
     removeFileById,
     runUploads,
     retryUploads,

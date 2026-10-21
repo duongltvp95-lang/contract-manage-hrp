@@ -6,7 +6,11 @@
  * this from a Client Component.
  */
 
-import type { FileKind } from "@schemas/file";
+import {
+  ALLOWED_MIME_TYPES,
+  type AllowedMimeType,
+  type FileKind,
+} from "@schemas/file";
 
 export type PendingFileStatus = "pending" | "uploading" | "done" | "error";
 
@@ -20,6 +24,13 @@ export type PendingFile = {
   error?: string;
   /** Round 16 — main document vs PDF appendix. */
   kind: FileKind;
+  /** AI classification is tracked separately so a later UI update cannot lose a detected appendix. */
+  aiDocumentType?: FileKind;
+  /** AI-read contract number for a confirmed main-contract document. */
+  aiContractNumber?: string;
+  /** AI-extracted parent contract metadata used to validate appendix pairing before save. */
+  baseContractNumber?: string;
+  matchedBaseContractId?: string;
   /** Set once the server has reserved the object key. */
   fileId?: string;
   objectKey?: string;
@@ -30,6 +41,92 @@ export type UploadProgress = {
   total: number;
   percent: number;
 };
+
+/**
+ * Browsers and operating systems sometimes leave File.type empty or report a
+ * non-standard PDF/JPEG MIME. Prefer a supported declared type, then fall back
+ * to the file extension so presign, PUT, and DB metadata use one value.
+ */
+export function resolveUploadMimeType(
+  file: Pick<File, "name" | "type">,
+): AllowedMimeType | null {
+  const declaredType = file.type.trim().toLowerCase();
+  const declaredAllowedType = ALLOWED_MIME_TYPES.find((mimeType) => mimeType === declaredType);
+  if (declaredAllowedType) return declaredAllowedType;
+
+  const filename = file.name.toLowerCase();
+  if (filename.endsWith(".pdf")) return "application/pdf";
+  if (filename.endsWith(".png")) return "image/png";
+  if (/\.jpe?g$/.test(filename)) return "image/jpeg";
+  return null;
+}
+
+export type ContractUploadRequest = {
+  contractId: string;
+  filename: string;
+  mimeType: AllowedMimeType;
+  fileSize: number;
+  kind: FileKind;
+};
+
+export type ContractUploadUrl = {
+  fileId: string;
+  objectKey: string;
+  uploadUrl: string;
+};
+
+/** Retry only transient presign failures; the endpoint has no persistent side effects. */
+export async function requestContractUploadUrl(
+  input: ContractUploadRequest,
+  maxAttempts = 2,
+): Promise<ContractUploadUrl> {
+  const attempts = Number.isFinite(maxAttempts) ? Math.max(1, Math.trunc(maxAttempts)) : 2;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    let response: Response;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20_000);
+    try {
+      response = await fetch("/api/files/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (attempt >= attempts) {
+        throw new Error(
+          error instanceof Error
+            ? `Không kết nối được tới dịch vụ tạo URL tải lên: ${error.message}`
+            : "Không kết nối được tới dịch vụ tạo URL tải lên",
+        );
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 500 * attempt));
+      continue;
+    }
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      const message = payload?.error ?? `Không lấy được URL tải lên (HTTP ${response.status})`;
+      const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+      if (retryable && attempt < attempts) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 500 * attempt));
+        continue;
+      }
+      throw new Error(message);
+    }
+
+    const payload = (await response.json()) as Partial<ContractUploadUrl>;
+    if (!payload.fileId || !payload.objectKey || !payload.uploadUrl) {
+      throw new Error("Dịch vụ không trả về đủ thông tin URL tải lên.");
+    }
+    return payload as ContractUploadUrl;
+  }
+
+  throw new Error("Không thể tạo URL tải lên sau nhiều lần thử.");
+}
 
 /**
  * PUTs one file straight to R2 and reports real progress.
@@ -43,12 +140,21 @@ export function putFileWithProgress(
   options: {
     contentType: string;
     onProgress?: (progress: UploadProgress) => void;
+    timeoutMs?: number;
+    maxAttempts?: number;
   },
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
+  const configuredAttempts = options.maxAttempts ?? 2;
+  const maxAttempts = Number.isFinite(configuredAttempts)
+    ? Math.max(1, Math.trunc(configuredAttempts))
+    : 2;
+  const timeoutMs = options.timeoutMs ?? 5 * 60 * 1000;
+
+  const putOnce = () => new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
 
     xhr.open("PUT", url, true);
+    xhr.timeout = timeoutMs;
     xhr.setRequestHeader("Content-Type", options.contentType);
 
     xhr.upload.onprogress = (event) => {
@@ -70,9 +176,35 @@ export function putFileWithProgress(
 
     xhr.onerror = () => reject(new Error("Không kết nối được tới R2"));
     xhr.onabort = () => reject(new Error("Đã huỷ tải lên"));
+    xhr.ontimeout = () => reject(new Error("Tải tệp lên R2 quá thời gian chờ"));
 
     xhr.send(file);
   });
+
+  const isRetryable = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const status = message.match(/HTTP\s+(\d{3})/i)?.[1];
+    if (status) {
+      const code = Number(status);
+      return code === 408 || code === 429 || code >= 500;
+    }
+    return message.includes("Không kết nối được tới R2") || message.includes("quá thời gian chờ");
+  };
+
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  return (async () => {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await putOnce();
+        return;
+      } catch (error) {
+        if (attempt >= maxAttempts || !isRetryable(error)) throw error;
+        options.onProgress?.({ loaded: 0, total: file.size, percent: 0 });
+        await pause(500 * attempt);
+      }
+    }
+  })();
 }
 
 export function inferFileKindFromFilename(filename: string): FileKind {

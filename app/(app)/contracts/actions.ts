@@ -2,7 +2,12 @@
 
 import { after } from "next/server";
 
-import { CompleteUploadSchema, type CompleteUploadInput } from "@schemas/file";
+import {
+  AI_GEMINI_FILES_API_MIN_BYTES,
+  CompleteUploadSchema,
+  type FileKind,
+  type CompleteUploadInput,
+} from "@schemas/file";
 
 import {
   archiveContract,
@@ -40,17 +45,17 @@ import {
 } from "@/lib/ai/gemini";
 import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
 import { aiLog } from "@/lib/ai/log";
+import { consumeRateLimit } from "@/lib/rate-limit";
+import { rateLimitMessage } from "@/lib/rate-limit-policy";
 import {
   calculateExpiryDateFromDuration,
   cleanEntityName,
   findBestMatchingCompany,
   findBestMatchingPartner,
-  isInternalCompany,
   normalizeDurationText,
   reconcileContractParties,
 } from "@/lib/ai/matching";
 import {
-  findOrCreatePartnerForAi,
   listCompanies,
   searchPartners,
 } from "@/lib/services/partners";
@@ -67,9 +72,121 @@ import {
 
 export async function createContractAction(
   input: unknown,
+  uploadIntents: unknown,
 ): Promise<ActionResult<ContractRow>> {
   const access = await authorized();
   if (!access.ok) return access.result;
+
+  if (!Array.isArray(uploadIntents)) {
+    return validationFailure("Không thể xác nhận loại tệp cần lưu", [
+      { path: "files", message: "Vui lòng tải lại biểu mẫu rồi thử lại" },
+    ]);
+  }
+
+  const parsedIntents: Array<{
+    kind: FileKind;
+    aiDocumentType: FileKind | null;
+    baseContractNumber: string;
+    aiContractNumber: string;
+    matchedBaseContractId: string;
+  }> = [];
+
+  for (const intent of uploadIntents) {
+    if (!intent || typeof intent !== "object") {
+      return validationFailure("Thông tin tệp không hợp lệ", [
+        { path: "files", message: "Vui lòng tải lại tệp rồi thử lại" },
+      ]);
+    }
+
+    const candidate = intent as Record<string, unknown>;
+    const kind = candidate.kind;
+    const aiDocumentType = candidate.aiDocumentType;
+    if (
+      (kind !== "document" && kind !== "appendix") ||
+      (aiDocumentType !== undefined && aiDocumentType !== null &&
+        aiDocumentType !== "document" && aiDocumentType !== "appendix")
+    ) {
+      return validationFailure("Thông tin phân loại tệp không hợp lệ", [
+        { path: "files", message: "Vui lòng tải lại tệp rồi thử lại" },
+      ]);
+    }
+
+    parsedIntents.push({
+      kind,
+      aiDocumentType: aiDocumentType === "document" || aiDocumentType === "appendix"
+        ? aiDocumentType
+        : null,
+      baseContractNumber: typeof candidate.baseContractNumber === "string"
+        ? candidate.baseContractNumber.trim()
+        : "",
+      aiContractNumber: typeof candidate.aiContractNumber === "string"
+        ? candidate.aiContractNumber.trim()
+        : "",
+      matchedBaseContractId: typeof candidate.matchedBaseContractId === "string"
+        ? candidate.matchedBaseContractId
+        : "",
+    });
+  }
+
+  const appendixIntents = parsedIntents.filter(
+    (intent) => intent.kind === "appendix" || intent.aiDocumentType === "appendix",
+  );
+  if (appendixIntents.length > 0) {
+    const mainIntents = parsedIntents.filter(
+      (intent) => intent.kind === "document" && intent.aiDocumentType !== "appendix",
+    );
+    if (mainIntents.length === 0) {
+      return validationFailure(
+        "Không thể lưu hợp đồng khi chưa có hợp đồng gốc được tải lên hệ thống từ trước. Vui lòng tải lên và tạo hợp đồng gốc trước.",
+        [{ path: "files", message: "Phụ lục không thể tạo hồ sơ hợp đồng độc lập khi chưa có hợp đồng gốc" }],
+      );
+    }
+
+    const values = input && typeof input === "object"
+      ? input as Record<string, unknown>
+      : {};
+    const formContractNumber = typeof values.contractNumber === "string"
+      ? values.contractNumber.trim().toLocaleLowerCase()
+      : "";
+
+    for (const appendix of appendixIntents) {
+      const baseNumber = appendix.baseContractNumber;
+      const normalizedBaseNumber = baseNumber.toLocaleLowerCase();
+      const hasMatchingMainFile = Boolean(
+        normalizedBaseNumber &&
+        parsedIntents.some((intent) =>
+          intent.kind === "document" &&
+          intent.aiDocumentType !== "appendix" &&
+          intent.aiContractNumber.toLocaleLowerCase() === normalizedBaseNumber,
+        ),
+      );
+      const existingBase = baseNumber
+        ? await findBaseContractByNumber({
+            contractNumber: baseNumber,
+            organizationId: access.user.organizationId,
+          })
+        : null;
+
+      if (appendix.matchedBaseContractId || existingBase) {
+        return validationFailure(
+          `Phụ lục thuộc hợp đồng gốc${baseNumber ? ` số ${baseNumber}` : " đã có"} trên hệ thống. Hãy gán phụ lục trực tiếp vào hợp đồng đó.`,
+          [{ path: "files", message: "Không tạo hồ sơ mới từ phụ lục của hợp đồng đã tồn tại" }],
+        );
+      }
+
+      if (
+        !baseNumber ||
+        !hasMatchingMainFile ||
+        !formContractNumber ||
+        formContractNumber !== normalizedBaseNumber
+      ) {
+        return validationFailure(
+          "Không thể lưu phụ lục khi chưa có hợp đồng gốc tương ứng được tải lên từ trước. Hãy tải lên và tạo hợp đồng gốc trước khi lưu.",
+          [{ path: "files", message: "Phụ lục cần một tệp hợp đồng chính có số hợp đồng khớp" }],
+        );
+      }
+    }
+  }
 
   const result = await createContract((input ?? {}) as Record<string, unknown>, {
     userId: access.user.id,
@@ -257,6 +374,39 @@ async function withIoAbort<T>(
   }
 }
 
+async function measureAiStage<T>(
+  traceId: string,
+  stage: string,
+  action: () => Promise<T>,
+  context?: Record<string, unknown>,
+): Promise<T> {
+  const startedAt = Date.now();
+  let outcome: "ok" | "error" = "ok";
+  try {
+    const result = await action();
+    if (
+      typeof result === "object" &&
+      result !== null &&
+      "ok" in result &&
+      result.ok === false
+    ) {
+      outcome = "error";
+    }
+    return result;
+  } catch (error) {
+    outcome = "error";
+    throw error;
+  } finally {
+    aiLog.info("Giai đoạn AI hoàn tất", {
+      traceId,
+      stage,
+      outcome,
+      elapsedMs: Date.now() - startedAt,
+      ...context,
+    });
+  }
+}
+
 /**
  * AI Contract Extractor — trích xuất tự động thông tin từ tệp PDF/ảnh bằng Google Gemini.
  */
@@ -264,8 +414,19 @@ export async function extractContractAction(
   formData: FormData,
 ): Promise<ActionResult<ExtractedContractResult>> {
   const actionStartTime = Date.now();
+  const requestedTraceId = formData.get("traceId");
+  const traceId =
+    typeof requestedTraceId === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestedTraceId)
+      ? requestedTraceId
+      : crypto.randomUUID();
   const TOTAL_ACTION_BUDGET_MS = 48_000; // 48s: chừa tối thiểu 12s biên an toàn trước 60s của Vercel
   const actionDeadline = actionStartTime + TOTAL_ACTION_BUDGET_MS;
+  let actionStatus: "success" | "returned_error" = "returned_error";
+  let inputSizeBytes: number | null = null;
+  const source = typeof formData.get("objectKey") === "string" ? "r2" : "server-action";
+
+  aiLog.info("Bắt đầu trích xuất hợp đồng", { traceId, source });
 
   // G2 v2: khai báo ngoài try để finally có thể truy cập cleanup.
   let geminiFileName: string | null = null;
@@ -278,9 +439,7 @@ export async function extractContractAction(
     if (!access.ok) return access.result;
 
     const cleanupR2 = (key: string) => {
-      // Đăng ký tác vụ nền với Next.js after() / Vercel lifecycle để bảo đảm
-      // function không bị đóng băng trước khi lệnh xóa R2 hoàn tất, đồng thời
-      // tuyệt đối không chặn luồng trả về kết quả cho client.
+      // Đăng ký dọn tệp tạm sau khi phản hồi để không kéo dài thời gian AI.
       try {
         after(async () => {
           await deleteObject(key, { timeoutMs: 5_000 }).catch(() => {});
@@ -289,6 +448,44 @@ export async function extractContractAction(
         void deleteObject(key, { timeoutMs: 5_000 }).catch(() => {});
       }
     };
+
+    const ownedObjectKey =
+      typeof objectKey === "string" &&
+      objectKey.startsWith(`ai-temp/${access.user.organizationId}/`)
+        ? objectKey
+        : null;
+    const rateLimitTimeoutMs = Math.min(
+      3_000,
+      Math.max(500, actionDeadline - Date.now() - 10_000),
+    );
+    const rateLimit = await measureAiStage(
+      traceId,
+      "rate_limit",
+      () =>
+        consumeRateLimit("ai:extract", {
+          abortSignal: AbortSignal.timeout(rateLimitTimeoutMs),
+        }),
+    );
+    if (!rateLimit.ok) {
+      if (ownedObjectKey) cleanupR2(ownedObjectKey);
+      aiLog.error("Không kiểm tra được giới hạn trích xuất AI; từ chối yêu cầu", {
+        traceId,
+        errorMessage: rateLimit.message,
+      });
+      return {
+        ok: false,
+        code: "rate_limit_unavailable",
+        message: "Dịch vụ giới hạn tần suất tạm thời không khả dụng, vui lòng thử lại sau.",
+      };
+    }
+    if (!rateLimit.data.allowed) {
+      if (ownedObjectKey) cleanupR2(ownedObjectKey);
+      return {
+        ok: false,
+        code: "rate_limited",
+        message: rateLimitMessage(rateLimit.data),
+      };
+    }
 
     let buffer: Buffer;
     let filename = "document.pdf";
@@ -314,7 +511,11 @@ export async function extractContractAction(
 
       // Kiểm tra Content-Length thực tế bằng HEAD trước khi tải toàn bộ object vào bộ nhớ
       const headTimeoutMs = Math.min(5_000, Math.max(1_000, actionDeadline - Date.now() - 15_000));
-      const head = await headObject(objectKey, { timeoutMs: headTimeoutMs });
+      const head = await measureAiStage(
+        traceId,
+        "r2_head",
+        () => headObject(objectKey, { timeoutMs: headTimeoutMs }),
+      );
       if (!head.exists || head.contentLength === null) {
         cleanupR2(objectKey);
         return validationFailure("Không tìm thấy tệp", [
@@ -344,7 +545,11 @@ export async function extractContractAction(
       }
 
       const downloadTimeoutMs = Math.min(18_000, Math.max(1_000, actionDeadline - Date.now() - 12_000));
-      const downloaded = await getObjectBuffer(objectKey, { timeoutMs: downloadTimeoutMs });
+      const downloaded = await measureAiStage(
+        traceId,
+        "r2_download",
+        () => getObjectBuffer(objectKey, { timeoutMs: downloadTimeoutMs }),
+      );
       cleanupR2(objectKey);
 
       if (!downloaded) {
@@ -364,6 +569,7 @@ export async function extractContractAction(
       }
 
       buffer = downloaded;
+      inputSizeBytes = buffer.length;
       filename = (formData.get("filename") as string) || "document.pdf";
       mimeType = (formData.get("mimeType") as string) || "application/pdf";
     } else {
@@ -386,12 +592,29 @@ export async function extractContractAction(
 
       const arrayBuffer = await file.arrayBuffer();
       buffer = Buffer.from(arrayBuffer);
+      inputSizeBytes = buffer.length;
       filename = file.name;
       mimeType = file.type;
     }
 
     // Kiểm tra định dạng tệp trước khi upload lên Gemini Files API
     const resolvedMime = resolveMimeType(filename, mimeType);
+    const clientR2UploadValue = formData.get("clientR2UploadMs");
+    const rawClientR2UploadMs =
+      typeof clientR2UploadValue === "string" ? Number(clientR2UploadValue) : Number.NaN;
+    const clientR2UploadMs =
+      Number.isFinite(rawClientR2UploadMs) &&
+      rawClientR2UploadMs >= 0 &&
+      rawClientR2UploadMs <= 300_000
+        ? rawClientR2UploadMs
+        : undefined;
+    aiLog.info("Tệp AI đã được nhận", {
+      traceId,
+      sizeBytes: inputSizeBytes,
+      mimeType: resolvedMime,
+      source,
+      clientR2UploadMs,
+    });
     if (!ALLOWED_MIME_TYPES.has(resolvedMime)) {
       return validationFailure("Định dạng tệp không được hỗ trợ", [
         {
@@ -413,42 +636,47 @@ export async function extractContractAction(
       ]);
     }
 
-    // Chọn chiến lược gửi cho Gemini theo dung lượng:
-    // - Tệp >= 2 MB: Tải lên Gemini Files API để tránh body base64 quá lớn làm nghẽn mạng/timeout khi retry.
-    // - Tệp < 2 MB: Bỏ qua Files API, gửi trực tiếp (hoặc qua text layer PDF) để tiết kiệm 2 lượt mạng (upload + delete).
-    const FILES_API_THRESHOLD_BYTES = 2 * 1024 * 1024; // 2 MB
+    // Các tệp lớn dùng Files API; lỗi upload trả về ngay thay vì âm thầm gửi
+    // một body base64 lớn có thể làm tăng bộ nhớ và kéo dài thời gian xử lý.
     let geminiFileUri: string | null = null;
-    if (apiKey && buffer.length >= FILES_API_THRESHOLD_BYTES) {
-      const uploadRes = await uploadToGeminiFiles({
-        buffer,
-        mimeType,
-        filename,
-        apiKey,
-        timeoutMs: Math.min(
-          20_000,
-          Math.max(1_000, remainingAiBudgetMs - 6_000),
-        ),
-      });
+    if (apiKey && buffer.length >= AI_GEMINI_FILES_API_MIN_BYTES) {
+      const uploadRes = await measureAiStage(
+        traceId,
+        "gemini_files_upload",
+        () => uploadToGeminiFiles({
+          buffer,
+          mimeType,
+          filename,
+          apiKey,
+          traceId,
+          timeoutMs: Math.min(
+            20_000,
+            Math.max(1_000, remainingAiBudgetMs - 6_000),
+          ),
+        }),
+        { sizeBytes: buffer.length },
+      );
       if (uploadRes.ok) {
         geminiFileName = uploadRes.data.name;
         geminiFileUri = uploadRes.data.uri;
       } else {
-        // Upload fail (quota, network, 5xx) → fallback về inlineData base64.
-        // Vẫn có thể trích xuất được, chỉ chậm hơn.
-        aiLog.warn("Upload Gemini Files fail, fallback inlineData", {
-          filename,
+        aiLog.error("Không upload được tệp lớn lên Gemini Files", {
+          traceId,
+          sizeBytes: buffer.length,
+          mimeType,
           errorMessage: uploadRes.message,
         });
+        return {
+          ok: false,
+          code: uploadRes.code,
+          message: uploadRes.message,
+          issues: uploadRes.issues,
+        };
       }
     }
 
     const remainingExtractBudgetMs = actionDeadline - Date.now() - 5_000;
     if (remainingExtractBudgetMs < 6_000) {
-      if (geminiFileName && apiKey) {
-        const fileToDelete = geminiFileName;
-        geminiFileName = null;
-        await deleteGeminiFile(fileToDelete, apiKey);
-      }
       return validationFailure("Hệ thống hết thời gian xử lý", [
         {
           path: "file",
@@ -457,21 +685,20 @@ export async function extractContractAction(
       ]);
     }
 
-    const extractionResult = await extractContractFromBuffer({
-      buffer,
-      mimeType,
-      filename,
-      geminiFileName: geminiFileUri ? geminiFileName ?? undefined : undefined,
-      geminiFileUri: geminiFileUri ?? undefined,
-      remainingBudgetMs: remainingExtractBudgetMs,
-    });
-
-    // Dọn dẹp tệp Gemini NGAY LẬP TỨC sau khi trích xuất xong (không chờ các bước DB phía sau)
-    if (geminiFileName && apiKey) {
-      const fileToDelete = geminiFileName;
-      geminiFileName = null; // Tránh dọn dẹp lặp lại ở finally
-      await deleteGeminiFile(fileToDelete, apiKey);
-    }
+    const extractionResult = await measureAiStage(
+      traceId,
+      "gemini_extract",
+      () => extractContractFromBuffer({
+        buffer,
+        mimeType,
+        filename,
+        geminiFileName: geminiFileUri ? geminiFileName ?? undefined : undefined,
+        geminiFileUri: geminiFileUri ?? undefined,
+        remainingBudgetMs: remainingExtractBudgetMs,
+        traceId,
+      }),
+      { sizeBytes: buffer.length, mimeType: resolvedMime },
+    );
 
     if (!extractionResult.ok) {
       return fromService(extractionResult);
@@ -504,150 +731,80 @@ export async function extractContractAction(
     extracted.partnerName = reconciled.partnerName;
     extracted.companyName = reconciled.companyName;
 
-    // Tìm kiếm đối tác và công ty tương đồng trong tổ chức hiện tại
+    // Tìm các dữ liệu tham chiếu độc lập song song. Không tạo partner tại đây:
+    // việc tạo chỉ xảy ra sau khi người dùng chủ động xác nhận trong form.
     let matchedPartner: { id: string; name: string } | null = null;
     let matchedCompany: { id: string; name: string } | null = null;
-    let isNewPartner = false;
     let duplicate: Awaited<ReturnType<typeof findDuplicateContract>> = null;
     let matchedBaseContract: MatchedBaseContract | null = null;
 
-    // Chỉ thực hiện các truy vấn DB bổ sung nếu ngân sách còn ít nhất 3 giây
-    if (actionDeadline - Date.now() >= 3_000) {
-      const searchTerm = extracted.partnerName ? cleanEntityName(extracted.partnerName) : "";
-      const remainingForDb = actionDeadline - Date.now() - 1_000;
-      const partnerTimeout = Math.min(2_000, Math.max(300, Math.floor(remainingForDb / 3)));
-
-      let partnersRes = await withIoAbort(
-        (signal) => searchPartners(searchTerm, { abortSignal: signal }),
-        partnerTimeout,
-        { ok: false } as Awaited<ReturnType<typeof searchPartners>>,
+    const searchTerm = extracted.partnerName ? cleanEntityName(extracted.partnerName) : "";
+    const baseContractTarget =
+      extracted.baseContractNumber ||
+      (extracted.documentType === "appendix" ? extracted.contractNumber : "");
+    const remainingForDb = actionDeadline - Date.now() - 1_000;
+    if (remainingForDb >= 500) {
+      const lookupTimeoutMs = Math.min(1_500, remainingForDb);
+      const [partnersRes, companiesRes, duplicateResult, baseContractResult] = await measureAiStage(
+        traceId,
+        "db_enrichment",
+        () => Promise.all([
+          searchTerm
+            ? withIoAbort(
+                (signal) => searchPartners(searchTerm, { abortSignal: signal }),
+                lookupTimeoutMs,
+                { ok: false } as Awaited<ReturnType<typeof searchPartners>>,
+              )
+            : Promise.resolve({ ok: false } as Awaited<ReturnType<typeof searchPartners>>),
+          withIoAbort(
+            (signal) =>
+              listCompanies(
+                { organizationId: access.user.organizationId },
+                { abortSignal: signal },
+              ),
+            lookupTimeoutMs,
+            { ok: false } as Awaited<ReturnType<typeof listCompanies>>,
+          ),
+          extracted.documentType !== "appendix" && extracted.contractNumber
+            ? withIoAbort(
+                (signal) =>
+                  findDuplicateContract(
+                    {
+                      contractNumber: extracted.contractNumber,
+                      signedDate: extracted.signedDate,
+                      expiryDate: extracted.expiryDate,
+                      organizationId: access.user.organizationId,
+                    },
+                    { abortSignal: signal },
+                  ),
+                Math.min(1_000, lookupTimeoutMs),
+                null,
+              )
+            : Promise.resolve(null),
+          baseContractTarget
+            ? withIoAbort(
+                (signal) =>
+                  findBaseContractByNumber(
+                    {
+                      contractNumber: baseContractTarget,
+                      organizationId: access.user.organizationId,
+                    },
+                    { abortSignal: signal },
+                  ),
+                Math.min(1_000, lookupTimeoutMs),
+                null,
+              )
+            : Promise.resolve(null),
+        ]),
+        { lookupTimeoutMs },
       );
-
-      if (
-        (!partnersRes.ok || partnersRes.data.length === 0) &&
-        searchTerm !== "" &&
-        actionDeadline - Date.now() >= 2_500
-      ) {
-        partnersRes = await withIoAbort(
-          (signal) => searchPartners("", { abortSignal: signal }),
-          partnerTimeout,
-          { ok: false } as Awaited<ReturnType<typeof searchPartners>>,
-        );
-      }
-
-      const companiesRes =
-        actionDeadline - Date.now() >= 2_000
-          ? await withIoAbort(
-              (signal) =>
-                listCompanies(
-                  { organizationId: access.user.organizationId },
-                  { abortSignal: signal },
-                ),
-              partnerTimeout,
-              { ok: false } as Awaited<ReturnType<typeof listCompanies>>,
-            )
-          : ({ ok: false } as Awaited<ReturnType<typeof listCompanies>>);
 
       const partners = partnersRes.ok ? partnersRes.data : [];
       const companies = companiesRes.ok ? companiesRes.data : [];
-
       matchedPartner = findBestMatchingPartner(extracted.partnerName, partners);
       matchedCompany = findBestMatchingCompany(extracted.companyName, companies);
-
-      const trimmedPartnerName = extracted.partnerName?.trim() ?? "";
-
-      // Idempotency: nếu fuzzy match chưa khớp nhưng danh sách đã có đối tác cùng tên chính xác
-      if (!matchedPartner && trimmedPartnerName.length > 0) {
-        const exactMatch = partners.find(
-          (p) => p.name.trim().toLowerCase() === trimmedPartnerName.toLowerCase(),
-        );
-        if (exactMatch) {
-          matchedPartner = { id: exactMatch.id, name: exactMatch.name };
-        }
-      }
-
-      // Nếu trong danh bạ chưa có đối tác này, AI đọc được tên đối tác và TUYỆT ĐỐI không phải công ty nội bộ:
-      // Tự động tìm hoặc tạo mới đối tác với cơ chế nguyên tử (Postgres advisory lock + in-process mutex)
-      // nếu vẫn còn ít nhất 4.0s trước deadline.
-      if (
-        !matchedPartner &&
-        trimmedPartnerName.length > 0 &&
-        !isInternalCompany(trimmedPartnerName) &&
-        actionDeadline - Date.now() >= 4_000
-      ) {
-        const targetCompanyIds = matchedCompany?.id
-          ? [matchedCompany.id]
-          : companies.length > 0
-            ? [companies[0].id]
-            : [];
-
-        if (targetCompanyIds.length > 0) {
-          let taxCode = extracted.partnerTaxCode?.trim() || "";
-          if (!/^\d{10}(-\d{3})?$/.test(taxCode)) {
-            taxCode = "";
-          }
-
-          const createBudgetMs = Math.min(2_500, Math.max(1_000, actionDeadline - Date.now() - 1_500));
-          const aiPartnerRes = await findOrCreatePartnerForAi(
-            {
-              name: trimmedPartnerName,
-              taxCode: taxCode || undefined,
-              address: extracted.partnerAddress?.trim() || undefined,
-              companyIds: targetCompanyIds,
-            },
-            { organizationId: access.user.organizationId },
-            { abortSignal: AbortSignal.timeout(createBudgetMs) },
-          );
-
-          if (aiPartnerRes.ok) {
-            matchedPartner = {
-              id: aiPartnerRes.data.id,
-              name: aiPartnerRes.data.name,
-            };
-            isNewPartner = aiPartnerRes.data.isNew;
-          }
-        }
-      }
-
-      if (
-        extracted.documentType !== "appendix" &&
-        extracted.contractNumber &&
-        actionDeadline - Date.now() >= 1_500
-      ) {
-        duplicate = await withIoAbort(
-          (signal) =>
-            findDuplicateContract(
-              {
-                contractNumber: extracted.contractNumber,
-                signedDate: extracted.signedDate,
-                expiryDate: extracted.expiryDate,
-                organizationId: access.user.organizationId,
-              },
-              { abortSignal: signal },
-            ),
-          1_000,
-          null,
-        );
-      }
-
-      const baseContractTarget =
-        extracted.baseContractNumber ||
-        (extracted.documentType === "appendix" ? extracted.contractNumber : "");
-
-      if (baseContractTarget && actionDeadline - Date.now() >= 1_200) {
-        matchedBaseContract = await withIoAbort(
-          (signal) =>
-            findBaseContractByNumber(
-              {
-                contractNumber: baseContractTarget,
-                organizationId: access.user.organizationId,
-              },
-              { abortSignal: signal },
-            ),
-          1_000,
-          null,
-        );
-      }
+      duplicate = duplicateResult;
+      matchedBaseContract = baseContractResult;
     }
 
     const result: ExtractedContractResult = {
@@ -656,18 +813,19 @@ export async function extractContractAction(
       matchedPartnerName: matchedPartner?.name ?? null,
       matchedCompanyId: matchedCompany?.id ?? null,
       matchedCompanyName: matchedCompany?.name ?? null,
-      isNewPartner,
       isDuplicate: Boolean(duplicate),
       duplicateContractId: duplicate?.id ?? null,
       matchedBaseContract: matchedBaseContract ?? null,
     };
 
+    actionStatus = "success";
     return {
       ok: true,
       data: result,
     };
   } catch (error) {
     aiLog.error("extractContractAction thất bại", {
+      traceId,
       errorMessage: error instanceof Error ? error.message : String(error),
     });
     return {
@@ -682,8 +840,22 @@ export async function extractContractAction(
     // G2 v2: cleanup Gemini file tạm sau khi extract xong (dù thành công hay fail).
     // File Gemini có TTL 48h → xoá ngay để tránh tốn quota.
     if (geminiFileName && apiKey) {
-      await deleteGeminiFile(geminiFileName, apiKey);
+      const fileToDelete = geminiFileName;
+      geminiFileName = null;
+      const cleanup = () => deleteGeminiFile(fileToDelete, apiKey, { traceId });
+      try {
+        after(cleanup);
+      } catch {
+        void cleanup();
+      }
     }
+    aiLog.info("Trích xuất hợp đồng kết thúc", {
+      traceId,
+      outcome: actionStatus,
+      elapsedMs: Date.now() - actionStartTime,
+      sizeBytes: inputSizeBytes,
+      source,
+    });
   }
 }
 

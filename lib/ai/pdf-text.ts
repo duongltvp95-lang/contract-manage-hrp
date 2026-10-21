@@ -26,12 +26,26 @@ export type PdfTextResult = {
 
 const MIN_TEXT_LENGTH = 50; // < 50 ký tự coi như scan
 const TIMEOUT_MS = 8_000;
+const DEFAULT_MAX_PAGES = 20;
+const DEFAULT_MAX_CHARACTERS = 24_000;
+
+export type PdfTextLimits = {
+  maxPages?: number;
+  maxCharacters?: number;
+};
 
 export async function extractPdfText(
   buffer: Buffer,
   timeoutMs: number = TIMEOUT_MS,
+  limits: PdfTextLimits = {},
 ): Promise<PdfTextResult | null> {
   if (!buffer || buffer.length === 0) return null;
+
+  const maxPages = Math.max(1, Math.floor(limits.maxPages ?? DEFAULT_MAX_PAGES));
+  const maxCharacters = Math.max(
+    MIN_TEXT_LENGTH,
+    Math.floor(limits.maxCharacters ?? DEFAULT_MAX_CHARACTERS),
+  );
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let isCancelled = false;
@@ -98,8 +112,10 @@ export async function extractPdfText(
       }
 
       const pageTexts: string[] = [];
-      const maxPages = Math.min(pdf.numPages, 50); // cap 50 trang
-      for (let i = 1; i <= maxPages; i++) {
+      let outputCharacters = 0;
+      let textTruncated = false;
+      const pagesToRead = Math.min(pdf.numPages, maxPages);
+      for (let i = 1; i <= pagesToRead; i++) {
         if (isCancelled) {
           if (pdf && typeof pdf.destroy === "function") {
             pdf.destroy().catch(() => {});
@@ -120,11 +136,40 @@ export async function extractPdfText(
           }
           return null;
         }
-        const text = content.items
-          .map((item) => ("str" in item && typeof item.str === "string" ? item.str : ""))
-          .join(" ");
-        if (text.trim()) {
-          pageTexts.push(text.trim());
+        const itemTexts: string[] = [];
+        let pageCharacters = 0;
+        for (const item of content.items) {
+          if (!("str" in item) || typeof item.str !== "string" || !item.str) continue;
+          const separator = itemTexts.length > 0 ? " " : "";
+          const pageSeparator = pageTexts.length > 0 && itemTexts.length === 0 ? "\n\n" : "";
+          const remaining = maxCharacters - outputCharacters - pageCharacters - separator.length - pageSeparator.length;
+          if (remaining <= 0) {
+            textTruncated = true;
+            break;
+          }
+          const value = item.str.slice(0, remaining);
+          itemTexts.push(value);
+          pageCharacters += separator.length + value.length;
+          if (value.length < item.str.length) {
+            textTruncated = true;
+            break;
+          }
+        }
+
+        const pageText = itemTexts.join(" ").trim();
+        if (pageText) {
+          const pageSeparator = pageTexts.length > 0 ? "\n\n" : "";
+          const remaining = maxCharacters - outputCharacters - pageSeparator.length;
+          const boundedPageText = pageText.slice(0, Math.max(0, remaining));
+          if (boundedPageText) {
+            pageTexts.push(boundedPageText);
+            outputCharacters += pageSeparator.length + boundedPageText.length;
+          }
+          if (boundedPageText.length < pageText.length) textTruncated = true;
+        }
+
+        if (textTruncated) {
+          break;
         }
       }
 
@@ -132,12 +177,12 @@ export async function extractPdfText(
         pdf.destroy().catch(() => {});
       }
 
-      const isTruncated = pdf.numPages > 50;
+      const isTruncated = pdf.numPages > pagesToRead || textTruncated;
+      let fullText = pageTexts.join("\n\n").trim();
       if (isTruncated) {
-        pageTexts.push(`[Lưu ý: Tài liệu gồm ${pdf.numPages} trang. Hệ thống đã trích xuất 50 trang đầu tiên.]`);
+        const note = `\n\n[Lưu ý: Nội dung đã được giới hạn ở ${pagesToRead} trang đầu và tối đa ${maxCharacters} ký tự.]`;
+        fullText = `${fullText.slice(0, Math.max(0, maxCharacters - note.length))}${note}`;
       }
-
-      const fullText = pageTexts.join("\n\n").trim();
       if (fullText.length < MIN_TEXT_LENGTH) {
         return null;
       }

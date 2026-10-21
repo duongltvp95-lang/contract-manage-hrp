@@ -44,6 +44,24 @@ export type ContractFileRow = {
 export const CONTRACT_FILE_COLUMNS =
   "id, organization_id, contract_id, storage_provider, bucket, object_key, original_filename, mime_type, file_size, checksum, created_by, created_at, kind";
 
+async function discardRejectedUpload(objectKey: string, message: string) {
+  try {
+    await deleteObject(objectKey, { timeoutMs: 3_000 });
+  } catch (cleanupError) {
+    const queued = await enqueueR2Cleanup({
+      objectKey,
+      reason: "upload_db_failed",
+      lastError: `${message}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+    });
+    if (!queued) {
+      console.error("[service:completeUpload] Không thể xóa hoặc ghi cleanup intent cho upload bị từ chối", {
+        objectKey,
+        cleanupError,
+      });
+    }
+  }
+}
+
 export type FileAccess = {
   contractId: string;
   file: ContractFileRow | null;
@@ -170,6 +188,25 @@ export async function createUploadRequest(
     return access;
   }
 
+  if (input.kind === "appendix") {
+    const supabase = await createClient();
+    const { data: mainDocument, error: mainDocumentError } = await supabase
+      .from("contract_files")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("contract_id", contractId)
+      .eq("kind", "document")
+      .limit(1)
+      .maybeSingle();
+
+    if (mainDocumentError) {
+      return dbError("createUploadRequest.requireMainDocument", mainDocumentError);
+    }
+    if (!mainDocument) {
+      return err("validation", "Cần tải tệp hợp đồng chính lên trước khi tải phụ lục.");
+    }
+  }
+
   const fileId = crypto.randomUUID();
   const objectKey = buildObjectKey({
     organizationId,
@@ -229,7 +266,48 @@ export async function completeUpload(
     return err("forbidden", "objectKey không khớp với hợp đồng");
   }
 
-  const head = await headObject(objectKey, { timeoutMs: 5_000 });
+  const supabase = await createClient();
+  if (input.kind === "appendix") {
+    const { data: mainDocument, error: mainDocumentError } = await supabase
+      .from("contract_files")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("contract_id", contractId)
+      .eq("kind", "document")
+      .limit(1)
+      .maybeSingle();
+
+    if (mainDocumentError) {
+      await discardRejectedUpload(objectKey, "Không kiểm tra được hợp đồng chính trước khi lưu phụ lục");
+      return dbError("completeUpload.requireMainDocument", mainDocumentError);
+    }
+    if (!mainDocument) {
+      await discardRejectedUpload(objectKey, "Từ chối lưu phụ lục khi chưa có hợp đồng chính");
+      return err("validation", "Cần tải tệp hợp đồng chính lên trước khi lưu phụ lục.");
+    }
+  }
+
+  let head: Awaited<ReturnType<typeof headObject>> | null = null;
+  let headError: unknown = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      head = await headObject(objectKey, { timeoutMs: 8_000 });
+      headError = null;
+      if (head.exists || attempt === 1) break;
+    } catch (error) {
+      headError = error;
+      if (attempt === 1) break;
+    }
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+  }
+
+  if (headError) {
+    return dbError("completeUpload.headObject", headError);
+  }
+  if (!head) {
+    return dbError("completeUpload.headObject", new Error("R2 HEAD did not return a response"));
+  }
   if (!head.exists) {
     return err(
       "upload_incomplete",
@@ -274,7 +352,6 @@ export async function completeUpload(
     );
   }
 
-  const supabase = await createClient();
   const { data: rpcData, error: persistError } = await supabase
     .rpc("complete_contract_file_upload", {
       p_file_id: fileId,
@@ -290,7 +367,7 @@ export async function completeUpload(
       p_created_by: userId,
       p_kind: input.kind ?? "document",
     })
-    .abortSignal(AbortSignal.timeout(5_000));
+    .abortSignal(AbortSignal.timeout(10_000));
 
   let row: ContractFileRow | null = rpcData as ContractFileRow | null;
   if (persistError) {
@@ -303,7 +380,7 @@ export async function completeUpload(
         .from("contract_files")
         .select(CONTRACT_FILE_COLUMNS)
         .eq("id", fileId)
-        .abortSignal(AbortSignal.timeout(3_000));
+        .abortSignal(AbortSignal.timeout(5_000));
       const { data: existingRow, error: checkError } = await verifyQuery.maybeSingle();
 
       if (checkError) {

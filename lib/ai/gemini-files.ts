@@ -50,12 +50,14 @@ export async function uploadToGeminiFiles({
   filename,
   apiKey,
   timeoutMs = UPLOAD_TIMEOUT_MS,
+  traceId,
 }: {
   buffer: Buffer;
   mimeType: string;
   filename: string;
   apiKey: string;
   timeoutMs?: number;
+  traceId?: string;
 }): Promise<ServiceResult<GeminiFile>> {
   if (!apiKey) {
     return err("validation", "Thiếu GEMINI_API_KEY khi upload file Gemini.");
@@ -65,6 +67,7 @@ export async function uploadToGeminiFiles({
   }
 
   const effectiveTimeout = Math.min(UPLOAD_TIMEOUT_MS, timeoutMs);
+  const uploadStartTime = Date.now();
   const uploadDeadline = Date.now() + effectiveTimeout;
   const timeBeforeStart = uploadDeadline - Date.now();
   if (timeBeforeStart <= 1_500) {
@@ -94,8 +97,9 @@ export async function uploadToGeminiFiles({
       } | null;
       const message = errorPayload?.error?.message ?? `HTTP ${initResponse.status}`;
       aiLog.error("Khởi tạo upload Gemini Files thất bại", {
-        filename,
+        traceId,
         sizeBytes: buffer.length,
+        mimeType,
         statusCode: initResponse.status,
         errorMessage: message,
       });
@@ -104,13 +108,13 @@ export async function uploadToGeminiFiles({
 
     const uploadUrl = initResponse.headers.get("x-goog-upload-url");
     if (!uploadUrl) {
-      aiLog.error("Gemini Files không trả về x-goog-upload-url", { filename });
+      aiLog.error("Gemini Files không trả về x-goog-upload-url", { traceId });
       return err("validation", "Gemini Files không trả về URL tải lên resumable.");
     }
 
     const remainingUploadMs = uploadDeadline - Date.now();
     if (remainingUploadMs <= 1_000) {
-      aiLog.error("Hết ngân sách thời gian khởi tạo upload Gemini Files", { filename });
+      aiLog.error("Hết ngân sách thời gian khởi tạo upload Gemini Files", { traceId });
       return err("validation", "Quá thời gian khởi tạo tải tệp lên Gemini Files.");
     }
 
@@ -133,8 +137,9 @@ export async function uploadToGeminiFiles({
       } | null;
       const message = errorPayload?.error?.message ?? `HTTP ${uploadResponse.status}`;
       aiLog.error("Upload dữ liệu Gemini Files thất bại", {
-        filename,
+        traceId,
         sizeBytes: buffer.length,
+        mimeType,
         statusCode: uploadResponse.status,
         errorMessage: message,
       });
@@ -147,7 +152,7 @@ export async function uploadToGeminiFiles({
 
     if (!result.file?.name || !result.file?.uri) {
       aiLog.error("Gemini Files response thiếu name/uri", {
-        filename,
+        traceId,
         responseKeys: Object.keys(result),
       });
       return err("validation", "Gemini Files response không hợp lệ (thiếu name/uri).");
@@ -161,9 +166,10 @@ export async function uploadToGeminiFiles({
     };
 
     aiLog.info("Upload Gemini Files thành công (resumable)", {
-      filename,
+      traceId,
       geminiFileName: file.name,
       sizeBytes: file.sizeBytes,
+      elapsedMs: Date.now() - uploadStartTime,
     });
 
     return ok(file);
@@ -173,7 +179,9 @@ export async function uploadToGeminiFiles({
         ? `${error.name}: ${error.message}`
         : "Lỗi không xác định";
     aiLog.error("Upload Gemini Files ngoại lệ", {
-      filename,
+      traceId,
+      sizeBytes: buffer.length,
+      elapsedMs: Date.now() - uploadStartTime,
       errorMessage,
     });
     return err("validation", `Upload Gemini Files ngoại lệ: ${errorMessage}`);
@@ -187,6 +195,7 @@ export async function uploadToGeminiFiles({
 export async function deleteGeminiFile(
   fileName: string,
   apiKey: string,
+  options?: { traceId?: string },
 ): Promise<void> {
   if (!fileName || !apiKey) return;
   const url = `${FILES_URL}/${fileName}`;
@@ -200,6 +209,7 @@ export async function deleteGeminiFile(
     });
     if (!response.ok && response.status !== 404) {
       aiLog.warn("Delete Gemini File không thành công", {
+        traceId: options?.traceId,
         geminiFileName: fileName,
         statusCode: response.status,
       });
@@ -207,6 +217,7 @@ export async function deleteGeminiFile(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     aiLog.warn("Delete Gemini File ngoại lệ", {
+      traceId: options?.traceId,
       geminiFileName: fileName,
       errorMessage,
     });
