@@ -79,11 +79,14 @@ const EMPTY_VALUES: CreateContractInput = {
   notes: "",
 };
 
-function isAppendixFile(file: PendingFile) {
+export function isAppendixFile(file: Pick<PendingFile, "kind" | "aiDocumentType">) {
   return file.kind === "appendix" || file.aiDocumentType === "appendix";
 }
 
-function hasMatchingMainContractFile(files: PendingFile[], contractNumber?: string) {
+export function hasMatchingMainContractFile(
+  files: Array<Pick<PendingFile, "kind" | "aiDocumentType" | "aiContractNumber">>,
+  contractNumber?: string,
+) {
   const normalizedNumber = (contractNumber ?? "").trim().toLocaleLowerCase();
   if (!normalizedNumber) return false;
 
@@ -95,13 +98,13 @@ function hasMatchingMainContractFile(files: PendingFile[], contractNumber?: stri
   );
 }
 
-function isAppendixSaveBlocked(
-  files: PendingFile[],
+export function isAppendixSaveBlocked(
+  files: Array<Pick<PendingFile, "id" | "kind" | "aiDocumentType" | "baseContractNumber" | "matchedBaseContractId" | "aiContractNumber">>,
   contractNumber?: string,
   appendixNotice?: {
     type: "found" | "not_found";
     baseContractNumber: string;
-    file: PendingFile;
+    file: Pick<PendingFile, "id" | "kind" | "aiDocumentType">;
   } | null,
 ) {
   const appendixFiles = files.filter(isAppendixFile);
@@ -182,6 +185,22 @@ function toFormValues(contract: EditableContract | null | undefined): CreateCont
     companyId: contract.company_id ?? "",
     notes: contract.notes ?? "",
   };
+}
+
+function recordPendingContractUpload(contractId: string, contractNumber?: string) {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(
+      "hrp_pending_contract_upload",
+      JSON.stringify({
+        contractId,
+        contractNumber,
+        timestamp: Date.now(),
+      }),
+    );
+  } catch {
+    // ignore storage errors
+  }
 }
 
 /**
@@ -861,6 +880,49 @@ export function ContractForm({
     }
   }, [contractNumber, signedDate, expiryDate, formError]);
 
+  // Cảnh báo người dùng nếu rời trang khi đang upload hoặc khi upload bị lỗi sau khi đã tạo hợp đồng
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (phase === "uploading") {
+        e.preventDefault();
+        e.returnValue = "Tệp đang được tải lên. Nếu rời khỏi trang, tiến trình tải có thể bị gián đoạn.";
+        return e.returnValue;
+      }
+      if (uploadError && savedContractId) {
+        e.preventDefault();
+        e.returnValue = "Hồ sơ hợp đồng đã được tạo nhưng tệp đính kèm chưa hoàn tất tải lên.";
+        return e.returnValue;
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [phase, uploadError, savedContractId]);
+
+  // Kiểm tra nếu phiên trước tạo hợp đồng nhưng bị đóng trang giữa chừng khi upload
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = sessionStorage.getItem("hrp_pending_contract_upload");
+      if (raw) {
+        const item = JSON.parse(raw) as { contractId: string; contractNumber?: string; timestamp: number };
+        if (Date.now() - item.timestamp < 3600_000) {
+          toast.warning("Hồ sơ hợp đồng chưa hoàn tất tải tệp", {
+            description: `Hợp đồng "${item.contractNumber || item.contractId}" đã được tạo trong phiên trước nhưng chưa hoàn tất tải tệp đính kèm.`,
+            action: {
+              label: "Mở hợp đồng",
+              onClick: () => router.push(`/contracts/${item.contractId}`),
+            },
+            duration: 12000,
+          });
+        }
+        sessionStorage.removeItem("hrp_pending_contract_upload");
+      }
+    } catch {
+      // Bỏ qua lỗi sessionStorage
+    }
+  }, [router]);
+
   async function submitEdit(values: CreateContractInput) {
     if (!contract) return;
 
@@ -919,6 +981,9 @@ export function ContractForm({
     }
 
     setSavedContractId(created.data.id);
+    if (files.length > 0) {
+      recordPendingContractUpload(created.data.id, values.contractNumber);
+    }
     router.prefetch(`/contracts/${created.data.id}`);
     await runUploads(created.data.id, files);
   }
@@ -1128,6 +1193,7 @@ export function ContractForm({
             uploadError={uploadError}
             failedCount={failedCount}
             onRetryUploads={retryUploads}
+            savedContractId={savedContractId}
             onExtractAi={handleExtractAi}
             onExtractAllAi={handleExtractAllAi}
             onAutoExtract={handleAutoExtract}

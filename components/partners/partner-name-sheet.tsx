@@ -111,7 +111,7 @@ export function PartnerNameSheet({
   const setSheetOpen = (next: boolean) => {
     if (!isControlled) setUncontrolledOpen(next);
     onOpenChange?.(next);
-    if (!next) setFormError(null);
+    setFormError(null);
   };
 
   const form = useForm<CreatePartnerInput>({
@@ -139,8 +139,7 @@ export function PartnerNameSheet({
       status: "active",
       companyIds: [],
     });
-    setFormError(null);
-  }, [sheetOpen, mode, initialValues?.name, initialValues?.address, initialValues?.taxCode, form.reset]);
+  }, [sheetOpen, mode, initialValues?.name, initialValues?.address, initialValues?.taxCode, form]);
 
   // Load the org's companies when the sheet OPENS (not on mount — the partners
   // list mounts one sheet per row, and fetching per row would fire a storm of

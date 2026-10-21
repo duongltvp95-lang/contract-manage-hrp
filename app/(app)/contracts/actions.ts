@@ -430,30 +430,41 @@ export async function extractContractAction(
 
   // G2 v2: khai báo ngoài try để finally có thể truy cập cleanup.
   let geminiFileName: string | null = null;
+  let r2KeyToClean: string | null = null;
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   const objectKey = formData.get("objectKey");
+
+  const cleanupR2 = (key: string) => {
+    // Đăng ký dọn tệp tạm sau khi phản hồi để không kéo dài thời gian AI.
+    try {
+      after(async () => {
+        await deleteObject(key, { timeoutMs: 5_000 }).catch(() => {});
+      });
+    } catch {
+      void deleteObject(key, { timeoutMs: 5_000 }).catch(() => {});
+    }
+  };
+
+  const triggerR2Cleanup = (key: string) => {
+    if (r2KeyToClean === key) {
+      r2KeyToClean = null;
+    }
+    cleanupR2(key);
+  };
 
   try {
     const authTimeoutMs = Math.min(5_000, Math.max(1_000, actionDeadline - Date.now() - 40_000));
     const access = await authorized({ timeoutMs: authTimeoutMs });
     if (!access.ok) return access.result;
 
-    const cleanupR2 = (key: string) => {
-      // Đăng ký dọn tệp tạm sau khi phản hồi để không kéo dài thời gian AI.
-      try {
-        after(async () => {
-          await deleteObject(key, { timeoutMs: 5_000 }).catch(() => {});
-        });
-      } catch {
-        void deleteObject(key, { timeoutMs: 5_000 }).catch(() => {});
-      }
-    };
-
     const ownedObjectKey =
       typeof objectKey === "string" &&
       objectKey.startsWith(`ai-temp/${access.user.organizationId}/`)
         ? objectKey
         : null;
+    if (ownedObjectKey) {
+      r2KeyToClean = ownedObjectKey;
+    }
     const rateLimitTimeoutMs = Math.min(
       3_000,
       Math.max(500, actionDeadline - Date.now() - 10_000),
@@ -467,7 +478,7 @@ export async function extractContractAction(
         }),
     );
     if (!rateLimit.ok) {
-      if (ownedObjectKey) cleanupR2(ownedObjectKey);
+      if (ownedObjectKey) triggerR2Cleanup(ownedObjectKey);
       aiLog.error("Không kiểm tra được giới hạn trích xuất AI; từ chối yêu cầu", {
         traceId,
         errorMessage: rateLimit.message,
@@ -479,7 +490,7 @@ export async function extractContractAction(
       };
     }
     if (!rateLimit.data.allowed) {
-      if (ownedObjectKey) cleanupR2(ownedObjectKey);
+      if (ownedObjectKey) triggerR2Cleanup(ownedObjectKey);
       return {
         ok: false,
         code: "rate_limited",
@@ -500,7 +511,7 @@ export async function extractContractAction(
       }
 
       if (actionDeadline - Date.now() < 12_000) {
-        cleanupR2(objectKey);
+        triggerR2Cleanup(objectKey);
         return validationFailure("Hệ thống hết thời gian xử lý", [
           {
             path: "file",
@@ -517,14 +528,14 @@ export async function extractContractAction(
         () => headObject(objectKey, { timeoutMs: headTimeoutMs }),
       );
       if (!head.exists || head.contentLength === null) {
-        cleanupR2(objectKey);
+        triggerR2Cleanup(objectKey);
         return validationFailure("Không tìm thấy tệp", [
           { path: "objectKey", message: "Không thể đọc tệp từ kho lưu trữ đám mây" },
         ]);
       }
 
       if (head.contentLength > MAX_AI_FILE_SIZE_BYTES) {
-        cleanupR2(objectKey);
+        triggerR2Cleanup(objectKey);
         return validationFailure("Dung lượng tệp quá lớn", [
           {
             path: "file",
@@ -535,7 +546,7 @@ export async function extractContractAction(
 
       // Kiểm tra lại ngân sách trước khi bắt đầu tải toàn bộ buffer từ R2
       if (actionDeadline - Date.now() < 12_000) {
-        cleanupR2(objectKey);
+        triggerR2Cleanup(objectKey);
         return validationFailure("Hệ thống hết thời gian xử lý", [
           {
             path: "file",
@@ -550,7 +561,7 @@ export async function extractContractAction(
         "r2_download",
         () => getObjectBuffer(objectKey, { timeoutMs: downloadTimeoutMs }),
       );
-      cleanupR2(objectKey);
+      triggerR2Cleanup(objectKey);
 
       if (!downloaded) {
         return validationFailure("Không tìm thấy tệp", [
@@ -636,24 +647,63 @@ export async function extractContractAction(
       ]);
     }
 
-    // Các tệp lớn dùng Files API; lỗi upload trả về ngay thay vì âm thầm gửi
-    // một body base64 lớn có thể làm tăng bộ nhớ và kéo dài thời gian xử lý.
+    // Thử trích xuất nhanh lớp văn bản PDF trước.
+    // Với các tệp PDF có text layer (kể cả >= 2 MB), việc trích xuất văn bản cục bộ
+    // chỉ mất ~100-300ms và cho phép gửi văn bản trực tiếp cho Gemini, tránh hoàn toàn
+    // việc upload tệp lớn lên Gemini Files API (tiết kiệm 5-15s và quota mạng).
+    let preExtractedPdfText: string | null = null;
+    if (resolvedMime === "application/pdf") {
+      const pdfBudget = Math.min(1_200, Math.max(500, remainingAiBudgetMs - 8_000));
+      if (pdfBudget >= 800) {
+        try {
+          const { extractPdfText } = await import("@/lib/ai/pdf-text");
+          const pdfResult = await measureAiStage(
+            traceId,
+            "pdf_text_extract",
+            () =>
+              extractPdfText(buffer, pdfBudget, {
+                maxPages: 10,
+                maxCharacters: 12_000,
+              }),
+            { sizeBytes: buffer.length },
+          );
+          if (pdfResult && pdfResult.text && pdfResult.text.length >= 100) {
+            preExtractedPdfText = pdfResult.text;
+            aiLog.info("Đã đọc trước lớp văn bản PDF, bỏ qua Gemini Files API", {
+              traceId,
+              textCharacters: pdfResult.text.length,
+              pageCount: pdfResult.pageCount,
+              sizeBytes: buffer.length,
+            });
+          }
+        } catch (pdfErr) {
+          aiLog.warn("Đọc trước lớp văn bản PDF không thành công, tiếp tục quy trình chuẩn", {
+            traceId,
+            errorName: pdfErr instanceof Error ? pdfErr.name : "UnknownError",
+          });
+        }
+      }
+    }
+
+    // Các tệp lớn không có text layer (ảnh lớn hoặc PDF scan) dùng Files API;
+    // lỗi upload trả về ngay thay vì âm thầm gửi body base64 lớn.
     let geminiFileUri: string | null = null;
-    if (apiKey && buffer.length >= AI_GEMINI_FILES_API_MIN_BYTES) {
+    if (apiKey && !preExtractedPdfText && buffer.length >= AI_GEMINI_FILES_API_MIN_BYTES) {
       const uploadRes = await measureAiStage(
         traceId,
         "gemini_files_upload",
-        () => uploadToGeminiFiles({
-          buffer,
-          mimeType,
-          filename,
-          apiKey,
-          traceId,
-          timeoutMs: Math.min(
-            20_000,
-            Math.max(1_000, remainingAiBudgetMs - 6_000),
-          ),
-        }),
+        () =>
+          uploadToGeminiFiles({
+            buffer,
+            mimeType,
+            filename,
+            apiKey,
+            traceId,
+            timeoutMs: Math.min(
+              20_000,
+              Math.max(1_000, remainingAiBudgetMs - 6_000),
+            ),
+          }),
         { sizeBytes: buffer.length },
       );
       if (uploadRes.ok) {
@@ -688,15 +738,17 @@ export async function extractContractAction(
     const extractionResult = await measureAiStage(
       traceId,
       "gemini_extract",
-      () => extractContractFromBuffer({
-        buffer,
-        mimeType,
-        filename,
-        geminiFileName: geminiFileUri ? geminiFileName ?? undefined : undefined,
-        geminiFileUri: geminiFileUri ?? undefined,
-        remainingBudgetMs: remainingExtractBudgetMs,
-        traceId,
-      }),
+      () =>
+        extractContractFromBuffer({
+          buffer,
+          mimeType,
+          filename,
+          geminiFileName: geminiFileUri ? geminiFileName ?? undefined : undefined,
+          geminiFileUri: geminiFileUri ?? undefined,
+          pdfText: preExtractedPdfText ?? undefined,
+          remainingBudgetMs: remainingExtractBudgetMs,
+          traceId,
+        }),
       { sizeBytes: buffer.length, mimeType: resolvedMime },
     );
 
@@ -837,6 +889,12 @@ export async function extractContractAction(
           : "Hệ thống gặp sự cố trong quá trình phân tích tài liệu bằng AI.",
     };
   } finally {
+    // Dọn tệp R2 tạm nếu request gặp lỗi / exception trước khi bước dọn dẹp thường lệ được gọi
+    if (r2KeyToClean) {
+      const key = r2KeyToClean;
+      r2KeyToClean = null;
+      cleanupR2(key);
+    }
     // G2 v2: cleanup Gemini file tạm sau khi extract xong (dù thành công hay fail).
     // File Gemini có TTL 48h → xoá ngay để tránh tốn quota.
     if (geminiFileName && apiKey) {

@@ -1,6 +1,7 @@
 "use client";
 
-import { AlertCircle, CheckCircle2, Loader2, RotateCcw, Sparkles, Upload } from "lucide-react";
+import Link from "next/link";
+import { AlertCircle, CheckCircle2, ExternalLink, Loader2, RotateCcw, Sparkles, Upload } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 import type { MatchedBaseContract } from "@schemas/contract";
 import { UploadDropzone } from "@/components/documents/upload-dropzone";
@@ -26,6 +27,7 @@ export function ContractFileAttachments({
   uploadError,
   failedCount,
   onRetryUploads,
+  savedContractId,
   onExtractAi,
   onExtractAllAi,
   onAutoExtract,
@@ -45,6 +47,7 @@ export function ContractFileAttachments({
   uploadError: string | null;
   failedCount: number;
   onRetryUploads: () => void;
+  savedContractId?: string | null;
   onExtractAi?: (file: PendingFile) => void;
   onExtractAllAi?: (files: PendingFile[]) => void;
   onAutoExtract?: (files: PendingFile[]) => void;
@@ -279,23 +282,39 @@ export function ContractFileAttachments({
       {uploadError && (
         <Alert variant="destructive">
           <AlertTitle>
-            Hợp đồng đã được lưu, nhưng tải tệp lên thất bại
+            Hồ sơ hợp đồng đã được tạo, nhưng tải tệp lên chưa hoàn tất
           </AlertTitle>
           <AlertDescription>
             <p className="mb-2 whitespace-pre-line">{uploadError}</p>
             <p className="mb-3">
-              Hợp đồng vẫn được giữ lại và thông tin bạn đã nhập không bị mất.
-              Bấm &quot;Thử lại&quot; để tải lại {failedCount} tệp lỗi.
+              Thông tin hợp đồng đã được lưu an toàn trong cơ sở dữ liệu. Bạn có thể bấm &quot;Thử lại tải tệp&quot;
+              để tiếp tục tải {failedCount} tệp lỗi, hoặc chuyển đến trang chi tiết hợp đồng để tải tệp sau.
             </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onRetryUploads}
-            >
-              <RotateCcw className="mr-2 h-4 w-4" />
-              Thử lại
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onRetryUploads}
+                className="bg-white/10 hover:bg-white/20"
+              >
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Thử lại tải tệp
+              </Button>
+              {savedContractId && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  asChild
+                >
+                  <Link href={`/contracts/${savedContractId}`}>
+                    <ExternalLink className="mr-1.5 h-4 w-4" />
+                    Xem hồ sơ hợp đồng
+                  </Link>
+                </Button>
+              )}
+            </div>
           </AlertDescription>
         </Alert>
       )}

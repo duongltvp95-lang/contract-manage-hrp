@@ -31,6 +31,21 @@ const cspHeaderValue = [
   "form-action 'self'",
 ].join("; ");
 
+const extraAllowedOrigins: string[] = process.env.SERVER_ACTIONS_ALLOWED_ORIGINS
+  ? process.env.SERVER_ACTIONS_ALLOWED_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean)
+  : [];
+
+if (process.env.NEXT_PUBLIC_APP_URL) {
+  try {
+    const parsedUrl = new URL(process.env.NEXT_PUBLIC_APP_URL);
+    if (parsedUrl.host && !extraAllowedOrigins.includes(parsedUrl.host)) {
+      extraAllowedOrigins.push(parsedUrl.host);
+    }
+  } catch {
+    // Ignore invalid URL
+  }
+}
+
 const nextConfig: NextConfig = {
   cacheComponents: true,
 
@@ -43,6 +58,7 @@ const nextConfig: NextConfig = {
         "contract-manage-hrp.vercel.app",
         "*.vercel.app",
         "localhost:3000",
+        ...extraAllowedOrigins,
       ],
     },
   },

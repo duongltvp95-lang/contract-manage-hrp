@@ -378,6 +378,7 @@ export async function extractContractFromBuffer({
   filename = "",
   geminiFileName,
   geminiFileUri,
+  pdfText,
   remainingBudgetMs = 32_000,
   traceId,
 }: {
@@ -388,6 +389,8 @@ export async function extractContractFromBuffer({
   geminiFileName?: string;
   /** Optional: URI của file đã upload (dùng trong fileData.fileUri) */
   geminiFileUri?: string;
+  /** Optional: Lớp văn bản PDF đã được trích xuất trước để bỏ qua Gemini Files API */
+  pdfText?: string;
   /** Ngân sách thời gian tối đa còn lại cho bước extract (ms) */
   remainingBudgetMs?: number;
   /** Correlates stage logs for one extraction without logging contract content. */
@@ -421,19 +424,19 @@ export async function extractContractFromBuffer({
   }
 
   // Quyết định luồng xử lý:
-  // - Có geminiFileName/Uri (G2 v2 — Files API) → dùng fileData, body vài KB.
-  // - Không có → thử trích text từ PDF (BUG-1 sửa); nếu fail → fallback base64.
-  const useFilesApi = Boolean(geminiFileName && geminiFileUri);
+  // - Nếu có pdfText hoặc trích xuất được text layer: dùng text, body vài KB, phản hồi trong 1-2s.
+  // - Có geminiFileName/Uri (Files API) và không có text layer: dùng fileData.
+  // - Còn lại: fallback base64 inlineData.
+  const useFilesApi = Boolean(!pdfText && geminiFileName && geminiFileUri);
 
   let base64Data: string | null = null;
-  let pdfTextForModel: string | null = null;
-  let extractedPdfText: string | null = null;
+  let pdfTextForModel: string | null = pdfText ?? null;
+  let extractedPdfText: string | null = pdfText ?? null;
 
-  if (resolvedMime === "application/pdf" && !useFilesApi) {
+  if (resolvedMime === "application/pdf" && !useFilesApi && !pdfTextForModel) {
     const pdfStartTime = Date.now();
     try {
-      // Giới hạn parse cục bộ để tiết kiệm ngân sách; file nhị phân sẽ được
-      // gửi trực tiếp qua Files API khi vượt ngưỡng, nên không cần parse thêm.
+      // Giới hạn parse cục bộ để tiết kiệm ngân sách
       const remainingBeforePdf = extractDeadline - Date.now() - 6_000;
       if (remainingBeforePdf >= 2_000) {
         const { extractPdfText } = await import("@/lib/ai/pdf-text");
@@ -496,11 +499,12 @@ export async function extractContractFromBuffer({
   // Thử tối đa các models trong danh sách nếu ngân sách thời gian thực tế vẫn còn đủ
   const models = getGeminiModels().slice(0, MAX_MODEL_ATTEMPTS);
 
-  for (const model of models) {
+  for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
+    const model = models[modelIndex];
     const remainingTime = extractDeadline - Date.now();
 
-    // Nếu thời gian còn lại dưới 6 giây, dừng ngay để không vượt quá giới hạn 60s của Vercel
-    if (remainingTime < 6_000) {
+    // Nếu thời gian còn lại dưới 5 giây, dừng ngay để không vượt quá giới hạn 60s của Vercel
+    if (remainingTime < 5_000) {
       aiLog.warn("Hết ngân sách thời gian trích xuất AI, dừng fallback", {
         traceId,
         model,
@@ -511,7 +515,11 @@ export async function extractContractFromBuffer({
       break;
     }
 
-    const modelTimeoutMs = Math.min(15_000, remainingTime);
+    const remainingModelsCount = models.length - modelIndex;
+    const modelTimeoutMs = Math.min(
+      12_000,
+      Math.max(4_000, Math.floor((remainingTime - 4_000) / Math.max(1, remainingModelsCount))),
+    );
     const startTime = Date.now();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 

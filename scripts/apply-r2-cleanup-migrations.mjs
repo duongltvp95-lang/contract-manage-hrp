@@ -516,7 +516,7 @@ await service.rpc("exec_sql", { sql: "NOTIFY pgrst, 'reload schema';" });
 await new Promise((resolve) => setTimeout(resolve, 4000));
 
 // Verify r2_cleanup_queue table
-const { data: queueData, error: queueError } = await service
+const { error: queueError } = await service
   .from("r2_cleanup_queue")
   .select("id, status, claimed_at")
   .limit(1);

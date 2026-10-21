@@ -117,6 +117,13 @@ export function useContractUploads({
 
   async function runUploads(contractId: string, queue: PendingFile[]) {
     if (queue.length === 0) {
+      if (typeof window !== "undefined") {
+        try {
+          sessionStorage.removeItem("hrp_pending_contract_upload");
+        } catch {
+          // ignore storage failure
+        }
+      }
       setPhase("idle");
       onSuccess(contractId);
       return;
@@ -163,6 +170,13 @@ export function useContractUploads({
     }
 
     if (failures.length === 0) {
+      if (typeof window !== "undefined") {
+        try {
+          sessionStorage.removeItem("hrp_pending_contract_upload");
+        } catch {
+          // ignore storage failure
+        }
+      }
       setPhase("idle");
       onSuccess(contractId);
       return;

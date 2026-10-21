@@ -593,6 +593,65 @@ describe("Contract Files Security & Access Control", () => {
         2048,
       );
     });
+
+    it("createUploadRequest: từ chối tạo presigned url cho phụ lục khi hợp đồng chưa có tài liệu chính", async () => {
+      mockCreateClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "contracts") {
+            return createChainableMock({ id: contractId, archived_at: null });
+          }
+          // table === "contract_files": không có file kind = "document" nào
+          return createChainableMock(null, null);
+        },
+      });
+
+      const res = await createUploadRequest({
+        organizationId: orgId,
+        contractId,
+        filename: "phu-luc-1.pdf",
+        mimeType: "application/pdf",
+        fileSize: 2048,
+        kind: "appendix",
+        userEmail: nonAdminEmail,
+      });
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.code).toBe("validation");
+        expect(res.message).toContain("Cần tải tệp hợp đồng chính lên trước khi tải phụ lục");
+      }
+    });
+
+    it("createUploadRequest: cho phép tạo presigned url cho phụ lục khi hợp đồng đã có tài liệu chính", async () => {
+      mockCreateClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "contracts") {
+            return createChainableMock({ id: contractId, archived_at: null });
+          }
+          // table === "contract_files": có file document
+          return createChainableMock({ id: "doc-1" }, null);
+        },
+      });
+
+      mockCreateUploadUrl.mockResolvedValue("https://r2.example.com/presigned-appendix");
+
+      const res = await createUploadRequest({
+        organizationId: orgId,
+        contractId,
+        filename: "phu-luc-1.pdf",
+        mimeType: "application/pdf",
+        fileSize: 2048,
+        kind: "appendix",
+        userEmail: nonAdminEmail,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(mockCreateUploadUrl).toHaveBeenCalledWith(
+        expect.stringContaining("phu-luc-1.pdf"),
+        "application/pdf",
+        2048,
+      );
+    });
   });
 
   describe("[P2] guardFileApiRequest: Fail-closed khi rate limit counter lỗi", () => {

@@ -13,7 +13,7 @@ export const RATE_LIMIT_MAX_REQUESTS = 60;
 export const RATE_LIMIT_POLICIES = {
   "files:upload-url": { maxRequests: 60 },
   "files:view-url": { maxRequests: 60 },
-  "ai:upload-url": { maxRequests: 60 },
+  "ai:upload-url": { maxRequests: 15 },
   "ai:extract": { maxRequests: 10 },
 } as const;
 

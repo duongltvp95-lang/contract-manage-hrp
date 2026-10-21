@@ -20,6 +20,11 @@ import {
   MAX_AI_FILE_SIZE_BYTES,
 } from "@/lib/ai/gemini";
 import { extractPdfText } from "@/lib/ai/pdf-text";
+import {
+  hasMatchingMainContractFile,
+  isAppendixFile,
+  isAppendixSaveBlocked,
+} from "@/components/contracts/contract-form";
 
 describe("G2 v2 — Logger có cấu trúc", () => {
   let infoSpy: ReturnType<typeof vi.spyOn>;
@@ -588,91 +593,15 @@ describe("G2 v2 — detectAppendixMetadata (Phân loại chính xác Phụ lục
 });
 
 describe("G2 v2 — Khóa lưu hợp đồng khi tải lên Phụ lục chưa có hợp đồng gốc", () => {
-  function isAppendixFile(file: { kind: string; aiDocumentType?: string }) {
-    return file.kind === "appendix" || file.aiDocumentType === "appendix";
-  }
-
-  function hasMatchingMainContractFile(
-    files: Array<{ kind: string; aiDocumentType?: string; aiContractNumber?: string }>,
-    contractNumber?: string,
-  ) {
-    const normalizedNumber = (contractNumber ?? "").trim().toLocaleLowerCase();
-    if (!normalizedNumber) return false;
-
-    return files.some(
-      (file) =>
-        file.kind === "document" &&
-        file.aiDocumentType !== "appendix" &&
-        file.aiContractNumber?.trim().toLocaleLowerCase() === normalizedNumber,
-    );
-  }
-
-  function isAppendixSaveBlocked(
-    files: Array<{
-      id: string;
-      kind: string;
-      aiDocumentType?: string;
-      baseContractNumber?: string;
-      matchedBaseContractId?: string;
-      aiContractNumber?: string;
-    }>,
-    contractNumber?: string,
-    appendixNotice?: {
-      type: "found" | "not_found";
-      baseContractNumber: string;
-      file: { id: string; kind: string; aiDocumentType?: string };
-    } | null,
-  ) {
-    const appendixFiles = files.filter(isAppendixFile);
-    const normalizedContractNumber = (contractNumber ?? "").trim().toLocaleLowerCase();
-    const hasAppendix = appendixFiles.length > 0 || Boolean(appendixNotice);
-
-    if (!hasAppendix) {
-      return false;
-    }
-
-    if (appendixNotice?.type === "found" || appendixFiles.some((f) => Boolean(f.matchedBaseContractId))) {
-      return true;
-    }
-
-    const mainContractFiles = files.filter((f) => !isAppendixFile(f));
-    if (mainContractFiles.length === 0) {
-      return true;
-    }
-
-    for (const appFile of appendixFiles) {
-      const baseNum = (appFile.baseContractNumber || "").trim().toLocaleLowerCase();
-      if (!baseNum || !normalizedContractNumber || baseNum !== normalizedContractNumber) {
-        return true;
-      }
-      if (!hasMatchingMainContractFile(files, baseNum)) {
-        return true;
-      }
-    }
-
-    if (appendixNotice?.type === "not_found") {
-      const noticeBase = appendixNotice.baseContractNumber.trim().toLocaleLowerCase();
-      if (
-        !noticeBase ||
-        !normalizedContractNumber ||
-        noticeBase !== normalizedContractNumber ||
-        !hasMatchingMainContractFile(files, noticeBase)
-      ) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
   it("khóa lưu khi chỉ tải lên duy nhất 1 tệp phụ lục và chưa có hợp đồng gốc trong hệ thống", () => {
     const file = {
       id: "f1",
-      kind: "appendix",
-      aiDocumentType: "appendix",
+      kind: "appendix" as const,
+      aiDocumentType: "appendix" as const,
       baseContractNumber: "24022024/HRVN - STAR ENGINEERS",
     };
 
+    expect(isAppendixFile(file)).toBe(true);
     const blocked = isAppendixSaveBlocked([file], "24022024/HRVN - STAR ENGINEERS", {
       type: "not_found",
       baseContractNumber: "24022024/HRVN - STAR ENGINEERS",
@@ -685,8 +614,8 @@ describe("G2 v2 — Khóa lưu hợp đồng khi tải lên Phụ lục chưa c�
   it("khóa lưu khi phụ lục thuộc hợp đồng đã có trên hệ thống để bắt buộc người dùng dùng nút gán trực tiếp", () => {
     const file = {
       id: "f1",
-      kind: "appendix",
-      aiDocumentType: "appendix",
+      kind: "appendix" as const,
+      aiDocumentType: "appendix" as const,
       baseContractNumber: "24022024/HRVN - STAR ENGINEERS",
       matchedBaseContractId: "contract-123",
     };
@@ -703,17 +632,18 @@ describe("G2 v2 — Khóa lưu hợp đồng khi tải lên Phụ lục chưa c�
   it("cho phép lưu khi tải lên cùng lúc Hợp đồng chính và Phụ lục khớp số hợp đồng", () => {
     const mainFile = {
       id: "main-1",
-      kind: "document",
-      aiDocumentType: "document",
+      kind: "document" as const,
+      aiDocumentType: "document" as const,
       aiContractNumber: "24022024/HRVN - STAR ENGINEERS",
     };
     const appFile = {
       id: "app-1",
-      kind: "appendix",
-      aiDocumentType: "appendix",
+      kind: "appendix" as const,
+      aiDocumentType: "appendix" as const,
       baseContractNumber: "24022024/HRVN - STAR ENGINEERS",
     };
 
+    expect(hasMatchingMainContractFile([mainFile], "24022024/HRVN - STAR ENGINEERS")).toBe(true);
     const blocked = isAppendixSaveBlocked(
       [mainFile, appFile],
       "24022024/HRVN - STAR ENGINEERS",
@@ -726,14 +656,14 @@ describe("G2 v2 — Khóa lưu hợp đồng khi tải lên Phụ lục chưa c�
   it("khóa lưu khi tải lên Hợp đồng chính và Phụ lục nhưng số hợp đồng không khớp nhau", () => {
     const mainFile = {
       id: "main-1",
-      kind: "document",
-      aiDocumentType: "document",
+      kind: "document" as const,
+      aiDocumentType: "document" as const,
       aiContractNumber: "HD-01/2026",
     };
     const appFile = {
       id: "app-1",
-      kind: "appendix",
-      aiDocumentType: "appendix",
+      kind: "appendix" as const,
+      aiDocumentType: "appendix" as const,
       baseContractNumber: "HD-02/2026", // Lệch số hợp đồng
     };
 
@@ -745,8 +675,8 @@ describe("G2 v2 — Khóa lưu hợp đồng khi tải lên Phụ lục chưa c�
   it("không khóa lưu khi chỉ tải lên hợp đồng thông thường không phải phụ lục", () => {
     const mainFile = {
       id: "main-1",
-      kind: "document",
-      aiDocumentType: "document",
+      kind: "document" as const,
+      aiDocumentType: "document" as const,
       aiContractNumber: "HD-01/2026",
     };
 
