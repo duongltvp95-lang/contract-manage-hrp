@@ -28,6 +28,7 @@ export function ContractFileAttachments({
   onRetryUploads,
   onExtractAi,
   onExtractAllAi,
+  onAutoExtract,
   onCancelAiBatch,
   isExtractingAi = false,
   onToggleFileKind,
@@ -46,6 +47,7 @@ export function ContractFileAttachments({
   onRetryUploads: () => void;
   onExtractAi?: (file: PendingFile) => void;
   onExtractAllAi?: (files: PendingFile[]) => void;
+  onAutoExtract?: (files: PendingFile[]) => void;
   onCancelAiBatch?: () => void;
   isExtractingAi?: boolean;
   onToggleFileKind?: (fileId: string) => void;
@@ -99,6 +101,7 @@ export function ContractFileAttachments({
             showKindBadge={true}
             onToggleKind={onToggleFileKind}
             onExtractAi={onExtractAi}
+            onAutoExtract={onAutoExtract}
             isExtractingAi={isExtractingAi}
             hint={`PDF, JPG, PNG — tối đa ${maxUploadSizeMb} MB mỗi tệp. Có thể kéo thả nhiều tệp cùng lúc.`}
           />

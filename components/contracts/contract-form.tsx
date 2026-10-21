@@ -379,9 +379,19 @@ export function ContractForm({
     }
   }, [isEdit, savedContractId, resetFormState]);
 
-  async function handleAttachToExistingContract(baseContractId: string, fileItem: PendingFile) {
+  const filesRef = useRef(files);
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+
+  async function handleAttachToExistingContract(
+    baseContractId: string,
+    fileItem: PendingFile,
+    baseContractNumber?: string,
+  ) {
     setIsAttachingToExisting(true);
-    toast.loading("Đang gán phụ lục vào hợp đồng...", { id: "attach-appendix" });
+    const targetNumber = baseContractNumber || "gốc";
+    toast.loading(`Đang tải và gán phụ lục vào Hợp đồng số "${targetNumber}"...`, { id: "attach-appendix" });
     try {
       const rawFile = fileItem.file;
       const mimeType = resolveUploadMimeType(rawFile);
@@ -399,7 +409,7 @@ export function ContractForm({
       await putFileWithProgress(uploadUrl, rawFile, {
         contentType: mimeType,
         onProgress: (p) => {
-          toast.loading(`Đang tải phụ lục lên: ${p.percent}%...`, { id: "attach-appendix" });
+          toast.loading(`Đang tải phụ lục lên Hợp đồng "${targetNumber}": ${p.percent}%...`, { id: "attach-appendix" });
         },
       });
 
@@ -420,13 +430,13 @@ export function ContractForm({
       removeFileById(fileItem.id);
       setAppendixNotice(null);
 
-      toast.success(`Đã thêm phụ lục "${rawFile.name}" vào hợp đồng thành công!`, {
+      toast.success(`✨ AI đã nhận diện tệp là Phụ lục của Hợp đồng "${targetNumber}" và đã tự động gán vào hợp đồng thành công!`, {
         id: "attach-appendix",
         action: {
           label: "Xem hợp đồng",
           onClick: () => router.push(`/contracts/${baseContractId}`),
         },
-        duration: 8000,
+        duration: 9000,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Gán phụ lục thất bại. Vui lòng thử lại.";
@@ -540,7 +550,7 @@ export function ContractForm({
         });
 
         // Kiểm tra xem trong biểu mẫu đã có tệp hợp đồng chính nào khớp số HĐ gốc chưa
-        const hasMainInFiles = files.some(
+        const hasMainInFiles = filesRef.current.some(
           (f) => f.id !== fileItem.id && !isAppendixFile(f),
         );
         const isMatchedWithCurrentForm =
@@ -555,6 +565,16 @@ export function ContractForm({
             baseContract: data.matchedBaseContract,
             file: fileItem,
           });
+
+          // Hợp đồng gốc ĐÃ CÓ TRÊN HỆ THỐNG:
+          // AI phân tích và tự động gán phụ lục vào hợp đồng gốc này
+          toast.dismiss("ai-extract");
+          await handleAttachToExistingContract(
+            data.matchedBaseContract.id,
+            fileItem,
+            data.matchedBaseContract.contractNumber || baseNum,
+          );
+          return data;
         } else if (isMatchedWithCurrentForm) {
           setAppendixNotice(null);
           if (!options?.suppressIndividualSuccessToast) {
@@ -816,6 +836,13 @@ export function ContractForm({
   function cancelAiBatchAfterCurrentFile() {
     cancelAiBatchRef.current = true;
     toast.info("Sẽ dừng sau khi AI xử lý xong tệp hiện tại.", { id: "ai-extract" });
+  }
+
+  async function handleAutoExtract(addedFiles: PendingFile[]) {
+    if (!addedFiles || addedFiles.length === 0) return;
+    if (isExtractingAi || isAttachingToExisting || busy) return;
+    filesRef.current = [...filesRef.current, ...addedFiles];
+    await handleExtractAllAi(addedFiles);
   }
 
   const contractNumber = useWatch({ control: form.control, name: "contractNumber" });
@@ -1103,11 +1130,14 @@ export function ContractForm({
             onRetryUploads={retryUploads}
             onExtractAi={handleExtractAi}
             onExtractAllAi={handleExtractAllAi}
+            onAutoExtract={handleAutoExtract}
             onCancelAiBatch={isAiBatchRunning ? cancelAiBatchAfterCurrentFile : undefined}
             isExtractingAi={isExtractingAi}
             onToggleFileKind={toggleFileKind}
             appendixNotice={appendixNotice}
-            onAttachToExistingContract={handleAttachToExistingContract}
+            onAttachToExistingContract={(baseContractId, file) =>
+              handleAttachToExistingContract(baseContractId, file, appendixNotice?.baseContractNumber)
+            }
             isAttachingToExisting={isAttachingToExisting}
             appendixSaveBlocked={appendixSaveBlocked}
             appendixBaseNumbers={appendixFiles

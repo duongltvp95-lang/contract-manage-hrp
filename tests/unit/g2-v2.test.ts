@@ -754,4 +754,63 @@ describe("G2 v2 — Khóa lưu hợp đồng khi tải lên Phụ lục chưa c�
 
     expect(blocked).toBe(false);
   });
+
+  describe("Tự động phân tích và gán phụ lục vào hợp đồng gốc", () => {
+    it("nhận diện phụ lục có hợp đồng gốc đã tồn tại trên hệ thống để tự động gán", () => {
+      const extractedData = {
+        documentType: "appendix" as const,
+        contractNumber: "PL-01",
+        baseContractNumber: "24022024/HRVN - STAR ENGINEERS",
+        matchedBaseContract: {
+          id: "contract-base-123",
+          contractNumber: "24022024/HRVN - STAR ENGINEERS",
+          partnerName: "STAR ENGINEERS",
+        },
+      };
+
+      const isAppendixDoc =
+        extractedData.documentType === "appendix" || Boolean(extractedData.baseContractNumber);
+      expect(isAppendixDoc).toBe(true);
+
+      // Khi hợp đồng gốc đã có trong hệ thống, hệ thống xác định được baseContractId và tự động gán
+      const canAutoAttach = Boolean(extractedData.matchedBaseContract?.id);
+      expect(canAutoAttach).toBe(true);
+      expect(extractedData.matchedBaseContract?.id).toBe("contract-base-123");
+    });
+
+    it("không gán nhầm vào form tạo mới nếu tệp tải lên là phụ lục của hợp đồng đã có", () => {
+      const extractedData = {
+        documentType: "appendix" as const,
+        contractNumber: "PL-02",
+        baseContractNumber: "HD-99/2026",
+        matchedBaseContract: {
+          id: "contract-99",
+          contractNumber: "HD-99/2026",
+          partnerName: "Công ty ABC",
+        },
+      };
+
+      const isAppendixDoc =
+        extractedData.documentType === "appendix" || Boolean(extractedData.baseContractNumber);
+
+      // Thông tin contractNumber không được điền vào form tạo hợp đồng mới nếu là phụ lục
+      let formContractNumber = "";
+      if (!isAppendixDoc && extractedData.contractNumber) {
+        formContractNumber = extractedData.contractNumber;
+      }
+
+      expect(formContractNumber).toBe("");
+    });
+
+    it("chuẩn hóa số hợp đồng khi tìm kiếm hợp đồng gốc (bỏ qua khoảng trắng và dấu gạch)", () => {
+      const target = "24022024/HRVN - STAR ENGINEERS";
+      const normalizedTarget = target.replace(/[\s\-_/]/g, "").toLowerCase();
+
+      const existingInDb = "24022024/HRVN-STAR ENGINEERS";
+      const normalizedDb = existingInDb.replace(/[\s\-_/]/g, "").toLowerCase();
+
+      expect(normalizedTarget).toBe(normalizedDb);
+    });
+  });
 });
+

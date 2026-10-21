@@ -185,26 +185,67 @@ export async function findBaseContractByNumber(
   }
 
   const { data, error } = await query;
-  if (error || !data || data.length === 0) {
-    return null;
+  if (!error && data && data.length > 0) {
+    const row = data[0] as unknown as {
+      id: string;
+      contract_number: string | null;
+      signed_date: string | null;
+      expiry_date: string | null;
+      partner_text: string | null;
+      partners?: { name: string } | null;
+    };
+
+    return {
+      id: row.id,
+      contractNumber: row.contract_number ?? cleanNumber,
+      partnerName: row.partners?.name || row.partner_text || null,
+      signedDate: row.signed_date,
+      expiryDate: row.expiry_date,
+    };
   }
 
-  const row = data[0] as unknown as {
-    id: string;
-    contract_number: string | null;
-    signed_date: string | null;
-    expiry_date: string | null;
-    partner_text: string | null;
-    partners?: { name: string } | null;
-  };
+  // Fallback: nếu ilike trực tiếp không khớp (do khác biệt khoảng trắng quanh dấu / hoặc -),
+  // tìm kiếm theo số hợp đồng sau khi chuẩn hóa ký tự
+  const normalizedTarget = cleanNumber.replace(/[\s\-_/]/g, "").toLowerCase();
+  if (normalizedTarget.length >= 3) {
+    let fallbackQuery = supabase
+      .from("contracts")
+      .select("id, contract_number, signed_date, expiry_date, partner_id, partner_text, partners(name)")
+      .eq("organization_id", organizationId)
+      .is("archived_at", null)
+      .order("created_at", { ascending: false })
+      .limit(50);
 
-  return {
-    id: row.id,
-    contractNumber: row.contract_number ?? cleanNumber,
-    partnerName: row.partners?.name || row.partner_text || null,
-    signedDate: row.signed_date,
-    expiryDate: row.expiry_date,
-  };
+    if (options?.abortSignal) {
+      fallbackQuery = fallbackQuery.abortSignal(options.abortSignal);
+    }
+    const { data: listData } = await fallbackQuery;
+    if (listData && listData.length > 0) {
+      const match = listData.find((row) => {
+        const num = (row.contract_number || "").replace(/[\s\-_/]/g, "").toLowerCase();
+        return num.length > 0 && num === normalizedTarget;
+      });
+      if (match) {
+        const matchedRow = match as unknown as {
+          id: string;
+          contract_number: string | null;
+          signed_date: string | null;
+          expiry_date: string | null;
+          partner_text: string | null;
+          partners?: { name: string } | null;
+        };
+        return {
+          id: matchedRow.id,
+          contractNumber: matchedRow.contract_number ?? cleanNumber,
+          partnerName: matchedRow.partners?.name || matchedRow.partner_text || null,
+          signedDate: matchedRow.signed_date,
+          expiryDate: matchedRow.expiry_date,
+        };
+      }
+    }
+  }
+
+  return null;
 }
 
 /** Plan sections 31, 45 — inserts one contract for the caller's organization. */
