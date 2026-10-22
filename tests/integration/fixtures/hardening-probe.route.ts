@@ -50,9 +50,12 @@ export async function POST(request: NextRequest) {
     contractId: parsed.data.contractId,
     fileId: parsed.data.fileId,
     objectKey: parsed.data.objectKey,
+    uploadReservation: parsed.data.uploadReservation,
     filename: parsed.data.filename,
     mimeType: parsed.data.mimeType,
     fileSize: parsed.data.fileSize,
+    kind: parsed.data.kind,
+    baseContractNumber: parsed.data.baseContractNumber,
   });
 
   return result.ok

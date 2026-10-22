@@ -167,6 +167,18 @@ begin
     return null;
   end if;
 
+  if v_file.kind = 'document' and exists (
+    select 1
+    from public.contract_files as cf
+    where cf.contract_id = v_contract_id
+      and cf.organization_id = p_organization_id
+      and cf.id <> p_file_id
+      and cf.kind = 'appendix'
+  ) then
+    raise exception 'Cannot delete main contract document while appendices still exist on the contract'
+      using errcode = '23514';
+  end if;
+
   v_prefix := 'contracts/' || lower(v_file.organization_id::text) || '/'
     || lower(v_file.contract_id::text) || '/' || lower(v_file.id::text) || '/';
   if left(v_file.object_key, char_length(v_prefix)) <> v_prefix then

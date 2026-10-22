@@ -200,3 +200,19 @@ export async function extractPdfText(
     }
   }
 }
+
+/**
+ * Kiểm tra xem lớp văn bản trích xuất từ PDF có đủ chất lượng và nội dung pháp lý
+ * để thay thế việc gửi hình ảnh/file gốc lên Gemini không.
+ * Nếu text quá ngắn (< 200 ký tự) hoặc chỉ toàn metadata/OCR rác không chứa từ khóa hợp đồng,
+ * trả về false để hệ thống gửi tệp gốc cho Gemini nhận diện thị giác đầy đủ.
+ */
+export function isUsableContractPdfText(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (trimmed.length < 200) return false;
+  // Kiểm tra có ít nhất 1 dấu hiệu từ khóa văn bản hợp đồng / phụ lục / pháp lý
+  return /(h[ợo]p\s*đ[ồo]ng|ph[ụu]\s*l[ụu]c|c[ộo]ng\s*h[òo]a\s*x[ãa]\s*h[ộo]i|đ[ộo]c\s*l[ậa]p|b[êe]n\s*[ab]|đi[ềe]u\s*\d+|contract|agreement|appendix|addendum)/i.test(
+    trimmed,
+  );
+}

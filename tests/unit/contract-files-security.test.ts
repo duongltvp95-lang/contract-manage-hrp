@@ -49,6 +49,7 @@ import {
 import { enqueueR2Cleanup, processR2CleanupQueue } from "@/lib/services/storage-cleanup";
 import { guardFileApiRequest } from "@/lib/api-guard";
 import { OWNER_EMAIL } from "@/lib/owner";
+import { createUploadReservation } from "@/lib/services/upload-reservation";
 
 function createChainableMock(resolvedData: unknown, error: unknown = null) {
   const chain: Record<string, unknown> = {};
@@ -91,6 +92,25 @@ describe("Contract Files Security & Access Control", () => {
   const objectKey = `contracts/${orgId}/${contractId}/${fileId}/doc.pdf`;
   const nonAdminEmail = "viewer@hrpartner.vn";
   const adminEmail = OWNER_EMAIL;
+  const makeReservation = (
+    fileId: string,
+    key: string,
+    filename: string,
+    fileSize: number,
+    kind: "document" | "appendix" = "document",
+    baseContractNumber = "",
+  ) => createUploadReservation({
+    userId: "user-1",
+    organizationId: orgId,
+    contractId,
+    fileId,
+    objectKey: key,
+    filename,
+    mimeType: "application/pdf",
+    fileSize,
+    kind,
+    baseContractNumber,
+  });
 
   beforeAll(() => {
     process.env.R2_ACCOUNT_ID = "mock-account";
@@ -346,6 +366,7 @@ describe("Contract Files Security & Access Control", () => {
         contractId,
         fileId,
         objectKey,
+        uploadReservation: makeReservation(fileId, objectKey, "test.pdf", 1024),
         filename: "test.pdf",
         mimeType: "application/pdf",
         fileSize: 1024,
@@ -405,6 +426,7 @@ describe("Contract Files Security & Access Control", () => {
         contractId,
         fileId,
         objectKey,
+        uploadReservation: makeReservation(fileId, objectKey, "test.pdf", 1024),
         filename: "test.pdf",
         mimeType: "application/pdf",
         fileSize: 1024,
@@ -451,6 +473,7 @@ describe("Contract Files Security & Access Control", () => {
         contractId,
         fileId,
         objectKey,
+        uploadReservation: makeReservation(fileId, objectKey, "test.pdf", 1024),
         filename: "test.pdf",
         mimeType: "application/pdf",
         fileSize: 1024,
@@ -578,6 +601,7 @@ describe("Contract Files Security & Access Control", () => {
       mockCreateUploadUrl.mockResolvedValue("https://r2.example.com/presigned-upload");
 
       const res = await createUploadRequest({
+        userId: "user-1",
         organizationId: orgId,
         contractId,
         filename: "test.pdf",
@@ -598,7 +622,7 @@ describe("Contract Files Security & Access Control", () => {
       mockCreateClient.mockReturnValue({
         from: (table: string) => {
           if (table === "contracts") {
-            return createChainableMock({ id: contractId, archived_at: null });
+            return createChainableMock({ id: contractId, archived_at: null, contract_number: "HD-123" });
           }
           // table === "contract_files": không có file kind = "document" nào
           return createChainableMock(null, null);
@@ -606,6 +630,7 @@ describe("Contract Files Security & Access Control", () => {
       });
 
       const res = await createUploadRequest({
+        userId: "user-1",
         organizationId: orgId,
         contractId,
         filename: "phu-luc-1.pdf",
@@ -626,7 +651,7 @@ describe("Contract Files Security & Access Control", () => {
       mockCreateClient.mockReturnValue({
         from: (table: string) => {
           if (table === "contracts") {
-            return createChainableMock({ id: contractId, archived_at: null });
+            return createChainableMock({ id: contractId, archived_at: null, contract_number: "HD-123" });
           }
           // table === "contract_files": có file document
           return createChainableMock({ id: "doc-1" }, null);
@@ -636,12 +661,14 @@ describe("Contract Files Security & Access Control", () => {
       mockCreateUploadUrl.mockResolvedValue("https://r2.example.com/presigned-appendix");
 
       const res = await createUploadRequest({
+        userId: "user-1",
         organizationId: orgId,
         contractId,
         filename: "phu-luc-1.pdf",
         mimeType: "application/pdf",
         fileSize: 2048,
         kind: "appendix",
+        baseContractNumber: "HD-123",
         userEmail: nonAdminEmail,
       });
 
@@ -651,6 +678,34 @@ describe("Contract Files Security & Access Control", () => {
         "application/pdf",
         2048,
       );
+    });
+
+    it("createUploadRequest: từ chối phụ lục khi baseContractNumber không khớp số hợp đồng hồ sơ", async () => {
+      mockCreateClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "contracts") {
+            return createChainableMock({ id: contractId, archived_at: null, contract_number: "HD-123" });
+          }
+          return createChainableMock({ id: "doc-1" }, null);
+        },
+      });
+
+      const res = await createUploadRequest({
+        userId: "user-1",
+        organizationId: orgId,
+        contractId,
+        filename: "phu-luc-sai.pdf",
+        mimeType: "application/pdf",
+        fileSize: 2048,
+        kind: "appendix",
+        baseContractNumber: "HD-999", // Mismatched
+        userEmail: nonAdminEmail,
+      });
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.message).toContain("không khớp với số hợp đồng của hồ sơ");
+      }
     });
   });
 
@@ -679,6 +734,139 @@ describe("Contract Files Security & Access Control", () => {
         const data = await guard.response.json();
         expect(data.code).toBe("rate_limit_unavailable");
       }
+    });
+  });
+
+  describe("deleteContractFile: Bảo vệ tính toàn vẹn phụ lục khi xoá hợp đồng chính", () => {
+    it("chặn xoá tệp hợp đồng chính khi hồ sơ vẫn còn phụ lục đính kèm", async () => {
+      mockResolveAccess.mockResolvedValue({
+        status: "ok",
+        user: { id: "admin-1", email: adminEmail, role: "admin", organizationId: orgId },
+      });
+
+      let callCount = 0;
+      mockCreateAdminClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "contract_files") {
+            callCount++;
+            if (callCount === 1) {
+              // 1st query: lấy thông tin file cần xóa (kind = document)
+              return createChainableMock(
+                {
+                  id: fileId,
+                  contract_id: contractId,
+                  object_key: objectKey,
+                  original_filename: "main.pdf",
+                  organization_id: orgId,
+                  kind: "document",
+                },
+                null,
+              );
+            }
+            // 2nd query: kiểm tra appendixFiles còn lại
+            const chain = createChainableMock(null, null);
+            chain.limit = vi.fn().mockResolvedValue({
+              data: [{ id: "app-file-1" }],
+              error: null,
+            });
+            return chain;
+          }
+          if (table === "contracts") {
+            return createChainableMock({ id: contractId, archived_at: null }, null);
+          }
+          return createChainableMock(null, null);
+        },
+        rpc: mockRpc,
+      });
+
+      const res = await deleteContractFile(fileId, orgId, adminEmail);
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.message).toContain("Không thể xoá tệp hợp đồng chính khi hồ sơ vẫn còn phụ lục");
+      }
+      expect(mockRpc).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("createUploadRequest: Idempotent upload retry", () => {
+    it("tái sử dụng fileId với reservation hợp lệ để retry đúng cùng object", async () => {
+      mockCreateClient.mockReturnValue({
+        from: (table: string) => {
+          if (table === "contracts") {
+            return createChainableMock({ id: contractId, archived_at: null }, null);
+          }
+          return createChainableMock(null, null);
+        },
+      });
+
+      mockCreateUploadUrl.mockResolvedValue("https://r2.example.com/presigned-put");
+
+      const existingFileId = "44444444-4444-4444-4444-444444444444";
+      const retryObjectKey = `contracts/${orgId}/${contractId}/${existingFileId}/doc.pdf`;
+      mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(null)));
+      const res = await createUploadRequest({
+        userId: "user-1",
+        organizationId: orgId,
+        contractId,
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+        fileId: existingFileId,
+        uploadReservation: makeReservation(existingFileId, retryObjectKey, "doc.pdf", 1024),
+        userEmail: nonAdminEmail,
+      });
+
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.data.fileId).toBe(existingFileId);
+        expect(res.data.objectKey).toBe(retryObjectKey);
+        expect(res.data.uploadReservation).toBeTruthy();
+      }
+    });
+
+    it("từ chối fileId đã tồn tại để không cấp URL ghi đè object đã lưu", async () => {
+      mockCreateClient.mockReturnValue({
+        from: () => createChainableMock({ id: contractId, archived_at: null }, null),
+      });
+      const existingFileId = "55555555-5555-5555-5555-555555555555";
+      const retryObjectKey = `contracts/${orgId}/${contractId}/${existingFileId}/doc.pdf`;
+      mockCreateAdminClient.mockReturnValue(createAdminMock((table) =>
+        table === "contract_files"
+          ? createChainableMock({ id: existingFileId })
+          : createChainableMock(null),
+      ));
+
+      const res = await createUploadRequest({
+        userId: "user-1",
+        organizationId: orgId,
+        contractId,
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+        fileId: existingFileId,
+        uploadReservation: makeReservation(existingFileId, retryObjectKey, "doc.pdf", 1024),
+      });
+
+      expect(res.ok).toBe(false);
+      expect(mockCreateUploadUrl).not.toHaveBeenCalled();
+    });
+
+    it("từ chối client tự chọn fileId không có chữ ký reservation", async () => {
+      mockCreateClient.mockReturnValue({
+        from: () => createChainableMock({ id: contractId, archived_at: null }, null),
+      });
+      const res = await createUploadRequest({
+        userId: "user-1",
+        organizationId: orgId,
+        contractId,
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+        fileId: "66666666-6666-6666-6666-666666666666",
+      });
+
+      expect(res.ok).toBe(false);
+      expect(mockCreateUploadUrl).not.toHaveBeenCalled();
     });
   });
 });

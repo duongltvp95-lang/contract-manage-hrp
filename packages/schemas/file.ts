@@ -27,6 +27,19 @@ export type FileKind = (typeof FILE_KINDS)[number];
 
 export const FileKindSchema = z.enum(FILE_KINDS);
 
+/**
+ * Nhận diện từ khóa phụ lục trong tên tệp hoặc chuỗi tham chiếu.
+ */
+export function hasAppendixKeyword(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return /(ph[uụ]\s*l[uụ]c|plhd|\bpl[-_\s0-9]|appendix|addendum)/i.test(text);
+}
+
+/** Normalize common separators before comparing a contract number. */
+export function normalizeContractNumber(value: string | null | undefined): string {
+  return (value ?? "").normalize("NFKC").toLowerCase().replace(/[\s\-_/.,]+/gu, "");
+}
+
 /** Plan section 39 — MAX_UPLOAD_SIZE_MB, never hard-coded in a component. */
 export const DEFAULT_MAX_UPLOAD_SIZE_MB = 50;
 
@@ -100,6 +113,17 @@ export type ContractFileInput = z.infer<typeof ContractFileSchema>;
  */
 export const UploadUrlRequestSchema = ContractFileSchema.extend({
   contractId: z.guid({ error: "contractId không hợp lệ" }),
+  fileId: z.guid({ error: "fileId không hợp lệ" }).optional(),
+  uploadReservation: z.string().min(1).max(4096).optional(),
+  baseContractNumber: z.string().trim().max(100).optional(),
+}).superRefine((value, ctx) => {
+  if (Boolean(value.fileId) !== Boolean(value.uploadReservation)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["uploadReservation"],
+      message: "Phiên tải lên không hợp lệ",
+    });
+  }
 });
 
 export type UploadUrlRequestInput = z.infer<typeof UploadUrlRequestSchema>;
@@ -110,12 +134,15 @@ export type UploadUrlRequestInput = z.infer<typeof UploadUrlRequestSchema>;
  * Same reasoning as above: `organizationId` and the user id are added by the
  * server from the session.
  */
-export const CompleteUploadSchema = UploadUrlRequestSchema.extend({
+export const CompleteUploadSchema = ContractFileSchema.extend({
+  contractId: z.guid({ error: "contractId không hợp lệ" }),
   fileId: z.guid({ error: "fileId không hợp lệ" }),
   objectKey: z
     .string()
     .min(1, "objectKey không được để trống")
     .max(1024, "objectKey quá dài"),
+  uploadReservation: z.string().min(1, "Thiếu xác nhận phiên tải lên").max(4096),
+  baseContractNumber: z.string().trim().max(100).optional(),
 });
 
 export type CompleteUploadInput = z.infer<typeof CompleteUploadSchema>;

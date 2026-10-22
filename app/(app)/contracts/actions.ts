@@ -5,8 +5,10 @@ import { after } from "next/server";
 import {
   AI_GEMINI_FILES_API_MIN_BYTES,
   CompleteUploadSchema,
+  normalizeContractNumber,
   type FileKind,
   type CompleteUploadInput,
+  hasAppendixKeyword,
 } from "@schemas/file";
 
 import {
@@ -35,7 +37,11 @@ import {
 } from "@/lib/server-action";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { err } from "@/lib/services/types";
-import type { ExtractedContractResult, MatchedBaseContract } from "@schemas/contract";
+import type {
+  ExtractedContract,
+  ExtractedContractResult,
+  MatchedBaseContract,
+} from "@schemas/contract";
 import {
   ALLOWED_MIME_TYPES,
   extractContractFromBuffer,
@@ -89,6 +95,8 @@ export async function createContractAction(
     baseContractNumber: string;
     aiContractNumber: string;
     matchedBaseContractId: string;
+    filename: string;
+    isAppendix: boolean;
   }> = [];
 
   for (const intent of uploadIntents) {
@@ -111,30 +119,43 @@ export async function createContractAction(
       ]);
     }
 
+    const filename = typeof candidate.filename === "string" ? candidate.filename.trim() : "";
+    const baseContractNumber = typeof candidate.baseContractNumber === "string"
+      ? candidate.baseContractNumber.trim()
+      : "";
+    const aiContractNumber = typeof candidate.aiContractNumber === "string"
+      ? candidate.aiContractNumber.trim()
+      : "";
+    const matchedBaseContractId = typeof candidate.matchedBaseContractId === "string"
+      ? candidate.matchedBaseContractId
+      : "";
+
+    // FAIL-CLOSED: Nhận diện phụ lục không chỉ qua intent.kind do trình duyệt gửi.
+    // Nếu tệp có từ khoá phụ lục trong tên tệp HOẶC có số HĐ gốc,
+    // hoặc người dùng/AI đã đánh dấu là phụ lục -> BẮT BUỘC coi là phụ lục.
+    const isAppendix =
+      kind === "appendix" ||
+      aiDocumentType === "appendix" ||
+      hasAppendixKeyword(filename) ||
+      Boolean(baseContractNumber) ||
+      Boolean(matchedBaseContractId);
+
     parsedIntents.push({
-      kind,
+      kind: isAppendix ? "appendix" : "document",
       aiDocumentType: aiDocumentType === "document" || aiDocumentType === "appendix"
         ? aiDocumentType
         : null,
-      baseContractNumber: typeof candidate.baseContractNumber === "string"
-        ? candidate.baseContractNumber.trim()
-        : "",
-      aiContractNumber: typeof candidate.aiContractNumber === "string"
-        ? candidate.aiContractNumber.trim()
-        : "",
-      matchedBaseContractId: typeof candidate.matchedBaseContractId === "string"
-        ? candidate.matchedBaseContractId
-        : "",
+      baseContractNumber,
+      aiContractNumber,
+      matchedBaseContractId,
+      filename,
+      isAppendix,
     });
   }
 
-  const appendixIntents = parsedIntents.filter(
-    (intent) => intent.kind === "appendix" || intent.aiDocumentType === "appendix",
-  );
+  const appendixIntents = parsedIntents.filter((intent) => intent.isAppendix);
   if (appendixIntents.length > 0) {
-    const mainIntents = parsedIntents.filter(
-      (intent) => intent.kind === "document" && intent.aiDocumentType !== "appendix",
-    );
+    const mainIntents = parsedIntents.filter((intent) => !intent.isAppendix);
     if (mainIntents.length === 0) {
       return validationFailure(
         "Không thể lưu hợp đồng khi chưa có hợp đồng gốc được tải lên hệ thống từ trước. Vui lòng tải lên và tạo hợp đồng gốc trước.",
@@ -145,19 +166,18 @@ export async function createContractAction(
     const values = input && typeof input === "object"
       ? input as Record<string, unknown>
       : {};
-    const formContractNumber = typeof values.contractNumber === "string"
-      ? values.contractNumber.trim().toLocaleLowerCase()
-      : "";
+    const formContractNumber = normalizeContractNumber(
+      typeof values.contractNumber === "string" ? values.contractNumber : "",
+    );
 
     for (const appendix of appendixIntents) {
       const baseNumber = appendix.baseContractNumber;
-      const normalizedBaseNumber = baseNumber.toLocaleLowerCase();
+      const normalizedBaseNumber = normalizeContractNumber(baseNumber);
       const hasMatchingMainFile = Boolean(
         normalizedBaseNumber &&
         parsedIntents.some((intent) =>
-          intent.kind === "document" &&
-          intent.aiDocumentType !== "appendix" &&
-          intent.aiContractNumber.toLocaleLowerCase() === normalizedBaseNumber,
+          !intent.isAppendix &&
+          normalizeContractNumber(intent.aiContractNumber) === normalizedBaseNumber,
         ),
       );
       const existingBase = baseNumber
@@ -243,7 +263,7 @@ export async function archiveContractAction(
 export async function completeUploadAction(
   input: unknown,
 ): Promise<ActionResult<ContractFileRow>> {
-  const access = await authorized();
+  const access = await authorized({ timeoutMs: 5_000 });
   if (!access.ok) return access.result;
 
   const parsed = CompleteUploadSchema.safeParse(input);
@@ -267,10 +287,12 @@ export async function completeUploadAction(
     contractId: payload.contractId,
     fileId: payload.fileId,
     objectKey: payload.objectKey,
+    uploadReservation: payload.uploadReservation,
     filename: payload.filename,
     mimeType: payload.mimeType,
     fileSize: payload.fileSize,
     kind: payload.kind,
+    baseContractNumber: payload.baseContractNumber,
   });
 
   return fromService(result);
@@ -428,9 +450,14 @@ export async function extractContractAction(
 
   aiLog.info("Bắt đầu trích xuất hợp đồng", { traceId, source });
 
-  // G2 v2: khai báo ngoài try để finally có thể truy cập cleanup.
+  // G2 v2: khai báo ngoài try để finally có thể truy cập cleanup & metrics thống kê.
   let geminiFileName: string | null = null;
+  let geminiFileUri: string | null = null;
   let r2KeyToClean: string | null = null;
+  let extractedData: ExtractedContract | null = null;
+  let preExtractedPdfTextLength: number | null = null;
+  let pdfTextExtractionAttempted = false;
+  let pdfTextCharacters: number | null = null;
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   const objectKey = formData.get("objectKey");
 
@@ -656,7 +683,8 @@ export async function extractContractAction(
       const pdfBudget = Math.min(1_200, Math.max(500, remainingAiBudgetMs - 8_000));
       if (pdfBudget >= 800) {
         try {
-          const { extractPdfText } = await import("@/lib/ai/pdf-text");
+          const { extractPdfText, isUsableContractPdfText } = await import("@/lib/ai/pdf-text");
+          pdfTextExtractionAttempted = true;
           const pdfResult = await measureAiStage(
             traceId,
             "pdf_text_extract",
@@ -667,8 +695,10 @@ export async function extractContractAction(
               }),
             { sizeBytes: buffer.length },
           );
-          if (pdfResult && pdfResult.text && pdfResult.text.length >= 100) {
+          pdfTextCharacters = pdfResult?.text.length ?? null;
+          if (pdfResult && isUsableContractPdfText(pdfResult.text)) {
             preExtractedPdfText = pdfResult.text;
+            preExtractedPdfTextLength = pdfResult.text.length;
             aiLog.info("Đã đọc trước lớp văn bản PDF, bỏ qua Gemini Files API", {
               traceId,
               textCharacters: pdfResult.text.length,
@@ -687,7 +717,6 @@ export async function extractContractAction(
 
     // Các tệp lớn không có text layer (ảnh lớn hoặc PDF scan) dùng Files API;
     // lỗi upload trả về ngay thay vì âm thầm gửi body base64 lớn.
-    let geminiFileUri: string | null = null;
     if (apiKey && !preExtractedPdfText && buffer.length >= AI_GEMINI_FILES_API_MIN_BYTES) {
       const uploadRes = await measureAiStage(
         traceId,
@@ -746,6 +775,7 @@ export async function extractContractAction(
           geminiFileName: geminiFileUri ? geminiFileName ?? undefined : undefined,
           geminiFileUri: geminiFileUri ?? undefined,
           pdfText: preExtractedPdfText ?? undefined,
+          pdfTextAttempted: pdfTextExtractionAttempted,
           remainingBudgetMs: remainingExtractBudgetMs,
           traceId,
         }),
@@ -757,6 +787,7 @@ export async function extractContractAction(
     }
 
     const extracted = extractionResult.data;
+    extractedData = extracted;
 
     // Chuẩn hóa thời hạn hợp đồng thành số tháng hoặc năm (ví dụ: "6 tháng", "1 năm", "2 năm")
     extracted.durationText = normalizeDurationText({
@@ -913,6 +944,14 @@ export async function extractContractAction(
       elapsedMs: Date.now() - actionStartTime,
       sizeBytes: inputSizeBytes,
       source,
+      documentType: extractedData?.documentType ?? "unknown",
+      hasContractNumber: Boolean(extractedData?.contractNumber),
+      hasSignedDate: Boolean(extractedData?.signedDate),
+      hasExpiryDate: Boolean(extractedData?.expiryDate),
+      hasDurationText: Boolean(extractedData?.durationText),
+      usedPdfText: preExtractedPdfTextLength !== null,
+      pdfTextCharacters: pdfTextCharacters ?? undefined,
+      usedFilesApi: Boolean(geminiFileUri),
     });
   }
 }

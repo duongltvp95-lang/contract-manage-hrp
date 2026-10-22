@@ -17,6 +17,7 @@ import {
   AI_DIRECT_ACTION_MAX_BYTES,
   MAX_AI_FILE_SIZE_BYTES,
   MAX_AI_FILE_SIZE_MB,
+  normalizeContractNumber,
 } from "@schemas/file";
 
 import {
@@ -26,6 +27,7 @@ import {
   updateContractAction,
 } from "@/app/(app)/contracts/actions";
 import {
+  hasAppendixKeyword,
   inferFileKindFromFilename,
   putFileWithProgress,
   requestContractUploadUrl,
@@ -79,22 +81,34 @@ const EMPTY_VALUES: CreateContractInput = {
   notes: "",
 };
 
-export function isAppendixFile(file: Pick<PendingFile, "kind" | "aiDocumentType">) {
-  return file.kind === "appendix" || file.aiDocumentType === "appendix";
+export function isAppendixFile(
+  file: Partial<Pick<PendingFile, "kind" | "aiDocumentType" | "baseContractNumber" | "matchedBaseContractId">> & {
+    file?: { name?: string };
+    filename?: string;
+  },
+) {
+  const filename = file.filename || file.file?.name;
+  return (
+    file.kind === "appendix" ||
+    file.aiDocumentType === "appendix" ||
+    Boolean(file.baseContractNumber) ||
+    Boolean(file.matchedBaseContractId) ||
+    hasAppendixKeyword(filename)
+  );
 }
 
 export function hasMatchingMainContractFile(
   files: Array<Pick<PendingFile, "kind" | "aiDocumentType" | "aiContractNumber">>,
   contractNumber?: string,
 ) {
-  const normalizedNumber = (contractNumber ?? "").trim().toLocaleLowerCase();
+  const normalizedNumber = normalizeContractNumber(contractNumber);
   if (!normalizedNumber) return false;
 
   return files.some(
     (file) =>
       file.kind === "document" &&
       file.aiDocumentType !== "appendix" &&
-      file.aiContractNumber?.trim().toLocaleLowerCase() === normalizedNumber,
+      normalizeContractNumber(file.aiContractNumber) === normalizedNumber,
   );
 }
 
@@ -108,7 +122,7 @@ export function isAppendixSaveBlocked(
   } | null,
 ) {
   const appendixFiles = files.filter(isAppendixFile);
-  const normalizedContractNumber = (contractNumber ?? "").trim().toLocaleLowerCase();
+  const normalizedContractNumber = normalizeContractNumber(contractNumber);
   const hasAppendix = appendixFiles.length > 0 || Boolean(appendixNotice);
 
   // Không có tệp phụ lục nào thì không bị chặn bởi logic phụ lục
@@ -129,7 +143,7 @@ export function isAppendixSaveBlocked(
 
   // 3. Mỗi phụ lục phải có số HĐ gốc khớp với số HĐ chính trong biểu mẫu
   for (const appFile of appendixFiles) {
-    const baseNum = (appFile.baseContractNumber || "").trim().toLocaleLowerCase();
+    const baseNum = normalizeContractNumber(appFile.baseContractNumber);
     if (!baseNum || !normalizedContractNumber || baseNum !== normalizedContractNumber) {
       return true;
     }
@@ -139,7 +153,7 @@ export function isAppendixSaveBlocked(
   }
 
   if (appendixNotice?.type === "not_found") {
-    const noticeBase = appendixNotice.baseContractNumber.trim().toLocaleLowerCase();
+    const noticeBase = normalizeContractNumber(appendixNotice.baseContractNumber);
     if (
       !noticeBase ||
       !normalizedContractNumber ||
@@ -408,22 +422,54 @@ export function ContractForm({
     fileItem: PendingFile,
     baseContractNumber?: string,
   ) {
+    const pendingFile = filesRef.current.find((item) => item.id === fileItem.id) ?? fileItem;
     setIsAttachingToExisting(true);
     const targetNumber = baseContractNumber || "gốc";
     toast.loading(`Đang tải và gán phụ lục vào Hợp đồng số "${targetNumber}"...`, { id: "attach-appendix" });
     try {
-      const rawFile = fileItem.file;
+      const rawFile = pendingFile.file;
       const mimeType = resolveUploadMimeType(rawFile);
       if (!mimeType || mimeType !== "application/pdf") {
         throw new Error("Phụ lục phải là tệp PDF hợp lệ.");
       }
-      const { fileId, objectKey, uploadUrl } = await requestContractUploadUrl({
+
+      if (pendingFile.fileId && pendingFile.objectKey && pendingFile.uploadReservation) {
+        const priorComplete = await completeUploadAction({
+          contractId: baseContractId,
+          fileId: pendingFile.fileId,
+          objectKey: pendingFile.objectKey,
+          uploadReservation: pendingFile.uploadReservation,
+          filename: rawFile.name,
+          mimeType,
+          fileSize: rawFile.size,
+          kind: "appendix",
+          baseContractNumber,
+        });
+        if (priorComplete.ok) {
+          removeFileById(pendingFile.id);
+          setAppendixNotice(null);
+          toast.success(`Đã gán phụ lục vào Hợp đồng "${targetNumber}" thành công.`, {
+            id: "attach-appendix",
+            action: { label: "Xem hợp đồng", onClick: () => router.push(`/contracts/${baseContractId}`) },
+          });
+          return;
+        }
+      }
+
+      const { fileId, objectKey, uploadUrl, uploadReservation } = await requestContractUploadUrl({
         contractId: baseContractId,
         filename: rawFile.name,
         mimeType,
         fileSize: rawFile.size,
         kind: "appendix",
+        fileId: pendingFile.fileId,
+        uploadReservation: pendingFile.uploadReservation,
+        baseContractNumber,
       });
+
+      setFiles((current) => current.map((item) => item.id === pendingFile.id
+        ? { ...item, fileId, objectKey, uploadReservation }
+        : item));
 
       await putFileWithProgress(uploadUrl, rawFile, {
         contentType: mimeType,
@@ -436,17 +482,19 @@ export function ContractForm({
         contractId: baseContractId,
         fileId,
         objectKey,
+        uploadReservation,
         filename: rawFile.name,
         mimeType,
         fileSize: rawFile.size,
         kind: "appendix",
+        baseContractNumber,
       });
 
       if (!completeRes.ok) {
         throw new Error(completeRes.message);
       }
 
-      removeFileById(fileItem.id);
+      removeFileById(pendingFile.id);
       setAppendixNotice(null);
 
       toast.success(`✨ AI đã nhận diện tệp là Phụ lục của Hợp đồng "${targetNumber}" và đã tự động gán vào hợp đồng thành công!`, {
@@ -558,15 +606,34 @@ export function ContractForm({
       const data = result.data;
       const filledFields: string[] = [];
 
-      const isAppendixDoc = data.documentType === "appendix" || Boolean(data.baseContractNumber);
+      const filenameHasAppendix = hasAppendixKeyword(fileItem.file.name);
+      const userSelectedAppendix = fileItem.kind === "appendix";
+      const isAppendixDoc =
+        data.documentType === "appendix" ||
+        Boolean(data.baseContractNumber) ||
+        filenameHasAppendix ||
+        userSelectedAppendix;
       const currentFormNum = form.getValues("contractNumber")?.trim() ?? "";
       const baseNum = data.baseContractNumber?.trim() || data.contractNumber?.trim() || "Không xác định";
 
       if (isAppendixDoc) {
+        const isConflict = data.documentType !== "appendix" && (filenameHasAppendix || userSelectedAppendix);
         setFileClassification(fileItem.id, "appendix", {
-          baseContractNumber: data.baseContractNumber?.trim() || undefined,
+          baseContractNumber: data.baseContractNumber?.trim() || (filenameHasAppendix ? currentFormNum || undefined : undefined),
           matchedBaseContractId: data.matchedBaseContract?.id,
+          extractedPartnerName: data.partnerName,
+          extractedCompanyName: data.companyName,
+          extractedPartnerId: data.matchedPartnerId,
+          extractedCompanyId: data.matchedCompanyId,
+          classificationConflict: isConflict,
         });
+
+        if (isConflict && !options?.suppressIndividualSuccessToast) {
+          toast.warning(
+            `Tệp "${fileItem.file.name}" có dấu hiệu là Phụ lục nhưng AI chưa nhận diện được số hợp đồng gốc. Hệ thống giữ phân loại Phụ lục để bảo vệ tính toàn vẹn dữ liệu.`,
+            { duration: 8000 },
+          );
+        }
 
         // Kiểm tra xem trong biểu mẫu đã có tệp hợp đồng chính nào khớp số HĐ gốc chưa
         const hasMainInFiles = filesRef.current.some(
@@ -575,7 +642,7 @@ export function ContractForm({
         const isMatchedWithCurrentForm =
           currentFormNum.length > 0 &&
           hasMainInFiles &&
-          baseNum.toLowerCase() === currentFormNum.toLowerCase();
+          normalizeContractNumber(baseNum) === normalizeContractNumber(currentFormNum);
 
         if (data.matchedBaseContract) {
           setAppendixNotice({
@@ -615,11 +682,44 @@ export function ContractForm({
       } else {
         setFileClassification(fileItem.id, "document", {
           contractNumber: data.contractNumber,
+          extractedPartnerName: data.partnerName,
+          extractedCompanyName: data.companyName,
+          extractedPartnerId: data.matchedPartnerId,
+          extractedCompanyId: data.matchedCompanyId,
         });
         setAppendixNotice((current) => current?.type === "found" ? current : null);
       }
 
-      // CHỈ điền thông tin hợp đồng vào biểu mẫu nếu tệp này là HỢP ĐỒNG CHÍNH.
+      // Điền thông tin đối tác & công ty do AI đọc được (ngay cả khi là phụ lục, nếu biểu mẫu đang trống)
+      if (isAppendixDoc) {
+        if (data.matchedPartnerId && data.matchedPartnerName && !form.getValues("partnerId")) {
+          setPartnerOptions((current) =>
+            current.some((option) => option.id === data.matchedPartnerId)
+              ? current
+              : [...current, { id: data.matchedPartnerId!, name: data.matchedPartnerName! }].sort((a, b) =>
+                  a.name.localeCompare(b.name, "vi"),
+                ),
+          );
+          form.setValue("partnerId", data.matchedPartnerId, { shouldValidate: true, shouldDirty: true });
+        } else if (data.partnerName?.trim() && !form.getValues("partnerId") && !form.getValues("partnerText")) {
+          setAiPartnerSuggestion({
+            name: data.partnerName.trim(),
+            address: data.partnerAddress?.trim() || undefined,
+            taxCode: data.partnerTaxCode?.trim() || undefined,
+          });
+        }
+
+        if (data.matchedCompanyId && !form.getValues("companyId")) {
+          const companyName =
+            data.matchedCompanyName ||
+            getInternalCompanyName(data.matchedCompanyId) ||
+            "HR VN";
+          setExtraCompany({ id: data.matchedCompanyId, name: companyName });
+          form.setValue("companyId", data.matchedCompanyId, { shouldValidate: true, shouldDirty: true });
+        }
+      }
+
+      // CHỈ điền số hợp đồng & ngày hiệu lực vào biểu mẫu nếu tệp này là HỢP ĐỒNG CHÍNH.
       // Nếu là phụ lục mà chưa có hợp đồng gốc thì TUYỆT ĐỐI không điền để tránh tạo hợp đồng mới trái phép.
       if (!isAppendixDoc && data.contractNumber) {
         form.setValue("contractNumber", data.contractNumber, {
@@ -968,6 +1068,7 @@ export function ContractForm({
         baseContractNumber: file.baseContractNumber,
         aiContractNumber: file.aiContractNumber,
         matchedBaseContractId: file.matchedBaseContractId,
+        filename: file.file.name,
       })),
     );
 
@@ -1202,7 +1303,7 @@ export function ContractForm({
             onToggleFileKind={toggleFileKind}
             appendixNotice={appendixNotice}
             onAttachToExistingContract={(baseContractId, file) =>
-              handleAttachToExistingContract(baseContractId, file, appendixNotice?.baseContractNumber)
+              handleAttachToExistingContract(baseContractId, filesRef.current.find((item) => item.id === file.id) ?? file, appendixNotice?.baseContractNumber)
             }
             isAttachingToExisting={isAttachingToExisting}
             appendixSaveBlocked={appendixSaveBlocked}

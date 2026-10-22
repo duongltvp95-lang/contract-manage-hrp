@@ -68,6 +68,25 @@ describe("Server Action: createContractAction - Kiểm tra chặn phụ lục đ
     expect(mockCreateContract).not.toHaveBeenCalled();
   });
 
+  it("từ chối khi client và AI báo document nhưng tên tệp nhận diện là phụ lục", async () => {
+    const res = await createContractAction(
+      { contractNumber: "HD-100" },
+      [{
+        kind: "document",
+        aiDocumentType: "document",
+        aiContractNumber: "HD-100",
+        filename: "Phu luc HD-100.pdf",
+      }],
+    );
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.code).toBe("validation");
+      expect(res.message).toContain("Không thể lưu hợp đồng khi chưa có hợp đồng gốc");
+    }
+    expect(mockCreateContract).not.toHaveBeenCalled();
+  });
+
   it("từ chối lưu khi phụ lục thuộc hợp đồng đã có sẵn trong cơ sở dữ liệu", async () => {
     mockFindBaseContractByNumber.mockResolvedValue({
       id: "base-contract-99",

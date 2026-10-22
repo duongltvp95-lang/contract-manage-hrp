@@ -1,6 +1,12 @@
 import "server-only";
 
-import { MAX_UPLOAD_SIZE_BYTES, MAX_UPLOAD_SIZE_MB, PresignUploadSchema, type FileKind } from "@schemas/file";
+import {
+  MAX_UPLOAD_SIZE_BYTES,
+  MAX_UPLOAD_SIZE_MB,
+  normalizeContractNumber,
+  PresignUploadSchema,
+  type FileKind,
+} from "@schemas/file";
 
 import { buildObjectKey, isObjectKeyFor } from "@/lib/r2/keys";
 import { deleteObject, headObject } from "@/lib/r2/objects";
@@ -16,6 +22,7 @@ import { createClient } from "@/lib/supabase/server";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { recordCurrentUserAudit } from "./audit-logs";
 import { enqueueR2Cleanup } from "./storage-cleanup";
+import { createUploadReservation, verifyUploadReservation } from "./upload-reservation";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
@@ -141,17 +148,22 @@ export type UploadRequest = {
   fileId: string;
   objectKey: string;
   uploadUrl: string;
+  uploadReservation: string;
   bucket: string;
   expiresInSeconds: number;
 };
 
 export type CreateUploadRequestInput = {
+  userId: string;
   organizationId: string;
   contractId: string;
   filename: string;
   mimeType: string;
   fileSize: number;
   kind?: FileKind;
+  fileId?: string;
+  uploadReservation?: string;
+  baseContractNumber?: string;
   userEmail?: string | null;
 };
 
@@ -190,6 +202,33 @@ export async function createUploadRequest(
 
   if (input.kind === "appendix") {
     const supabase = await createClient();
+
+    // Đối chiếu số hợp đồng của hồ sơ với số hợp đồng gốc của phụ lục nếu có.
+    const { data: contractRow, error: contractError } = await supabase
+      .from("contracts")
+      .select("id, contract_number")
+      .eq("organization_id", organizationId)
+      .eq("id", contractId)
+      .maybeSingle();
+
+    if (contractError) {
+      return dbError("createUploadRequest.getContract", contractError);
+    }
+    if (!contractRow) {
+      return err("not_found", "Không tìm thấy hồ sơ hợp đồng");
+    }
+
+    if (input.baseContractNumber) {
+      const normBase = normalizeContractNumber(input.baseContractNumber);
+      const normContract = normalizeContractNumber(contractRow.contract_number);
+      if (normBase && normContract && normBase !== normContract) {
+        return err(
+          "validation",
+          `Số hợp đồng gốc của phụ lục ("${input.baseContractNumber}") không khớp với số hợp đồng của hồ sơ ("${contractRow.contract_number}").`,
+        );
+      }
+    }
+
     const { data: mainDocument, error: mainDocumentError } = await supabase
       .from("contract_files")
       .select("id")
@@ -207,13 +246,53 @@ export async function createUploadRequest(
     }
   }
 
-  const fileId = crypto.randomUUID();
+  const fileId = parsed.data.fileId ?? crypto.randomUUID();
   const objectKey = buildObjectKey({
     organizationId,
     contractId,
     fileId,
     filename,
   });
+
+  const reservationFields = {
+    userId: input.userId,
+    organizationId,
+    contractId,
+    fileId,
+    objectKey,
+    filename,
+    mimeType,
+    fileSize,
+    kind: parsed.data.kind ?? "document",
+    baseContractNumber: parsed.data.baseContractNumber ?? "",
+  } as const;
+
+  if (parsed.data.fileId) {
+    if (!parsed.data.uploadReservation || !verifyUploadReservation(parsed.data.uploadReservation, reservationFields)) {
+      return err("forbidden", "Phiên tải lên không hợp lệ hoặc đã hết hạn. Vui lòng tải lại tệp.");
+    }
+
+    // A retry ticket may only refresh the URL for an uncommitted upload. Never
+    // issue a PUT URL for a file row that already exists: that would overwrite
+    // a persisted R2 object using a replayed fileId.
+    const admin = createAdminClient();
+    const { data: existingFile, error: existingFileError } = await admin
+      .from("contract_files")
+      .select("id")
+      .eq("id", fileId)
+      .maybeSingle();
+    if (existingFileError) return dbError("createUploadRequest.checkFileId", existingFileError);
+    if (existingFile) return err("validation", "Tệp đã được lưu. Hãy làm mới hồ sơ trước khi tải lại.");
+
+    const { data: cleanupJob, error: cleanupError } = await admin
+      .from("r2_cleanup_queue")
+      .select("id")
+      .eq("object_key", objectKey)
+      .limit(1)
+      .maybeSingle();
+    if (cleanupError) return dbError("createUploadRequest.checkCleanupQueue", cleanupError);
+    if (cleanupJob) return err("validation", "Phiên tải lên đã được đưa vào hàng đợi dọn dẹp. Vui lòng chọn lại tệp.");
+  }
 
   // Pass fileSize so AWS SigV4 binds Content-Length header, preventing oversized uploads
   const uploadUrl = await createUploadUrl(objectKey, mimeType, fileSize);
@@ -222,6 +301,7 @@ export async function createUploadRequest(
     fileId,
     objectKey,
     uploadUrl,
+    uploadReservation: parsed.data.uploadReservation ?? createUploadReservation(reservationFields),
     bucket: getR2Bucket(),
     expiresInSeconds: 10 * 60,
   });
@@ -234,10 +314,12 @@ export type CompleteUploadInput = {
   contractId: string;
   fileId: string;
   objectKey: string;
+  uploadReservation: string;
   filename: string;
   mimeType: string;
   fileSize: number;
   kind?: FileKind;
+  baseContractNumber?: string;
 };
 
 /**
@@ -267,7 +349,49 @@ export async function completeUpload(
   }
 
   const supabase = await createClient();
+  const reservationFields = {
+    userId,
+    organizationId,
+    contractId,
+    fileId,
+    objectKey,
+    filename: input.filename,
+    mimeType: input.mimeType,
+    fileSize: input.fileSize,
+    kind: input.kind ?? "document",
+    baseContractNumber: input.baseContractNumber ?? "",
+  } as const;
+  if (!verifyUploadReservation(input.uploadReservation, reservationFields)) {
+    return err("forbidden", "Phiên tải lên không hợp lệ hoặc đã hết hạn. Vui lòng tải lại tệp.");
+  }
+
   if (input.kind === "appendix") {
+    if (input.baseContractNumber) {
+      const { data: contractRow, error: contractError } = await supabase
+        .from("contracts")
+        .select("id, contract_number")
+        .eq("organization_id", organizationId)
+        .eq("id", contractId)
+        .maybeSingle();
+
+      if (contractError) {
+        return dbError("completeUpload.getContract", contractError);
+      }
+      if (!contractRow) {
+        return err("not_found", "Không tìm thấy hồ sơ hợp đồng");
+      }
+
+      const normBase = normalizeContractNumber(input.baseContractNumber);
+      const normContract = normalizeContractNumber(contractRow.contract_number);
+      if (normBase && normContract && normBase !== normContract) {
+        await discardRejectedUpload(objectKey, "Phụ lục không khớp số hợp đồng của hồ sơ");
+        return err(
+          "validation",
+          `Số hợp đồng gốc của phụ lục ("${input.baseContractNumber}") không khớp với số hợp đồng của hồ sơ ("${contractRow.contract_number}").`,
+        );
+      }
+    }
+
     const { data: mainDocument, error: mainDocumentError } = await supabase
       .from("contract_files")
       .select("id")
@@ -303,6 +427,10 @@ export async function completeUpload(
   }
 
   if (headError) {
+    await discardRejectedUpload(
+      objectKey,
+      `R2 HEAD thất bại: ${headError instanceof Error ? headError.message : String(headError)}`,
+    );
     return dbError("completeUpload.headObject", headError);
   }
   if (!head) {
@@ -352,7 +480,8 @@ export async function completeUpload(
     );
   }
 
-  const { data: rpcData, error: persistError } = await supabase
+  const admin = createAdminClient();
+  const { data: rpcData, error: persistError } = await admin
     .rpc("complete_contract_file_upload", {
       p_file_id: fileId,
       p_organization_id: organizationId,
@@ -582,7 +711,7 @@ export async function deleteContractFile(
 
   const { data: fileData, error: findError } = await admin
     .from("contract_files")
-    .select("id, contract_id, object_key, organization_id, original_filename")
+    .select("id, contract_id, object_key, organization_id, original_filename, kind")
     .eq("id", fileId)
     .eq("organization_id", organizationId)
     .maybeSingle();
@@ -600,6 +729,7 @@ export async function deleteContractFile(
     contract_id: string;
     object_key: string;
     original_filename: string;
+    kind: FileKind;
   };
 
   const { data: contractData, error: contractError } = await admin
@@ -621,6 +751,28 @@ export async function deleteContractFile(
     return err("validation", "Không thể xoá tệp của hợp đồng đã được lưu trữ");
   }
 
+  // Không cho phép xoá tệp hợp đồng chính nếu hồ sơ vẫn còn phụ lục
+  if (file.kind === "document") {
+    const { data: appendixFiles, error: appCheckError } = await admin
+      .from("contract_files")
+      .select("id")
+      .eq("contract_id", file.contract_id)
+      .eq("organization_id", organizationId)
+      .eq("kind", "appendix")
+      .limit(1);
+
+    if (appCheckError) {
+      return dbError("deleteContractFile.checkAppendices", appCheckError);
+    }
+
+    if (appendixFiles && appendixFiles.length > 0) {
+      return err(
+        "validation",
+        "Không thể xoá tệp hợp đồng chính khi hồ sơ vẫn còn phụ lục đính kèm. Vui lòng xoá các phụ lục trước.",
+      );
+    }
+  }
+
   // The RPC deletes the row and inserts a processing cleanup intent in one
   // transaction under the same per-object lock used by upload completion.
   const { data: deletionData, error: deleteError } = await admin.rpc(
@@ -635,6 +787,9 @@ export async function deleteContractFile(
   if (deleteError) {
     if (deleteError.code === "55000") {
       return err("validation", "Hợp đồng đã thay đổi trạng thái; không thể xoá tệp");
+    }
+    if (deleteError.code === "23514" || deleteError.message?.includes("Cannot delete main contract document")) {
+      return err("validation", "Không thể xoá tệp hợp đồng chính khi hồ sơ vẫn còn phụ lục đính kèm");
     }
     return dbError("deleteContractFile", deleteError);
   }

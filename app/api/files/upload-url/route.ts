@@ -37,12 +37,16 @@ export async function POST(request: NextRequest) {
 
   const result = await createUploadRequest({
     // authoritative, from the session
+    userId: guard.user.id,
     organizationId: guard.user.organizationId,
     contractId: parsed.data.contractId,
     filename: parsed.data.filename,
     mimeType: parsed.data.mimeType,
     fileSize: parsed.data.fileSize,
     kind: parsed.data.kind,
+    fileId: parsed.data.fileId,
+    uploadReservation: parsed.data.uploadReservation,
+    baseContractNumber: parsed.data.baseContractNumber,
     userEmail: guard.user.email,
   });
 

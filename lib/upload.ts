@@ -10,7 +10,10 @@ import {
   ALLOWED_MIME_TYPES,
   type AllowedMimeType,
   type FileKind,
+  hasAppendixKeyword,
 } from "@schemas/file";
+
+export { hasAppendixKeyword };
 
 export type PendingFileStatus = "pending" | "uploading" | "done" | "error";
 
@@ -31,9 +34,17 @@ export type PendingFile = {
   /** AI-extracted parent contract metadata used to validate appendix pairing before save. */
   baseContractNumber?: string;
   matchedBaseContractId?: string;
+  /** Thông tin đối tác & công ty do AI đọc được từ tệp (lưu lại để không mất khi là phụ lục) */
+  extractedPartnerName?: string;
+  extractedCompanyName?: string;
+  extractedPartnerId?: string;
+  extractedCompanyId?: string;
+  /** Đánh dấu xung đột phân loại (ví dụ tên tệp là phụ lục nhưng AI đọc ra hợp đồng chính) */
+  classificationConflict?: boolean;
   /** Set once the server has reserved the object key. */
   fileId?: string;
   objectKey?: string;
+  uploadReservation?: string;
 };
 
 export type UploadProgress = {
@@ -67,12 +78,16 @@ export type ContractUploadRequest = {
   mimeType: AllowedMimeType;
   fileSize: number;
   kind: FileKind;
+  fileId?: string;
+  uploadReservation?: string;
+  baseContractNumber?: string;
 };
 
 export type ContractUploadUrl = {
   fileId: string;
   objectKey: string;
   uploadUrl: string;
+  uploadReservation: string;
 };
 
 /** Retry only transient presign failures; the endpoint has no persistent side effects. */
@@ -119,7 +134,7 @@ export async function requestContractUploadUrl(
     }
 
     const payload = (await response.json()) as Partial<ContractUploadUrl>;
-    if (!payload.fileId || !payload.objectKey || !payload.uploadUrl) {
+    if (!payload.fileId || !payload.objectKey || !payload.uploadUrl || !payload.uploadReservation) {
       throw new Error("Dịch vụ không trả về đủ thông tin URL tải lên.");
     }
     return payload as ContractUploadUrl;

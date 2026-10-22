@@ -38,6 +38,10 @@ export function useContractUploads({
           ? {
               ...item,
               kind: item.kind === "appendix" ? "document" : "appendix",
+              fileId: undefined,
+              objectKey: undefined,
+              uploadReservation: undefined,
+              progress: 0,
             }
           : item,
       ),
@@ -51,6 +55,11 @@ export function useContractUploads({
       contractNumber?: string;
       baseContractNumber?: string;
       matchedBaseContractId?: string;
+      extractedPartnerName?: string | null;
+      extractedCompanyName?: string | null;
+      extractedPartnerId?: string | null;
+      extractedCompanyId?: string | null;
+      classificationConflict?: boolean;
     },
   ) {
     setFiles((current) =>
@@ -63,6 +72,11 @@ export function useContractUploads({
               aiContractNumber: kind === "document" ? metadata?.contractNumber?.trim() : undefined,
               baseContractNumber: kind === "appendix" ? metadata?.baseContractNumber : undefined,
               matchedBaseContractId: kind === "appendix" ? metadata?.matchedBaseContractId : undefined,
+              extractedPartnerName: metadata?.extractedPartnerName ?? item.extractedPartnerName,
+              extractedCompanyName: metadata?.extractedCompanyName ?? item.extractedCompanyName,
+              extractedPartnerId: metadata?.extractedPartnerId ?? item.extractedPartnerId,
+              extractedCompanyId: metadata?.extractedCompanyId ?? item.extractedCompanyId,
+              classificationConflict: metadata?.classificationConflict ?? item.classificationConflict,
             }
           : item,
       ),
@@ -74,38 +88,79 @@ export function useContractUploads({
   }
 
   async function uploadOne(contractId: string, pending: PendingFile) {
-    patchFile(pending.id, { status: "uploading", progress: 0, error: undefined });
+    patchFile(pending.id, { status: "uploading", error: undefined });
     const mimeType = resolveUploadMimeType(pending.file);
     if (!mimeType) {
       throw new Error("Không xác định được định dạng tệp. Chỉ chấp nhận PDF, PNG hoặc JPG.");
     }
 
-    // 1. Ask the server for a presigned PUT (authorization happens there)
-    const { fileId, objectKey, uploadUrl } = await requestContractUploadUrl({
+    let fileId = pending.fileId;
+    let objectKey = pending.objectKey;
+    let uploadReservation = pending.uploadReservation;
+
+    // Nếu lần trước đã nhận reservation, thử complete trước. Nếu object chưa lên
+    // R2 thì complete báo upload_incomplete và ta xin URL mới cho đúng reservation.
+    if (fileId && objectKey && uploadReservation) {
+      try {
+        const persisted = await completeUploadAction({
+          contractId,
+          fileId,
+          objectKey,
+          uploadReservation,
+          filename: pending.file.name,
+          mimeType,
+          fileSize: pending.file.size,
+          kind: pending.kind,
+          baseContractNumber: pending.baseContractNumber,
+        });
+        if (persisted.ok) {
+          patchFile(pending.id, { status: "done" });
+          return;
+        }
+      } catch {
+        // Nếu complete chưa thành công, tiếp tục xin presigned URL và tải lại bên dưới
+      }
+    }
+
+    // 1. Xin presigned PUT URL. Nếu đã có fileId cũ, truyền fileId để tái sử dụng đúng objectKey,
+    // tránh sinh ra object rác mồ côi trên R2 khi thử lại.
+    const presigned = await requestContractUploadUrl({
       contractId,
       filename: pending.file.name,
       mimeType,
       fileSize: pending.file.size,
       kind: pending.kind,
+      fileId,
+      uploadReservation,
+      baseContractNumber: pending.kind === "appendix" ? pending.baseContractNumber : undefined,
     });
 
+    fileId = presigned.fileId;
+    objectKey = presigned.objectKey;
+    uploadReservation = presigned.uploadReservation;
+    // Persist the retry identity before starting the PUT. A timeout or tab-side
+    // network error must not force the next attempt to create a fresh R2 key.
+    patchFile(pending.id, { fileId, objectKey, uploadReservation });
+
     // 2. Upload the bytes straight to R2
-    await putFileWithProgress(uploadUrl, pending.file, {
+    await putFileWithProgress(presigned.uploadUrl, pending.file, {
       contentType: mimeType,
       onProgress: (progress) => patchFile(pending.id, { progress: progress.percent }),
     });
 
-    patchFile(pending.id, { fileId, objectKey, progress: 100 });
+    patchFile(pending.id, { fileId, objectKey, uploadReservation, progress: 100 });
 
     // 3. Persist the metadata row
     const persisted = await completeUploadAction({
       contractId,
       fileId,
       objectKey,
+      uploadReservation,
       filename: pending.file.name,
       mimeType,
       fileSize: pending.file.size,
       kind: pending.kind,
+      baseContractNumber: pending.kind === "appendix" ? pending.baseContractNumber : undefined,
     });
 
     if (!persisted.ok) {

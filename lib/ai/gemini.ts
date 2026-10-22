@@ -379,6 +379,7 @@ export async function extractContractFromBuffer({
   geminiFileName,
   geminiFileUri,
   pdfText,
+  pdfTextAttempted,
   remainingBudgetMs = 32_000,
   traceId,
 }: {
@@ -391,6 +392,8 @@ export async function extractContractFromBuffer({
   geminiFileUri?: string;
   /** Optional: Lớp văn bản PDF đã được trích xuất trước để bỏ qua Gemini Files API */
   pdfText?: string;
+  /** Optional: Đánh dấu caller đã thử parse PDF text rồi, không lặp lại parse cục bộ */
+  pdfTextAttempted?: boolean;
   /** Ngân sách thời gian tối đa còn lại cho bước extract (ms) */
   remainingBudgetMs?: number;
   /** Correlates stage logs for one extraction without logging contract content. */
@@ -433,20 +436,20 @@ export async function extractContractFromBuffer({
   let pdfTextForModel: string | null = pdfText ?? null;
   let extractedPdfText: string | null = pdfText ?? null;
 
-  if (resolvedMime === "application/pdf" && !useFilesApi && !pdfTextForModel) {
+  if (resolvedMime === "application/pdf" && !useFilesApi && !pdfTextForModel && !pdfTextAttempted) {
     const pdfStartTime = Date.now();
     try {
       // Giới hạn parse cục bộ để tiết kiệm ngân sách
       const remainingBeforePdf = extractDeadline - Date.now() - 6_000;
       if (remainingBeforePdf >= 2_000) {
-        const { extractPdfText } = await import("@/lib/ai/pdf-text");
+        const { extractPdfText, isUsableContractPdfText } = await import("@/lib/ai/pdf-text");
         const pdfTimeout = Math.min(1_500, remainingBeforePdf);
         const pdfResult = await extractPdfText(
           buffer,
           pdfTimeout,
           { maxPages: 10, maxCharacters: 12_000 },
         );
-        if (pdfResult) {
+        if (pdfResult && isUsableContractPdfText(pdfResult.text)) {
           extractedPdfText = pdfResult.text;
           pdfTextForModel = pdfResult.text;
           aiLog.info("Đọc lớp văn bản PDF hoàn tất", {
@@ -482,11 +485,24 @@ export async function extractContractFromBuffer({
         usedFilesApi: false,
       });
     }
-  } else if (resolvedMime === "application/pdf") {
+  } else if (resolvedMime === "application/pdf" && useFilesApi) {
     aiLog.info("Bỏ qua PDF parser cục bộ vì tệp dùng Gemini Files API", {
       traceId,
       sizeBytes: buffer.length,
       usedFilesApi: true,
+    });
+  } else if (resolvedMime === "application/pdf" && pdfTextForModel) {
+    aiLog.info("Bỏ qua PDF parser cục bộ vì đã có text trích xuất", {
+      traceId,
+      sizeBytes: buffer.length,
+      textCharacters: pdfTextForModel.length,
+      usedFilesApi: false,
+    });
+  } else if (resolvedMime === "application/pdf" && pdfTextAttempted) {
+    aiLog.info("Bỏ qua PDF parser lặp vì caller đã thử đọc trước đó", {
+      traceId,
+      sizeBytes: buffer.length,
+      usedFilesApi: false,
     });
   }
 

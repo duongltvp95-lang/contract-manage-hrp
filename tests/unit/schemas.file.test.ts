@@ -6,6 +6,7 @@ import {
   ContractFileSchema,
   FILE_KINDS,
   MAX_UPLOAD_SIZE_BYTES,
+  normalizeContractNumber,
   PresignUploadSchema,
   UploadUrlRequestSchema,
   ViewUrlRequestSchema,
@@ -171,6 +172,22 @@ describe("UploadUrlRequestSchema", () => {
     });
     expect(parsed).not.toHaveProperty("organizationId");
   });
+
+  it("chỉ chấp nhận fileId khi có reservation đi kèm", () => {
+    const base = {
+      contractId: CONTRACT_ID,
+      filename: "a.pdf",
+      mimeType: "application/pdf",
+      fileSize: 10,
+    };
+    expect(UploadUrlRequestSchema.safeParse({ ...base, fileId: FILE_ID }).success).toBe(false);
+    expect(UploadUrlRequestSchema.safeParse({ ...base, uploadReservation: "ticket" }).success).toBe(false);
+    expect(UploadUrlRequestSchema.safeParse({
+      ...base,
+      fileId: FILE_ID,
+      uploadReservation: "ticket",
+    }).success).toBe(true);
+  });
 });
 
 describe("CompleteUploadSchema", () => {
@@ -195,6 +212,26 @@ describe("CompleteUploadSchema", () => {
         objectKey: "",
       }).success,
     ).toBe(false); // objectKey empty
+  });
+
+  it("requires a signed reservation for completion", () => {
+    const result = CompleteUploadSchema.safeParse({
+      contractId: CONTRACT_ID,
+      fileId: FILE_ID,
+      filename: "a.pdf",
+      mimeType: "application/pdf",
+      fileSize: 10,
+      objectKey: `contracts/${ORG_ID}/${CONTRACT_ID}/${FILE_ID}/a.pdf`,
+      uploadReservation: "signed-ticket",
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("normalizeContractNumber", () => {
+  it("normalizes common separators and unicode forms consistently", () => {
+    expect(normalizeContractNumber("HD - 01/2026")).toBe("hd012026");
+    expect(normalizeContractNumber("HD-01/2026")).toBe("hd012026");
   });
 });
 

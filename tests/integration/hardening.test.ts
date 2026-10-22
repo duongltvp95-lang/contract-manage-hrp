@@ -34,7 +34,12 @@ const suite = hasLiveBackend ? describe : describe.skip;
 const DECLARED_BYTES = 1024; // comfortably under the server's 1 MB ceiling
 const OVERSIZED_BYTES = 2 * 1024 * 1024;
 
-type Presign = { fileId: string; objectKey: string; uploadUrl: string };
+type Presign = {
+  fileId: string;
+  objectKey: string;
+  uploadUrl: string;
+  uploadReservation: string;
+};
 
 async function presign(
   contractId: string,
@@ -71,6 +76,7 @@ async function completeViaProbe(
       contractId: input.contractId,
       fileId: input.fileId,
       objectKey: input.objectKey,
+      uploadReservation: input.uploadReservation,
       filename: input.filename,
       mimeType: "application/pdf",
       fileSize: DECLARED_BYTES,

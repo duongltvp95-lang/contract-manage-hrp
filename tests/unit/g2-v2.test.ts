@@ -19,7 +19,8 @@ import {
   getGeminiModels,
   MAX_AI_FILE_SIZE_BYTES,
 } from "@/lib/ai/gemini";
-import { extractPdfText } from "@/lib/ai/pdf-text";
+import { extractPdfText, isUsableContractPdfText } from "@/lib/ai/pdf-text";
+import { hasAppendixKeyword } from "@schemas/file";
 import {
   hasMatchingMainContractFile,
   isAppendixFile,
@@ -335,7 +336,7 @@ describe("G2 v2 — extractContractFromBuffer với 3 nhánh", () => {
   it("nhánh PDF có text layer gửi cả text đã trích xuất và EXTRACTION_SYSTEM_PROMPT", async () => {
     const pdfTextModule = await import("@/lib/ai/pdf-text");
     const extractPdfSpy = vi.spyOn(pdfTextModule, "extractPdfText").mockResolvedValueOnce({
-      text: "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nHỢP ĐỒNG KINH TẾ Số: 99/2026/HĐKT",
+      text: "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\n\nHỢP ĐỒNG KINH TẾ Số: 99/2026/HĐKT\nCăn cứ Bộ luật Dân sự và nhu cầu hai bên:\nBên A: CÔNG TY TNHH HRP VIỆT NAM\nBên B: CÔNG TY CỔ PHẦN CÔNG NGHỆ ABC\nHai bên thống nhất ký kết hợp đồng cung cấp dịch vụ.",
       pageCount: 1,
     });
 
@@ -740,6 +741,85 @@ describe("G2 v2 — Khóa lưu hợp đồng khi tải lên Phụ lục chưa c�
       const normalizedDb = existingInDb.replace(/[\s\-_/]/g, "").toLowerCase();
 
       expect(normalizedTarget).toBe(normalizedDb);
+    });
+  });
+
+  describe("Phát hiện từ khóa phụ lục & Fail-closed Appendix Detection", () => {
+    it("hasAppendixKeyword nhận diện chính xác các biến thể tên tệp phụ lục", () => {
+      expect(hasAppendixKeyword("Phu luc 01.pdf")).toBe(true);
+      expect(hasAppendixKeyword("PHỤ LỤC HỢP ĐỒNG SỐ 2.pdf")).toBe(true);
+      expect(hasAppendixKeyword("PLHD_2026.pdf")).toBe(true);
+      expect(hasAppendixKeyword("pl-01.pdf")).toBe(true);
+      expect(hasAppendixKeyword("appendix_A.pdf")).toBe(true);
+      expect(hasAppendixKeyword("addendum_02.pdf")).toBe(true);
+
+      // Tệp hợp đồng chính thông thường
+      expect(hasAppendixKeyword("Hop_dong_kinh_te.pdf")).toBe(false);
+      expect(hasAppendixKeyword("HD_01_2026.pdf")).toBe(false);
+      expect(hasAppendixKeyword("contract.pdf")).toBe(false);
+      expect(hasAppendixKeyword(null)).toBe(false);
+      expect(hasAppendixKeyword("")).toBe(false);
+    });
+
+    it("isAppendixFile trả về true khi tên tệp có từ khóa phụ lục dù kind và AI là document (fail-closed)", () => {
+      const file = {
+        kind: "document" as const,
+        aiDocumentType: "document" as const,
+        filename: "Phụ lục hợp đồng 01.pdf",
+      };
+      expect(isAppendixFile(file)).toBe(true);
+    });
+
+    it("isAppendixFile trả về false khi tệp là hợp đồng chính bình thường", () => {
+      const file = {
+        kind: "document" as const,
+        aiDocumentType: "document" as const,
+        filename: "Hop_dong_dich_vu_2026.pdf",
+      };
+      expect(isAppendixFile(file)).toBe(false);
+    });
+  });
+
+  describe("Chất lượng văn bản PDF & Bỏ qua parse PDF lặp (isUsableContractPdfText & pdfTextAttempted)", () => {
+    it("isUsableContractPdfText trả về true cho văn bản pháp lý hợp đồng đầy đủ", () => {
+      const legalText = `
+        CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM
+        Độc lập - Tự do - Hạnh phúc
+        HỢP ĐỒNG DỊCH VỤ TƯ VẤN SỐ: 100/2026/HĐDV
+        Căn cứ Bộ luật Dân sự số 91/2015/QH13;
+        Bên A: CÔNG TY TNHH HRP VIỆT NAM
+        Bên B: CÔNG TY CỔ PHẦN CÔNG NGHỆ ABC
+        Điều 1: Phạm vi công việc và dịch vụ.
+      `;
+      expect(isUsableContractPdfText(legalText)).toBe(true);
+    });
+
+    it("isUsableContractPdfText từ chối văn bản quá ngắn hoặc OCR rác", () => {
+      // Quá ngắn (< 100 ký tự)
+      expect(isUsableContractPdfText("Hợp đồng ngắn")).toBe(false);
+      expect(isUsableContractPdfText("")).toBe(false);
+      expect(isUsableContractPdfText(null)).toBe(false);
+
+      // Dài nhưng không có từ khóa hợp đồng (OCR rác, số trang, tiêu đề chung)
+      const garbageOcr = "1234567890 ".repeat(20) + "Page 1 of 10 scanned by scanner device without any text";
+      expect(isUsableContractPdfText(garbageOcr)).toBe(false);
+    });
+
+    it("extractContractFromBuffer không gọi lại extractPdfText khi pdfTextAttempted = true", async () => {
+      const pdfTextModule = await import("@/lib/ai/pdf-text");
+      const extractSpy = vi.spyOn(pdfTextModule, "extractPdfText");
+
+      // Gọi với pdfTextAttempted: true (mô phỏng actions.ts đã parse trước đó)
+      await extractContractFromBuffer({
+        buffer: Buffer.from("dummy-pdf-content"),
+        mimeType: "application/pdf",
+        filename: "scan.pdf",
+        pdfTextAttempted: true,
+      });
+
+      // extractPdfText cục bộ trong gemini.ts KHÔNG được gọi lại
+      expect(extractSpy).not.toHaveBeenCalled();
+      extractSpy.mockRestore();
     });
   });
 });

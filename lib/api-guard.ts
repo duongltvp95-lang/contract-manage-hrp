@@ -30,7 +30,21 @@ export type ApiGuard =
 export async function guardFileApiRequest(
   bucket: RateLimitBucket,
 ): Promise<ApiGuard> {
-  const access = await resolveAccess();
+  let access: Awaited<ReturnType<typeof resolveAccess>>;
+  try {
+    access = await resolveAccess({ abortSignal: AbortSignal.timeout(5_000) });
+  } catch (error) {
+    if (error instanceof Error && (error.name === "AbortError" || error.message.includes("AbortError"))) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: "Dịch vụ xác thực tạm thời chậm, vui lòng thử lại.", code: "timeout" },
+          { status: 503 },
+        ),
+      };
+    }
+    throw error;
+  }
 
   if (access.status !== "ok") {
     const disabled = access.status === "disabled";
@@ -47,7 +61,7 @@ export async function guardFileApiRequest(
     };
   }
 
-  const verdict = await consumeRateLimit(bucket);
+  const verdict = await consumeRateLimit(bucket, { abortSignal: AbortSignal.timeout(5_000) });
 
   if (!verdict.ok) {
     // Fail CLOSED.

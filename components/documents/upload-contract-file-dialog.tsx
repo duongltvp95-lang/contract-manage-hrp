@@ -60,12 +60,18 @@ export function UploadContractFileDialog({
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [uploadAttempt, setUploadAttempt] = useState<{
+    fileId: string;
+    objectKey: string;
+    uploadReservation: string;
+  } | null>(null);
 
   const resetState = () => {
     setSelectedFile(null);
     setProgress(0);
     setError(null);
     setIsUploading(false);
+    setUploadAttempt(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -87,6 +93,7 @@ export function UploadContractFileDialog({
     }
 
     setSelectedFile(file);
+    setUploadAttempt(null);
     const inferred = inferFileKindFromFilename(file.name);
     setKind(inferred);
   };
@@ -107,14 +114,38 @@ export function UploadContractFileDialog({
         throw new Error("Chỉ chấp nhận tệp định dạng PDF, PNG hoặc JPG.");
       }
 
-      // 1. Xin URL presigned PUT từ server
-      const { fileId, objectKey, uploadUrl } = await requestContractUploadUrl({
+      // Nếu lượt trước đã được cấp reservation, thử hoàn tất trước để tránh PUT lại.
+      if (uploadAttempt) {
+        const priorComplete = await completeUploadAction({
+          contractId,
+          ...uploadAttempt,
+          filename: selectedFile.name,
+          mimeType,
+          fileSize: selectedFile.size,
+          kind,
+        });
+        if (priorComplete.ok) {
+          toast.success(`Đã tải lên tệp "${selectedFile.name}" thành công`);
+          resetState();
+          onOpenChange(false);
+          onSuccess?.(uploadAttempt.fileId);
+          router.refresh();
+          return;
+        }
+      }
+
+      // 1. Xin URL presigned PUT từ server, tái sử dụng reservation khi retry.
+      const { fileId, objectKey, uploadUrl, uploadReservation } = await requestContractUploadUrl({
         contractId,
         filename: selectedFile.name,
         mimeType,
         fileSize: selectedFile.size,
         kind,
+        fileId: uploadAttempt?.fileId,
+        uploadReservation: uploadAttempt?.uploadReservation,
       });
+      const attempt = { fileId, objectKey, uploadReservation };
+      setUploadAttempt(attempt);
 
       // 2. Upload tệp trực tiếp lên Cloudflare R2
       await putFileWithProgress(uploadUrl, selectedFile, {
@@ -125,8 +156,7 @@ export function UploadContractFileDialog({
       // 3. Xác thực HEAD và lưu bản ghi vào database
       const completeRes = await completeUploadAction({
         contractId,
-        fileId,
-        objectKey,
+        ...attempt,
         filename: selectedFile.name,
         mimeType,
         fileSize: selectedFile.size,
@@ -193,7 +223,10 @@ export function UploadContractFileDialog({
             </Label>
             <Select
               value={kind}
-              onValueChange={(val: string) => setKind(val as FileKind)}
+              onValueChange={(val: string) => {
+                setKind(val as FileKind);
+                setUploadAttempt(null);
+              }}
               disabled={isUploading}
             >
               <SelectTrigger id="file-kind-select" className="w-full">

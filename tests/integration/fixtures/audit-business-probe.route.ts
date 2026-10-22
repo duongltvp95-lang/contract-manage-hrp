@@ -13,6 +13,7 @@ import {
   getRecentContracts,
 } from "@/lib/services/dashboard";
 import { completeUpload, listContractFiles } from "@/lib/services/files";
+import { createUploadReservation } from "@/lib/services/upload-reservation";
 import {
   createPartner,
   deletePartner,
@@ -105,11 +106,26 @@ export async function POST(request: NextRequest) {
           contractId: String(payload.contractId ?? ""),
           fileId: String(payload.fileId ?? ""),
           objectKey: String(payload.objectKey ?? ""),
+          uploadReservation: createUploadReservation({
+            userId: access.user.id,
+            organizationId,
+            contractId: String(payload.contractId ?? ""),
+            fileId: String(payload.fileId ?? ""),
+            objectKey: String(payload.objectKey ?? ""),
+            filename: String(payload.filename ?? ""),
+            mimeType: String(payload.mimeType ?? ""),
+            fileSize: Number(payload.fileSize ?? 0),
+            kind: payload.kind === "appendix" ? "appendix" : "document",
+            baseContractNumber: typeof payload.baseContractNumber === "string" ? payload.baseContractNumber : "",
+          }),
           filename: String(payload.filename ?? ""),
           mimeType: String(payload.mimeType ?? ""),
           fileSize: Number(payload.fileSize ?? 0),
           ...(payload.kind === "appendix" || payload.kind === "document"
             ? { kind: payload.kind }
+            : {}),
+          ...(typeof payload.baseContractNumber === "string"
+            ? { baseContractNumber: payload.baseContractNumber }
             : {}),
         }),
       );
