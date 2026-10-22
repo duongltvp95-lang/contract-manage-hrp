@@ -50,12 +50,21 @@ export function LogsTable({ rows }: { rows: AuditLogRow[] }) {
                 {formatDateTime(row.createdAt)}
               </td>
               <td className="px-3 py-2">
-                <span className="text-sm" title={row.actorId}>
-                  {row.actorName ?? "[Người dùng đã xoá]"}
-                </span>
-                <Badge variant="outline" className="ml-2">
-                  {row.actorRole}
-                </Badge>
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium text-sm text-foreground" title={row.actorId}>
+                      {row.actorName || row.actorEmail || "[Người dùng đã xoá]"}
+                    </span>
+                    <Badge variant="outline" className="text-[11px] px-1.5 py-0">
+                      {row.actorRole}
+                    </Badge>
+                  </div>
+                  {row.actorEmail && row.actorName && (
+                    <span className="text-xs text-muted-foreground font-mono">
+                      {row.actorEmail}
+                    </span>
+                  )}
+                </div>
               </td>
               <td className="px-3 py-2">
                 {AUDIT_ACTION_LABELS[row.action] ?? row.action}

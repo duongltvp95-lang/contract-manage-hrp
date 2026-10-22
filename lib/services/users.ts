@@ -237,6 +237,53 @@ export async function requireAdmin() {
  * has to go through the Admin API. It is paginated because the API caps a page
  * at 1000 rows and a silent truncation would show users with a blank email.
  */
+const userEmailCache = new Map<string, { email: string; timestamp: number }>();
+const USER_EMAIL_CACHE_TTL_MS = 60_000;
+
+async function resolveUserEmails(
+  service: SupabaseClient,
+  userIds: string[],
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (!userIds.length || !service.auth?.admin?.getUserById) return result;
+
+  const now = Date.now();
+  const missingIds: string[] = [];
+
+  for (const id of userIds) {
+    const cached = userEmailCache.get(id);
+    if (cached && now - cached.timestamp < USER_EMAIL_CACHE_TTL_MS) {
+      result.set(id, cached.email);
+    } else {
+      missingIds.push(id);
+    }
+  }
+
+  if (missingIds.length === 0) return result;
+
+  // Tra cứu theo nhu cầu (on-demand) chỉ cho danh sách userIds thuộc tổ chức hiện hành.
+  // Tuyệt đối không gọi listUsers toàn hệ thống để tránh nạp email của các tổ chức khác vào bộ nhớ.
+  // Sử dụng sliding window worker pool concurrency = 10 (hết việc này nhận việc kế tiếp ngay).
+  let index = 0;
+  const workers = Array.from({ length: Math.min(missingIds.length, 10) }, async () => {
+    while (index < missingIds.length) {
+      const id = missingIds[index++];
+      try {
+        const { data, error } = await service.auth.admin.getUserById(id);
+        if (!error && data?.user?.email) {
+          result.set(id, data.user.email);
+          userEmailCache.set(id, { email: data.user.email, timestamp: now });
+        }
+      } catch {
+        // ignore error for mocked or restricted environments
+      }
+    }
+  });
+  await Promise.all(workers);
+
+  return result;
+}
+
 async function listAuthEmails(
   service: SupabaseClient,
 ): Promise<Map<string, string>> {
@@ -273,17 +320,19 @@ export async function listUsers(params?: {
   const admin = await requireAdmin();
   if (!admin.ok) return admin;
 
+  const targetOrgId = params?.organizationId ?? admin.data.organizationId;
+  if (targetOrgId !== admin.data.organizationId) {
+    return err("forbidden", "Không thể xem người dùng của tổ chức khác");
+  }
+
   const service = createAdminClient();
 
-  let query = service
+  const query = service
     .from("profiles")
     .select("id, full_name, role, is_active, created_at")
+    .eq("organization_id", targetOrgId)
     .eq("is_tombstone", false)
     .order("created_at", { ascending: true });
-
-  if (params?.organizationId) {
-    query = query.eq("organization_id", params.organizationId);
-  }
 
   const { data: profiles, error } = await query;
 
@@ -291,12 +340,8 @@ export async function listUsers(params?: {
     return dbError("listUsers", error);
   }
 
-  let emails: Map<string, string>;
-  try {
-    emails = await listAuthEmails(service);
-  } catch (error) {
-    return dbError("listUsers", error);
-  }
+  const userIds = (profiles ?? []).map((p) => p.id);
+  const emails = await resolveUserEmails(service, userIds);
 
   const rows = (profiles ?? []) as {
     id: string;

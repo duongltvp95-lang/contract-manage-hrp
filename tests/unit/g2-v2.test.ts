@@ -795,7 +795,7 @@ describe("G2 v2 — Khóa lưu hợp đồng khi tải lên Phụ lục chưa c�
     });
 
     it("isUsableContractPdfText từ chối văn bản quá ngắn hoặc OCR rác", () => {
-      // Quá ngắn (< 100 ký tự)
+      // Quá ngắn (< 250 ký tự)
       expect(isUsableContractPdfText("Hợp đồng ngắn")).toBe(false);
       expect(isUsableContractPdfText("")).toBe(false);
       expect(isUsableContractPdfText(null)).toBe(false);
@@ -803,6 +803,34 @@ describe("G2 v2 — Khóa lưu hợp đồng khi tải lên Phụ lục chưa c�
       // Dài nhưng không có từ khóa hợp đồng (OCR rác, số trang, tiêu đề chung)
       const garbageOcr = "1234567890 ".repeat(20) + "Page 1 of 10 scanned by scanner device without any text";
       expect(isUsableContractPdfText(garbageOcr)).toBe(false);
+    });
+
+    it("isUsableContractPdfText từ chối khi tài liệu bị cắt ngắn (isTruncated = true)", () => {
+      const legalText = `
+        CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM
+        Độc lập - Tự do - Hạnh phúc
+        HỢP ĐỒNG DỊCH VỤ TƯ VẤN SỐ: 100/2026/HĐDV
+        Căn cứ Bộ luật Dân sự số 91/2015/QH13;
+        Bên A: CÔNG TY TNHH HRP VIỆT NAM
+        Bên B: CÔNG TY CỔ PHẦN CÔNG NGHỆ ABC
+        Điều 1: Phạm vi công việc và dịch vụ.
+      `;
+      // Nếu file bị cắt ngắn (vượt 10 trang hoặc 12.000 ký tự), bắt buộc gửi file gốc cho Gemini
+      expect(isUsableContractPdfText(legalText, { isTruncated: true })).toBe(false);
+    });
+
+    it("isUsableContractPdfText từ chối khi chỉ có 1 nhóm dấu hiệu cấu trúc hoặc OCR nhiễu ký tự lạ", () => {
+      // Chỉ có từ khóa "hợp đồng" lặp lại, không có các bên và không có điều khoản
+      const singleGroupText = "Hợp đồng kinh tế Hợp đồng kinh tế Hợp đồng cung cấp dịch vụ ".repeat(10);
+      expect(isUsableContractPdfText(singleGroupText)).toBe(false);
+
+      // Văn bản có dấu hiệu hợp đồng nhưng chứa quá nhiều ký tự nhiễu OCR (tỷ lệ alpha/num < 65%)
+      const noisyOcrText = `
+        HỢP ĐỒNG DỊCH VỤ #$%^&*!@#$$%^&*(
+        Bên A: !@#$%^&*()_+{}|:"<>?
+        Điều 1: !@#$%^&*()_+{}|:"<>?~
+      `.repeat(8);
+      expect(isUsableContractPdfText(noisyOcrText)).toBe(false);
     });
 
     it("extractContractFromBuffer không gọi lại extractPdfText khi pdfTextAttempted = true", async () => {

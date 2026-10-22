@@ -1,6 +1,8 @@
 "use server";
 
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { recordAudit, recordLogoutAudit } from "@/lib/services/audit-logs";
 import {
   calculateRemainingAttempts,
   canAttemptLoginWithEmail,
@@ -220,6 +222,36 @@ export async function loginAction(payload: {
 
     // Đăng nhập thành công -> xóa bỏ bộ đếm thất bại
     await clearStoredAttempts();
+
+    // Ghi nhận nhật ký đăng nhập sử dụng của tài khoản
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      if (authData?.user) {
+        const adminClient = createAdminClient();
+        const { data: profile } = await adminClient
+          .from("profiles")
+          .select("organization_id, role")
+          .eq("id", authData.user.id)
+          .maybeSingle();
+
+        if (profile) {
+          await recordAudit({
+            organizationId: profile.organization_id,
+            actorId: authData.user.id,
+            actorRole: profile.role === "admin" ? "admin" : "user",
+            action: "login",
+            targetKind: "user",
+            targetId: authData.user.id,
+            metadata: {
+              email: authData.user.email ?? email,
+            },
+          });
+        }
+      }
+    } catch (auditErr) {
+      console.error("[login:audit]", auditErr);
+    }
+
     return { success: true };
   } catch (err: unknown) {
     return {
@@ -229,5 +261,14 @@ export async function loginAction(payload: {
           ? err.message
           : "Đã xảy ra lỗi kết nối khi đăng nhập.",
     };
+  }
+}
+
+/** Server Action ghi nhận sự kiện Đăng xuất vào nhật ký sử dụng */
+export async function recordLogoutAction(): Promise<void> {
+  try {
+    await recordLogoutAudit();
+  } catch (err) {
+    console.error("[logout:audit]", err);
   }
 }

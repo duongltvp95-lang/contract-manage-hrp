@@ -762,7 +762,32 @@ export async function updateContract(
    * values object), so in the UI this is a full update either way.
    */
   const patch: Record<string, string | null> = {};
-  if ("contractNumber" in raw) patch.contract_number = emptyToNull(values.contractNumber);
+  if ("contractNumber" in raw) {
+    const nextNum = emptyToNull(values.contractNumber);
+    if (!nextNum || nextNum.trim() === "—") {
+      const supabase = await createClient();
+      const { data: appendix, error: appendixError } = await supabase
+        .from("contract_files")
+        .select("id")
+        .eq("organization_id", context.organizationId)
+        .eq("contract_id", id)
+        .eq("kind", "appendix")
+        .limit(1)
+        .maybeSingle();
+
+      if (appendixError) {
+        return dbError("updateContract.checkAppendices", appendixError);
+      }
+
+      if (appendix) {
+        return err(
+          "validation",
+          "Không thể xóa số hợp đồng khi hồ sơ đã có phụ lục đính kèm.",
+        );
+      }
+    }
+    patch.contract_number = nextNum;
+  }
   if ("signedDate" in raw) patch.signed_date = emptyToNull(values.signedDate);
   if ("durationText" in raw) patch.duration_text = emptyToNull(values.durationText);
   if ("expiryDate" in raw) patch.expiry_date = emptyToNull(values.expiryDate);

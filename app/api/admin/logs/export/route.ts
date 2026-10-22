@@ -134,7 +134,7 @@ function formatTxt(rows: AuditLogRow[]): string {
   const lines = rows.map((row) =>
     [
       row.createdAt,
-      row.actorName ?? "[Người dùng đã xoá]",
+      actorDisplay(row),
       row.actorRole,
       actionLabel(row.action),
       targetLabel(row.targetKind, row.targetId),
@@ -166,7 +166,7 @@ async function formatXlsx(rows: AuditLogRow[]): Promise<Buffer> {
   for (const row of rows) {
     sheet.addRow({
       createdAt: row.createdAt,
-      actorId: row.actorName ?? "[Người dùng đã xoá]",
+      actorId: actorDisplay(row),
       actorRole: row.actorRole,
       action: actionLabel(row.action),
       target: targetLabel(row.targetKind, row.targetId),
@@ -174,6 +174,13 @@ async function formatXlsx(rows: AuditLogRow[]): Promise<Buffer> {
     });
   }
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+}
+
+function actorDisplay(row: AuditLogRow): string {
+  if (row.actorName && row.actorEmail) {
+    return `${row.actorName} (${row.actorEmail})`;
+  }
+  return row.actorName ?? row.actorEmail ?? "[Người dùng đã xoá]";
 }
 
 function actionLabel(action: AuditAction): string {

@@ -201,18 +201,55 @@ export async function extractPdfText(
   }
 }
 
+export interface UsableTextOptions {
+  isTruncated?: boolean;
+}
+
 /**
  * Kiểm tra xem lớp văn bản trích xuất từ PDF có đủ chất lượng và nội dung pháp lý
  * để thay thế việc gửi hình ảnh/file gốc lên Gemini không.
- * Nếu text quá ngắn (< 200 ký tự) hoặc chỉ toàn metadata/OCR rác không chứa từ khóa hợp đồng,
- * trả về false để hệ thống gửi tệp gốc cho Gemini nhận diện thị giác đầy đủ.
+ * Nếu text bị cắt ngắn (isTruncated), quá ngắn (< 250 ký tự), OCR nhiễu/rác, hoặc
+ * thiếu các cấu trúc pháp lý cơ bản (tiêu đề, các bên, điều khoản), trả về false
+ * để hệ thống gửi tệp gốc cho Gemini nhận diện thị giác/file đầy đủ.
  */
-export function isUsableContractPdfText(text: string | null | undefined): boolean {
+export function isUsableContractPdfText(
+  text: string | null | undefined,
+  options?: UsableTextOptions,
+): boolean {
+  if (options?.isTruncated) {
+    // Tài liệu vượt quá 10 trang hoặc 12.000 ký tự: gửi file gốc lên Gemini để
+    // xử lý toàn bộ các trang (tránh mất trang phụ lục/chữ ký sau trang 10).
+    return false;
+  }
   if (!text) return false;
   const trimmed = text.trim();
-  if (trimmed.length < 200) return false;
-  // Kiểm tra có ít nhất 1 dấu hiệu từ khóa văn bản hợp đồng / phụ lục / pháp lý
-  return /(h[ợo]p\s*đ[ồo]ng|ph[ụu]\s*l[ụu]c|c[ộo]ng\s*h[òo]a\s*x[ãa]\s*h[ộo]i|đ[ộo]c\s*l[ậa]p|b[êe]n\s*[ab]|đi[ềe]u\s*\d+|contract|agreement|appendix|addendum)/i.test(
-    trimmed,
-  );
+  if (trimmed.length < 250) return false;
+
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length < 25) return false;
+
+  // Lọc nhiễu OCR: tỷ lệ ký tự chữ và số so với tổng ký tự không khoảng trắng >= 65%
+  const cleanAlphaNum = trimmed.replace(/[^\p{L}\p{N}]/gu, "").length;
+  const nonWhitespace = trimmed.replace(/\s+/g, "").length;
+  if (nonWhitespace === 0 || cleanAlphaNum / nonWhitespace < 0.65) {
+    return false;
+  }
+
+  // Lọc chuỗi dính liền bất thường (OCR hỏng khoảng trắng)
+  const abnormalLongWords = words.filter((w) => w.length > 35).length;
+  if (abnormalLongWords > 0 && abnormalLongWords / words.length > 0.05) {
+    return false;
+  }
+
+  // Yêu cầu tối thiểu 2 trong 3 nhóm dấu hiệu cấu trúc pháp lý hợp đồng:
+  // 1. Tiêu đề / bản chất văn bản
+  const hasTitle = /(?:h[ợo]p\s*đ[ồo]ng|ph[ụu]\s*l[ụu]c|tho[ảa]\s*thu[ậa]n|contract|agreement|addendum|annex)/i.test(trimmed);
+  // 2. Chủ thể tham gia / đại diện / quốc hiệu
+  const hasParties = /(?:b[êe]n\s*[ab]|c[ộo]ng\s*h[òo]a\s*x[ãa]\s*h[ộo]i|đ[ộo]c\s*l[ậa]p\s*-\s*t[ựu]\s*do|đ[ạa]i\s*di[ệe]n|công\s*ty|party\s*[ab]|company)/i.test(trimmed);
+  // 3. Điều khoản / giá trị / thanh toán / chữ ký
+  const hasTerms = /(?:đi[ềe]u\s*\d+|đi[ềe]u\s*kho[ảa]n|quy[ềe]n\s*v[àa]\s*ngh[iĩ]a\s*v[ụu]|gi[áa]\s*tr[ịi]|thanh\s*to[áa]n|hi[ệe]u\s*l[ựu]c|ch[ữu]\s*k[ýy]|article\s*\d+|terms\s*(?:and|&)\s*conditions)/i.test(trimmed);
+
+  const matchedGroups = (hasTitle ? 1 : 0) + (hasParties ? 1 : 0) + (hasTerms ? 1 : 0);
+  return matchedGroups >= 2;
 }
+

@@ -123,9 +123,28 @@ describe("formatAuditSentence", () => {
     expect(say("export_partners", { count: 144 })).toBe(
       "Khương Văn Đường đã xuất danh bạ đối tác",
     );
+    expect(say("login", {})).toBe("Khương Văn Đường đã đăng nhập hệ thống");
+    expect(say("logout", {})).toBe("Khương Văn Đường đã đăng xuất hệ thống");
+    expect(say("view_file", { filename: "hop-dong.pdf" })).toBe(
+      'Khương Văn Đường đã xem tệp “hop-dong.pdf”',
+    );
+    expect(say("delete_file", { filename: "hop-dong.pdf" })).toBe(
+      'Khương Văn Đường đã xoá tệp “hop-dong.pdf”',
+    );
   });
 
-  it("uses a neutral subject when the actor name is missing", () => {
+  it("falls back to actor email when actor name is missing", () => {
+    expect(
+      formatAuditSentence({
+        actorName: null,
+        actorEmail: "duongltvp95@gmail.com",
+        action: "login",
+        metadata: {},
+      }),
+    ).toBe("duongltvp95@gmail.com đã đăng nhập hệ thống");
+  });
+
+  it("uses a neutral subject when both actor name and email are missing", () => {
     expect(say("create_partner", { name: "Công ty A" }, null)).toBe(
       'Một người dùng đã thêm đối tác “Công ty A”',
     );

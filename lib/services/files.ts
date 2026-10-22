@@ -218,15 +218,12 @@ export async function createUploadRequest(
       return err("not_found", "Không tìm thấy hồ sơ hợp đồng");
     }
 
-    if (input.baseContractNumber) {
-      const normBase = normalizeContractNumber(input.baseContractNumber);
-      const normContract = normalizeContractNumber(contractRow.contract_number);
-      if (normBase && normContract && normBase !== normContract) {
-        return err(
-          "validation",
-          `Số hợp đồng gốc của phụ lục ("${input.baseContractNumber}") không khớp với số hợp đồng của hồ sơ ("${contractRow.contract_number}").`,
-        );
-      }
+    const normContract = normalizeContractNumber(contractRow.contract_number);
+    if (!normContract || normContract === "—") {
+      return err(
+        "validation",
+        "Không thể tải lên phụ lục khi hồ sơ hợp đồng chưa có số hợp đồng hợp lệ.",
+      );
     }
 
     const { data: mainDocument, error: mainDocumentError } = await supabase
@@ -243,6 +240,20 @@ export async function createUploadRequest(
     }
     if (!mainDocument) {
       return err("validation", "Cần tải tệp hợp đồng chính lên trước khi tải phụ lục.");
+    }
+
+    const normBase = normalizeContractNumber(input.baseContractNumber);
+    if (!normBase) {
+      return err(
+        "validation",
+        "Tải lên phụ lục bắt buộc phải có số hợp đồng gốc tương ứng để đối chiếu.",
+      );
+    }
+    if (normBase !== normContract) {
+      return err(
+        "validation",
+        `Số hợp đồng gốc của phụ lục ("${input.baseContractNumber}") không khớp với số hợp đồng của hồ sơ ("${contractRow.contract_number}").`,
+      );
     }
   }
 
@@ -366,32 +377,6 @@ export async function completeUpload(
   }
 
   if (input.kind === "appendix") {
-    if (input.baseContractNumber) {
-      const { data: contractRow, error: contractError } = await supabase
-        .from("contracts")
-        .select("id, contract_number")
-        .eq("organization_id", organizationId)
-        .eq("id", contractId)
-        .maybeSingle();
-
-      if (contractError) {
-        return dbError("completeUpload.getContract", contractError);
-      }
-      if (!contractRow) {
-        return err("not_found", "Không tìm thấy hồ sơ hợp đồng");
-      }
-
-      const normBase = normalizeContractNumber(input.baseContractNumber);
-      const normContract = normalizeContractNumber(contractRow.contract_number);
-      if (normBase && normContract && normBase !== normContract) {
-        await discardRejectedUpload(objectKey, "Phụ lục không khớp số hợp đồng của hồ sơ");
-        return err(
-          "validation",
-          `Số hợp đồng gốc của phụ lục ("${input.baseContractNumber}") không khớp với số hợp đồng của hồ sơ ("${contractRow.contract_number}").`,
-        );
-      }
-    }
-
     const { data: mainDocument, error: mainDocumentError } = await supabase
       .from("contract_files")
       .select("id")
@@ -408,6 +393,37 @@ export async function completeUpload(
     if (!mainDocument) {
       await discardRejectedUpload(objectKey, "Từ chối lưu phụ lục khi chưa có hợp đồng chính");
       return err("validation", "Cần tải tệp hợp đồng chính lên trước khi lưu phụ lục.");
+    }
+
+    const { data: contractRow, error: contractError } = await supabase
+      .from("contracts")
+      .select("id, contract_number")
+      .eq("organization_id", organizationId)
+      .eq("id", contractId)
+      .maybeSingle();
+
+    if (contractError) {
+      return dbError("completeUpload.getContract", contractError);
+    }
+    if (!contractRow) {
+      return err("not_found", "Không tìm thấy hồ sơ hợp đồng");
+    }
+
+    const normContract = normalizeContractNumber(contractRow.contract_number);
+    const normBase = normalizeContractNumber(input.baseContractNumber);
+    if (!normBase) {
+      await discardRejectedUpload(objectKey, "Thiếu số hợp đồng gốc của phụ lục");
+      return err(
+        "validation",
+        "Tải lên phụ lục bắt buộc phải có số hợp đồng gốc tương ứng để đối chiếu.",
+      );
+    }
+    if (!normContract || normBase !== normContract) {
+      await discardRejectedUpload(objectKey, "Phụ lục không khớp số hợp đồng của hồ sơ");
+      return err(
+        "validation",
+        `Số hợp đồng gốc của phụ lục ("${input.baseContractNumber}") không khớp với số hợp đồng của hồ sơ ("${contractRow.contract_number}").`,
+      );
     }
   }
 
@@ -819,6 +835,21 @@ export async function deleteContractFile(
     }
   } catch (finishError) {
     console.error("[service:deleteContractFile] Ngoại lệ khi cập nhật trạng thái cleanup job", finishError);
+  }
+
+  try {
+    await recordCurrentUserAudit({
+      action: "delete_file",
+      targetKind: "file",
+      targetId: file.id,
+      metadata: {
+        filename: file.original_filename,
+        kind: file.kind,
+        contractId: file.contract_id,
+      },
+    });
+  } catch (auditError) {
+    console.error("[service:deleteContractFile] Lỗi ghi nhật ký xoá tệp", auditError);
   }
 
   return ok({ id: deletion.id, contractId: deletion.contract_id });

@@ -449,7 +449,7 @@ export async function extractContractFromBuffer({
           pdfTimeout,
           { maxPages: 10, maxCharacters: 12_000 },
         );
-        if (pdfResult && isUsableContractPdfText(pdfResult.text)) {
+        if (pdfResult && isUsableContractPdfText(pdfResult.text, { isTruncated: pdfResult.isTruncated })) {
           extractedPdfText = pdfResult.text;
           pdfTextForModel = pdfResult.text;
           aiLog.info("Đọc lớp văn bản PDF hoàn tất", {

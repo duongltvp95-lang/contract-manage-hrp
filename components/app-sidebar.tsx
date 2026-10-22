@@ -26,6 +26,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { recordLogoutAction } from "@/app/login/actions";
 import { createClient } from "@/lib/supabase/client";
 
 /**
@@ -99,6 +100,11 @@ export function AppSidebar() {
   }, []);
 
   const handleSignOut = async () => {
+    try {
+      await recordLogoutAction();
+    } catch {
+      // Swallowed by design
+    }
     const supabase = createClient();
     await supabase.auth.signOut();
     router.push("/login");

@@ -47,6 +47,10 @@ describe("audit-log enums", () => {
     expect(AUDIT_ACTION_LABELS.archive_contract).toBe("Lưu trữ hợp đồng");
     expect(AUDIT_ACTION_LABELS.upload_file).toBe("Tải tệp lên");
     expect(AUDIT_ACTION_LABELS.update_profile).toBe("Cập nhật hồ sơ");
+    expect(AUDIT_ACTION_LABELS.login).toBe("Đăng nhập");
+    expect(AUDIT_ACTION_LABELS.logout).toBe("Đăng xuất");
+    expect(AUDIT_ACTION_LABELS.view_file).toBe("Xem tệp");
+    expect(AUDIT_ACTION_LABELS.delete_file).toBe("Xoá tệp");
   });
 });
 
@@ -87,6 +91,10 @@ describe("LogsFilterSchema", () => {
       "archive_contract",
       "upload_file",
       "update_profile",
+      "login",
+      "logout",
+      "view_file",
+      "delete_file",
     ]) {
       expect(LogsFilterSchema.parse({ action }).action).toBe(action);
     }

@@ -32,10 +32,23 @@ import {
  * resets the fields to the new URL values, with no `useEffect`/`setState`
  * pair (which the linter correctly flags as a cascading-render hazard).
  */
-export function LogsFilterForm({ initial }: { initial: LogsFilter }) {
+export type FilterUserOption = {
+  id: string;
+  email: string | null;
+  fullName: string | null;
+};
+
+export function LogsFilterForm({
+  initial,
+  users = [],
+}: {
+  initial: LogsFilter;
+  users?: FilterUserOption[];
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const [actorId, setActorId] = useState<string>(initial.actorId ?? "ALL");
   const [action, setAction] = useState<string>(initial.action ?? "");
   const [from, setFrom] = useState<string>(initial.from ?? "");
   const [to, setTo] = useState<string>(initial.to ?? "");
@@ -49,6 +62,7 @@ export function LogsFilterForm({ initial }: { initial: LogsFilter }) {
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const next = new URLSearchParams();
+    if (actorId && actorId !== "ALL") next.set("actorId", actorId);
     if (action) next.set("action", action);
     if (from) next.set("from", from);
     if (to) next.set("to", to);
@@ -59,6 +73,7 @@ export function LogsFilterForm({ initial }: { initial: LogsFilter }) {
   }
 
   function onReset() {
+    setActorId("ALL");
     setAction("");
     setFrom("");
     setTo("");
@@ -72,6 +87,28 @@ export function LogsFilterForm({ initial }: { initial: LogsFilter }) {
       className="flex flex-wrap items-end gap-3"
       data-testid="logs-filter-form"
     >
+      <div className="space-y-1">
+        <Label htmlFor="logs-actor">Tài khoản</Label>
+        <Select value={actorId} onValueChange={setActorId}>
+          <SelectTrigger id="logs-actor" className="w-[220px]" data-testid="logs-filter-actor">
+            <SelectValue placeholder="Tất cả tài khoản" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ALL">Tất cả tài khoản</SelectItem>
+            {users.map((u) => {
+              const label = u.fullName && u.email
+                ? `${u.fullName} (${u.email})`
+                : (u.fullName || u.email || u.id.slice(0, 8));
+              return (
+                <SelectItem key={u.id} value={u.id}>
+                  {label}
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+      </div>
+
       <div className="space-y-1">
         <Label htmlFor="logs-action">Hành động</Label>
         <Select value={action} onValueChange={setAction}>

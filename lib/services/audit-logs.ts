@@ -39,6 +39,7 @@ export type AuditLogRow = {
   actorId: string;
   actorRole: "admin" | "user";
   actorName: string | null;
+  actorEmail?: string | null;
   action: AuditAction;
   targetKind: AuditTargetKind;
   targetId: string | null;
@@ -66,6 +67,7 @@ function rowFromDb(row: AuditRowDb): AuditLogRow {
     actorRole: row.actor_role === "admin" ? "admin" : "user",
     // Filled in by `listAuditLogs` after a single profiles lookup.
     actorName: null,
+    actorEmail: null,
     action: row.action as AuditAction,
     targetKind: row.target_kind as AuditTargetKind,
     targetId: row.target_id,
@@ -248,18 +250,22 @@ export async function listAuditLogs(
 
   const rows = (data ?? []) as AuditRowDb[];
 
-  // Resolve every distinct actor to its display name in ONE query. A profile
-  // that no longer exists, or the system tombstone that a hard-deleted actor is
-  // re-pointed to (round 4), resolves to `null` — the UI then shows its own
-  // "[Người dùng đã xoá]" placeholder.
+  // Resolve every distinct actor to its display name and email in ONE query.
+  // A profile that no longer exists, or the system tombstone that a hard-deleted
+  // actor is re-pointed to (round 4), resolves to `null` — the UI then shows its
+  // own placeholder or email.
   const actorNames = new Map<string, string | null>();
+  const actorEmails = new Map<string, string | null>();
   const actorIds = [...new Set(rows.map((row) => row.actor_id))];
 
   if (actorIds.length > 0) {
-    const { data: profiles } = await service
-      .from("profiles")
-      .select("id, full_name, is_tombstone")
-      .in("id", actorIds);
+    const [{ data: profiles }, authEmails] = await Promise.all([
+      service
+        .from("profiles")
+        .select("id, full_name, is_tombstone")
+        .in("id", actorIds),
+      resolveAuthEmails(service, actorIds),
+    ]);
 
     for (const profile of (profiles ?? []) as {
       id: string;
@@ -271,13 +277,74 @@ export async function listAuditLogs(
         profile.is_tombstone ? null : (profile.full_name ?? null),
       );
     }
+
+    for (const [id, email] of authEmails) {
+      actorEmails.set(id, email);
+    }
   }
 
   return ok({
     rows: rows.map((row) => ({
       ...rowFromDb(row),
       actorName: actorNames.get(row.actor_id) ?? null,
+      actorEmail: actorEmails.get(row.actor_id) ?? null,
     })),
+  });
+}
+
+const actorEmailCache = new Map<string, { email: string; timestamp: number }>();
+const CACHE_TTL_MS = 60_000;
+
+async function resolveAuthEmails(
+  service: SupabaseClient,
+  actorIds: string[],
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (!actorIds.length || !service.auth?.admin?.getUserById) return result;
+
+  const now = Date.now();
+  const missingIds: string[] = [];
+
+  for (const id of actorIds) {
+    const cached = actorEmailCache.get(id);
+    if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+      result.set(id, cached.email);
+    } else {
+      missingIds.push(id);
+    }
+  }
+
+  if (missingIds.length === 0) return result;
+
+  // Tra cứu chính xác chỉ các actorId của tổ chức cần hiển thị trên trang hiện hành.
+  // Tuyệt đối không gọi listUsers toàn hệ thống để tránh nạp email của các tổ chức khác vào bộ nhớ.
+  // Dùng worker pool concurrency tối đa 10 luồng xử lý theo dạng sliding window (hết việc này nhận việc kế tiếp ngay).
+  let index = 0;
+  const workers = Array.from({ length: Math.min(missingIds.length, 10) }, async () => {
+    while (index < missingIds.length) {
+      const id = missingIds[index++];
+      try {
+        const { data, error } = await service.auth.admin.getUserById(id);
+        if (!error && data?.user?.email) {
+          result.set(id, data.user.email);
+          actorEmailCache.set(id, { email: data.user.email, timestamp: now });
+        }
+      } catch {
+        // Fallback for mocked or restricted environments
+      }
+    }
+  });
+  await Promise.all(workers);
+
+  return result;
+}
+
+/** Helper to record logout audit for the signed-in session user. */
+export async function recordLogoutAudit(): Promise<void> {
+  await recordCurrentUserAudit({
+    action: "logout",
+    targetKind: "user",
+    targetId: null,
   });
 }
 

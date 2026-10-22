@@ -4,6 +4,7 @@ import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { Button, type ButtonProps } from "@/components/ui/button";
+import { recordLogoutAction } from "@/app/login/actions";
 import { createClient } from "@/lib/supabase/client";
 
 interface LogoutButtonProps {
@@ -15,6 +16,11 @@ export function LogoutButton({ variant = "default", className }: LogoutButtonPro
   const router = useRouter();
 
   const logout = async () => {
+    try {
+      await recordLogoutAction();
+    } catch {
+      // Swallowed by design
+    }
     const supabase = createClient();
     await supabase.auth.signOut();
     router.push("/login");

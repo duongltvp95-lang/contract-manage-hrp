@@ -696,7 +696,7 @@ export async function extractContractAction(
             { sizeBytes: buffer.length },
           );
           pdfTextCharacters = pdfResult?.text.length ?? null;
-          if (pdfResult && isUsableContractPdfText(pdfResult.text)) {
+          if (pdfResult && isUsableContractPdfText(pdfResult.text, { isTruncated: pdfResult.isTruncated })) {
             preExtractedPdfText = pdfResult.text;
             preExtractedPdfTextLength = pdfResult.text.length;
             aiLog.info("Đã đọc trước lớp văn bản PDF, bỏ qua Gemini Files API", {

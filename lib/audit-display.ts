@@ -108,6 +108,7 @@ function compactValue(value: unknown): string {
 /** The subset of an audit row the sentence formatter needs. */
 export type AuditSentenceRow = {
   actorName: string | null;
+  actorEmail?: string | null;
   action: AuditAction;
   metadata: Record<string, unknown>;
 };
@@ -117,12 +118,15 @@ export type AuditSentenceRow = {
  * "<actor> đã <động từ> <tân ngữ>".
  *
  * A missing metadata field simply drops that clause — the sentence never breaks
- * and never falls back to a raw JSON dump. A missing actor name becomes
- * "Một người dùng" (chosen over "Người dùng đã xoá đã …" to avoid the doubled
- * "đã … đã").
+ * and never falls back to a raw JSON dump. A missing actor name falls back to
+ * actorEmail, and if neither exists, becomes "Một người dùng" (chosen over
+ * "Người dùng đã xoá đã …" to avoid the doubled "đã … đã").
  */
 export function formatAuditSentence(row: AuditSentenceRow): string {
-  const actor = row.actorName?.trim() || "Một người dùng";
+  const actor =
+    row.actorName?.trim() ||
+    row.actorEmail?.trim() ||
+    "Một người dùng";
   const meta = row.metadata ?? {};
   return `${actor} đã ${sentenceFor(row.action, meta)}`;
 }
@@ -165,6 +169,14 @@ function sentenceFor(action: AuditAction, meta: Record<string, unknown>): string
       return "xuất nhật ký";
     case "export_partners":
       return "xuất danh bạ đối tác";
+    case "login":
+      return "đăng nhập hệ thống";
+    case "logout":
+      return "đăng xuất hệ thống";
+    case "view_file":
+      return quoted("xem tệp", text(meta.filename));
+    case "delete_file":
+      return quoted("xoá tệp", text(meta.filename));
     default:
       return `thực hiện “${AUDIT_ACTION_LABELS[action] ?? action}”`;
   }

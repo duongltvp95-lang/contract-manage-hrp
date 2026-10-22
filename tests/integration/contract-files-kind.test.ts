@@ -38,7 +38,15 @@ async function probe(
 async function uploadOne(
   orgB: TestSession,
   contractId: string,
-  { filename, kind }: { filename: string; kind?: "document" | "appendix" },
+  {
+    filename,
+    kind,
+    baseContractNumber,
+  }: {
+    filename: string;
+    kind?: "document" | "appendix";
+    baseContractNumber?: string;
+  },
 ): Promise<{ fileId: string; objectKey: string; size: number }> {
   const fileId = crypto.randomUUID();
   const objectKey = `contracts/${ORG_B}/${contractId}/${fileId}/${filename}`;
@@ -61,6 +69,7 @@ async function uploadOne(
     mimeType: "application/pdf",
     fileSize: body.length,
     ...(kind ? { kind } : {}),
+    ...(baseContractNumber ? { baseContractNumber } : {}),
   });
   expect(completed.ok).toBe(true);
 
@@ -103,8 +112,9 @@ suite("contract_files.kind (round 16)", () => {
     expect(partner.ok).toBe(true);
     const partnerId = (partner.data as { id: string }).id;
 
+    const contractNum = `${TEST_PREFIX}HD-kind-${stamp}`;
     const created = await probe(orgB, "create_contract", {
-      contractNumber: `${TEST_PREFIX}HD-kind-${stamp}`,
+      contractNumber: contractNum,
       partnerId,
       // Round 33 — a new contract must name its company.
       companyId: "22222222-0000-4000-8000-000000000001",
@@ -112,17 +122,75 @@ suite("contract_files.kind (round 16)", () => {
     expect(created.ok).toBe(true);
     contractId = (created.data as { id: string }).id;
 
-    // An appendix (explicit kind) and a document (kind omitted → default).
-    const appendix = await uploadOne(orgB, contractId, {
-      filename: `${TEST_PREFIX}phu-luc.pdf`,
+    // 1. Kiểm tra trực tiếp tại tầng DB: Trigger DB bắt buộc chặn chèn phụ lục mồ côi
+    // Bỏ qua hoàn toàn TypeScript service layer, ghi thẳng vào bảng contract_files
+    const directDbOrphan = await admin.from("contract_files").insert({
+      id: crypto.randomUUID(),
+      organization_id: ORG_B,
+      contract_id: contractId,
+      original_filename: `${TEST_PREFIX}direct-orphan-appendix.pdf`,
+      bucket: bucketName(),
+      object_key: `contracts/${ORG_B}/${contractId}/orphan.pdf`,
+      file_size: 1024,
+      mime_type: "application/pdf",
       kind: "appendix",
+      created_by: orgB.userId,
     });
-    appendixFileId = appendix.fileId;
+    expect(directDbOrphan.error).not.toBeNull();
+    expect(directDbOrphan.error?.code).toBe("23514"); // PostgreSQL check_violation từ require_main_contract_before_appendix()
 
+    // 2. Kiểm tra tại tầng Service: completeUpload từ chối nếu thiếu hợp đồng chính
+    const orphanFileId = crypto.randomUUID();
+    const orphanKey = `contracts/${ORG_B}/${contractId}/${orphanFileId}/${TEST_PREFIX}phu-luc-fail.pdf`;
+    const orphanAppendix = await probe(orgB, "complete_upload", {
+      contractId,
+      fileId: orphanFileId,
+      objectKey: orphanKey,
+      filename: `${TEST_PREFIX}phu-luc-fail.pdf`,
+      mimeType: "application/pdf",
+      fileSize: 1024,
+      kind: "appendix",
+      baseContractNumber: contractNum,
+    });
+    expect(orphanAppendix.ok).toBe(false);
+    expect(orphanAppendix.message).toContain("Cần tải tệp hợp đồng chính lên trước khi lưu phụ lục");
+
+    // 3. Tải tệp hợp đồng chính lên trước (kind omitted → mặc định 'document')
     const document = await uploadOne(orgB, contractId, {
       filename: `${TEST_PREFIX}tai-lieu.pdf`,
     });
     documentFileId = document.fileId;
+
+    // 4. Sau khi đã có hợp đồng chính, tải phụ lục kèm số hợp đồng gốc thành công
+    const appendix = await uploadOne(orgB, contractId, {
+      filename: `${TEST_PREFIX}phu-luc.pdf`,
+      kind: "appendix",
+      baseContractNumber: contractNum,
+    });
+    appendixFileId = appendix.fileId;
+
+    // 5. Kiểm tra trực tiếp DB trigger ngăn chặn xóa document chính khi vẫn còn phụ lục
+    const directDeleteMain = await admin
+      .from("contract_files")
+      .delete()
+      .eq("id", documentFileId);
+    expect(directDeleteMain.error).not.toBeNull();
+    expect(directDeleteMain.error?.code).toBe("23514"); // Trigger validate_contract_has_main_document ngăn chặn
+
+    // 6. Kiểm tra trực tiếp DB trigger & Service: Không cho phép xóa số hợp đồng khi đã có phụ lục
+    const directClearNum = await admin
+      .from("contracts")
+      .update({ contract_number: "" })
+      .eq("id", contractId);
+    expect(directClearNum.error).not.toBeNull();
+    expect(directClearNum.error?.code).toBe("23514"); // Trigger contracts_prevent_clear_number_with_appendices ngăn chặn
+
+    const serviceClearNum = await probe(orgB, "update_contract", {
+      id: contractId,
+      input: { contractNumber: "" },
+    });
+    expect(serviceClearNum.ok).toBe(false);
+    expect(serviceClearNum.message).toContain("Không thể xóa số hợp đồng khi hồ sơ đã có phụ lục đính kèm");
 
     // The DB stores each kind on the right row.
     const { data: rows } = await admin

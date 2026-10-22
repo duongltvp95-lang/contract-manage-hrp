@@ -15,6 +15,7 @@ import {
   countAuditLogs,
   listAuditLogs,
 } from "@/lib/services/audit-logs";
+import { listUsers } from "@/lib/services/users";
 
 /**
  * Admin audit log — feature round 3, part 1.
@@ -54,9 +55,10 @@ async function AdminLogsContent({
     ? parsed.data
     : { page: 1, pageSize: 50 } as const;
 
-  const [list, count] = await Promise.all([
+  const [list, count, usersRes] = await Promise.all([
     listAuditLogs(user.organizationId, filter),
     countAuditLogs(user.organizationId, filter),
+    listUsers({ organizationId: user.organizationId }),
   ]);
 
   if (!list.ok) {
@@ -68,6 +70,14 @@ async function AdminLogsContent({
     );
   }
 
+  const users = usersRes.ok
+    ? usersRes.data.map((u) => ({
+        id: u.id,
+        email: u.email,
+        fullName: u.fullName,
+      }))
+    : [];
+
   const total = count.ok ? count.data.total : list.data.rows.length;
   const totalPages = Math.max(1, Math.ceil(total / filter.pageSize));
 
@@ -77,8 +87,8 @@ async function AdminLogsContent({
         <div className="space-y-1">
           <h1 className="text-2xl font-bold">Nhật ký quản trị</h1>
           <p className="text-sm text-muted-foreground">
-            Tổng cộng {total} dòng. Mỗi dòng ghi lại một thao tác của quản trị
-            viên trong tổ chức của bạn.
+            Tổng cộng {total} dòng. Mỗi dòng ghi lại một thao tác của người dùng
+            trong tổ chức của bạn.
           </p>
         </div>
         <LogsExportButton filter={filter} />
@@ -89,7 +99,7 @@ async function AdminLogsContent({
           <CardTitle>Bộ lọc</CardTitle>
         </CardHeader>
         <CardContent>
-          <LogsFilterForm initial={filter} />
+          <LogsFilterForm initial={filter} users={users} />
         </CardContent>
       </Card>
 

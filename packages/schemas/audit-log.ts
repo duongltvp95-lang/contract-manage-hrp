@@ -33,6 +33,10 @@ export const AUDIT_ACTIONS = [
   "delete_partner",
   "unarchive_contract",
   "export_partners",
+  "login",
+  "logout",
+  "view_file",
+  "delete_file",
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -56,6 +60,10 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   delete_partner: "Xoá đối tác",
   unarchive_contract: "Bỏ lưu trữ",
   export_partners: "Xuất danh bạ đối tác",
+  login: "Đăng nhập",
+  logout: "Đăng xuất",
+  view_file: "Xem tệp",
+  delete_file: "Xoá tệp",
 };
 
 export const AUDIT_TARGET_KINDS = [

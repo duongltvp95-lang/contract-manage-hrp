@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { ViewUrlRequestSchema } from "@schemas/file";
 
 import { guardFileApiRequest, invalidJsonResponse, validationResponse } from "@/lib/api-guard";
+import { recordAudit } from "@/lib/services/audit-logs";
 import { getFileViewUrl } from "@/lib/services/files";
 import { statusForCode } from "@/lib/services/types";
 
@@ -50,6 +51,27 @@ export async function POST(request: NextRequest) {
       { error: result.message, code: result.code },
       { status: statusForCode(result.code), headers: guard.headers },
     );
+  }
+
+  // Ghi nhận nhật ký sử dụng khi người dùng mở xem tệp
+  try {
+    const auditRes = await recordAudit({
+      organizationId: guard.user.organizationId,
+      actorId: guard.user.id,
+      actorRole: guard.user.role,
+      action: "view_file",
+      targetKind: "file",
+      targetId: parsed.data.fileId,
+      metadata: {
+        fileId: parsed.data.fileId,
+        filename: result.data.objectKey.split("/").pop(),
+      },
+    });
+    if (!auditRes.ok) {
+      console.warn("[view-url:audit] Ghi nhận audit không thành công:", auditRes.message, auditRes.code);
+    }
+  } catch (auditError) {
+    console.error("[view-url:audit] Ngoại lệ khi ghi audit:", auditError);
   }
 
   return NextResponse.json(result.data, { status: 200, headers: guard.headers });
