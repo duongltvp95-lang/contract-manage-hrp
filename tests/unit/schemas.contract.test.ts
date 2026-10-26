@@ -5,6 +5,7 @@ import {
   ExtractedContractSchema,
   UpdateContractSchema,
   emptyToNull,
+  getContractDateConfirmationWarnings,
   getContractWarnings,
   isRealCalendarDate,
 } from "@schemas/contract";
@@ -142,6 +143,46 @@ describe("getContractWarnings (plan section 47)", () => {
     expect(
       getContractWarnings({ signedDate: "not-a-date", expiryDate: "2026-01-01" }),
     ).toEqual([]);
+  });
+});
+
+describe("getContractDateConfirmationWarnings", () => {
+  it("warns when expiryDate is missing", () => {
+    const warnings = getContractDateConfirmationWarnings({
+      signedDate: "2026-01-01",
+      expiryDate: "",
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].type).toBe("no_expiry");
+    expect(warnings[0].message).toContain("không có ngày hết hạn");
+  });
+
+  it("warns when signedDate is equal to expiryDate (0-day duration)", () => {
+    const warnings = getContractDateConfirmationWarnings({
+      signedDate: "2026-05-15",
+      expiryDate: "2026-05-15",
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].type).toBe("same_day");
+    expect(warnings[0].message).toContain("đang trùng nhau (2026-05-15)");
+  });
+
+  it("warns when expiryDate is before signedDate", () => {
+    const warnings = getContractDateConfirmationWarnings({
+      signedDate: "2026-06-01",
+      expiryDate: "2026-01-01",
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].type).toBe("expiry_before_signed");
+    expect(warnings[0].message).toContain("sớm hơn ngày ký");
+  });
+
+  it("returns no warnings when dates are valid with expiry after signed", () => {
+    const warnings = getContractDateConfirmationWarnings({
+      signedDate: "2026-01-01",
+      expiryDate: "2027-01-01",
+    });
+    expect(warnings).toHaveLength(0);
   });
 });
 

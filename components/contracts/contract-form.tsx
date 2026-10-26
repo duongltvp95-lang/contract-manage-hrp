@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, Sparkles } from "lucide-react";
+import { AlertTriangle, Loader2, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 import {
   CreateContractSchema,
+  getContractDateConfirmationWarnings,
   getContractWarnings,
   type CreateContractInput,
   type MatchedBaseContract,
@@ -48,6 +49,16 @@ import {
   type PartnerOption,
 } from "@/components/partners/partner-combobox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -350,6 +361,9 @@ export function ContractForm({
   const [formError, setFormError] = useState<string | null>(null);
   const [isExtractingAi, setIsExtractingAi] = useState(false);
   const [isAiBatchRunning, setIsAiBatchRunning] = useState(false);
+  const [hasAiExtracted, setHasAiExtracted] = useState(false);
+  const [dateConfirmDialogOpen, setDateConfirmDialogOpen] = useState(false);
+  const [pendingValues, setPendingValues] = useState<CreateContractInput | null>(null);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [aiPartnerSuggestion, setAiPartnerSuggestion] = useState<{
     name: string;
@@ -373,6 +387,9 @@ export function ContractForm({
     setAiPartnerSuggestion(null);
     setFormError(null);
     setAppendixNotice(null);
+    setHasAiExtracted(false);
+    setDateConfirmDialogOpen(false);
+    setPendingValues(null);
     resetUploads();
   }, [form, resetUploads]);
 
@@ -604,6 +621,7 @@ export function ContractForm({
       }
 
       const data = result.data;
+      setHasAiExtracted(true);
       const filledFields: string[] = [];
 
       const filenameHasAppendix = hasAppendixKeyword(fileItem.file.name);
@@ -850,6 +868,26 @@ export function ContractForm({
             description: toastDesc,
             duration: 5000,
           });
+
+          // Cảnh báo nếu không có ngày hết hạn hoặc ngày ký trùng ngày hết hạn
+          const effectiveSigned = data.signedDate || form.getValues("signedDate");
+          const effectiveExpiry = calculatedExpiry || form.getValues("expiryDate");
+          if (!effectiveExpiry) {
+            toast.warning("Hợp đồng chưa có ngày hết hạn", {
+              description:
+                "AI không tìm thấy ngày hết hạn trong tài liệu (hợp đồng có thể vô thời hạn). Bạn cần kiểm tra và xác nhận lại trước khi lưu.",
+              duration: 8000,
+            });
+          } else if (
+            effectiveSigned &&
+            effectiveExpiry &&
+            effectiveSigned.trim() === effectiveExpiry.trim()
+          ) {
+            toast.warning("Ngày ký trùng với ngày hết hạn", {
+              description: `AI nhận diện ngày ký trùng với ngày hết hạn (${formatDateOnly(effectiveSigned)}). Vui lòng kiểm tra lại trước khi lưu.`,
+              duration: 8000,
+            });
+          }
         }
       }
 
@@ -971,6 +1009,20 @@ export function ContractForm({
   const appendixSaveBlocked = isAppendixSaveBlocked(files, contractNumber, appendixNotice);
   const warnings = getContractWarnings({ signedDate, expiryDate });
 
+  // Các cảnh báo ngày cần lưu ý trên form
+  const activeDateWarnings = getContractDateConfirmationWarnings({
+    signedDate,
+    expiryDate,
+  }).filter((w) => {
+    if (w.type === "no_expiry") {
+      return hasAiExtracted || Boolean(contractNumber && signedDate);
+    }
+    if (w.type === "expiry_before_signed") {
+      return false; // Đã hiển thị ở alert destructive của warnings
+    }
+    return true; // same_day
+  });
+
   useEffect(() => {
     if (formError && formError.includes("đã tồn tại trong hệ thống")) {
       const timer = setTimeout(() => {
@@ -1042,20 +1094,7 @@ export function ContractForm({
     onUpdated?.(result.data);
   }
 
-  async function onSubmit(values: CreateContractInput) {
-    if (isEdit) {
-      await submitEdit(values);
-      return;
-    }
-
-    if (isAppendixSaveBlocked(files, values.contractNumber, appendixNotice)) {
-      const message =
-        "Không thể lưu: Tệp tải lên là Phụ lục nhưng chưa có hợp đồng gốc được tải lên hệ thống từ trước. Vui lòng tạo và lưu hợp đồng gốc trước khi thêm phụ lục.";
-      setFormError(message);
-      toast.error("Không thể lưu phụ lục khi thiếu hợp đồng gốc", { description: message });
-      return;
-    }
-
+  async function executeSave(values: CreateContractInput) {
     setFormError(null);
     setUploadError(null);
     setPhase("saving");
@@ -1087,6 +1126,55 @@ export function ContractForm({
     }
     router.prefetch(`/contracts/${created.data.id}`);
     await runUploads(created.data.id, files);
+  }
+
+  async function onSubmit(values: CreateContractInput) {
+    if (isEdit) {
+      // Khi chỉnh sửa: kiểm tra cảnh báo ngày trùng hoặc trống
+      const editDateWarnings = getContractDateConfirmationWarnings({
+        signedDate: values.signedDate,
+        expiryDate: values.expiryDate,
+      }).filter((w) => w.type === "same_day");
+
+      if (editDateWarnings.length > 0) {
+        setPendingValues(values);
+        setDateConfirmDialogOpen(true);
+        return;
+      }
+
+      await submitEdit(values);
+      return;
+    }
+
+    if (isAppendixSaveBlocked(files, values.contractNumber, appendixNotice)) {
+      const message =
+        "Không thể lưu: Tệp tải lên là Phụ lục nhưng chưa có hợp đồng gốc được tải lên hệ thống từ trước. Vui lòng tạo và lưu hợp đồng gốc trước khi thêm phụ lục.";
+      setFormError(message);
+      toast.error("Không thể lưu phụ lục khi thiếu hợp đồng gốc", { description: message });
+      return;
+    }
+
+    // Kiểm tra các trường hợp cần cảnh báo và xác nhận lại trước khi lưu:
+    // 1. Không có ngày hết hạn (sau khi AI đọc hoặc khi tạo hợp đồng)
+    // 2. Ngày ký trùng ngày hết hạn (thời hạn 0 ngày)
+    // 3. Ngày hết hạn < ngày ký
+    const warningsToConfirm = getContractDateConfirmationWarnings({
+      signedDate: values.signedDate,
+      expiryDate: values.expiryDate,
+    }).filter((w) => {
+      if (w.type === "no_expiry") {
+        return hasAiExtracted || Boolean(values.contractNumber);
+      }
+      return true;
+    });
+
+    if (warningsToConfirm.length > 0) {
+      setPendingValues(values);
+      setDateConfirmDialogOpen(true);
+      return;
+    }
+
+    await executeSave(values);
   }
 
   const fields = (
@@ -1272,6 +1360,25 @@ export function ContractForm({
           </Alert>
         )}
 
+        {activeDateWarnings.length > 0 && (
+          <Alert className="border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" data-testid="active-date-warning">
+            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+            <AlertTitle className="font-semibold text-amber-900 dark:text-amber-200">
+              Lưu ý về ngày hiệu lực hợp đồng
+            </AlertTitle>
+            <AlertDescription>
+              <ul className="list-disc pl-4 space-y-1 mt-1 text-sm">
+                {activeDateWarnings.map((warning) => (
+                  <li key={warning.type}>{warning.message}</li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs font-medium text-amber-800 dark:text-amber-300">
+                Hệ thống sẽ yêu cầu bạn xác nhận lại thông tin này trước khi lưu hợp đồng.
+              </p>
+            </AlertDescription>
+          </Alert>
+        )}
+
         {aiSummary && (
           <Alert className="border-purple-200 bg-purple-50/70 dark:border-purple-900/50 dark:bg-purple-950/20">
             <Sparkles className="h-4 w-4 text-purple-600 dark:text-purple-400" />
@@ -1362,6 +1469,72 @@ export function ContractForm({
             </span>
           )}
         </div>
+        <AlertDialog open={dateConfirmDialogOpen} onOpenChange={setDateConfirmDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0" />
+                <AlertDialogTitle>Xác nhận ngày hiệu lực hợp đồng</AlertDialogTitle>
+              </div>
+              <AlertDialogDescription className="space-y-3 pt-2 text-left" asChild>
+                <div>
+                  <p className="text-sm text-foreground">
+                    Hệ thống ghi nhận các thông tin ngày hợp đồng cần lưu ý:
+                  </p>
+                  <ul className="list-disc pl-5 space-y-1.5 text-sm text-foreground mt-2">
+                    {pendingValues &&
+                      getContractDateConfirmationWarnings({
+                        signedDate: pendingValues.signedDate,
+                        expiryDate: pendingValues.expiryDate,
+                      })
+                        .filter((w) => {
+                          if (w.type === "no_expiry") {
+                            return hasAiExtracted || Boolean(pendingValues.contractNumber);
+                          }
+                          return true;
+                        })
+                        .map((w) => (
+                          <li key={w.type} className="font-medium text-amber-800 dark:text-amber-300">
+                            {w.message}
+                          </li>
+                        ))}
+                  </ul>
+                  <p className="text-sm text-muted-foreground mt-3">
+                    Bạn có muốn kiểm tra lại ngày hợp đồng hay xác nhận tiếp tục lưu thông tin này?
+                  </p>
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="mt-4 gap-2 sm:gap-0">
+              <AlertDialogCancel
+                onClick={() => {
+                  setDateConfirmDialogOpen(false);
+                  setPendingValues(null);
+                }}
+              >
+                Kiểm tra lại
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={async (e) => {
+                  e.preventDefault();
+                  setDateConfirmDialogOpen(false);
+                  if (pendingValues) {
+                    const toSave = pendingValues;
+                    setPendingValues(null);
+                    if (isEdit) {
+                      await submitEdit(toSave);
+                    } else {
+                      await executeSave(toSave);
+                    }
+                  }
+                }}
+                className="bg-amber-600 hover:bg-amber-700 text-white"
+              >
+                Xác nhận lưu
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </form>
     </Form>
   );

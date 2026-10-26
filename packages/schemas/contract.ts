@@ -134,6 +134,69 @@ export function getContractWarnings(input: {
   return warnings;
 }
 
+export interface ContractDateConfirmationWarning {
+  type: "no_expiry" | "same_day" | "expiry_before_signed";
+  title: string;
+  message: string;
+}
+
+/**
+ * Checks for date conditions that require warning and user confirmation before saving:
+ * 1. Missing expiry date (contract is open-ended or AI couldn't detect it).
+ * 2. Signed date equals expiry date (0-day duration).
+ * 3. Expiry date precedes signed date.
+ */
+export function getContractDateConfirmationWarnings(input: {
+  signedDate?: string | null;
+  expiryDate?: string | null;
+}): ContractDateConfirmationWarning[] {
+  const warnings: ContractDateConfirmationWarning[] = [];
+  const signed = input.signedDate?.trim();
+  const expiry = input.expiryDate?.trim();
+
+  // 1. Không có ngày hết hạn
+  if (!expiry) {
+    warnings.push({
+      type: "no_expiry",
+      title: "Hợp đồng chưa có ngày hết hạn",
+      message:
+        "Hợp đồng không có ngày hết hạn (hệ thống sẽ lưu dưới dạng không xác định thời hạn).",
+    });
+  }
+
+  // 2. Ngày ký trùng với ngày hết hạn
+  if (
+    signed &&
+    expiry &&
+    DATE_ONLY_RE.test(signed) &&
+    DATE_ONLY_RE.test(expiry) &&
+    signed === expiry
+  ) {
+    warnings.push({
+      type: "same_day",
+      title: "Ngày ký trùng với ngày hết hạn",
+      message: `Ngày ký và ngày hết hạn của hợp đồng đang trùng nhau (${signed}). Thời hạn hiệu lực là 0 ngày.`,
+    });
+  }
+
+  // 3. Ngày hết hạn sớm hơn ngày ký
+  if (
+    signed &&
+    expiry &&
+    DATE_ONLY_RE.test(signed) &&
+    DATE_ONLY_RE.test(expiry) &&
+    expiry < signed
+  ) {
+    warnings.push({
+      type: "expiry_before_signed",
+      title: "Ngày hết hạn trước ngày ký",
+      message: `Ngày hết hạn (${expiry}) đang sớm hơn ngày ký (${signed}).`,
+    });
+  }
+
+  return warnings;
+}
+
 /**
  * Schema for AI-extracted contract information (from PDF or images).
  */
