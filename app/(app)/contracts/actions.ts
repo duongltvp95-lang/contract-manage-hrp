@@ -18,6 +18,7 @@ import {
   deleteContracts,
   findBaseContractByNumber,
   findDuplicateContract,
+  renewContract,
   unarchiveContract,
   updateContract,
   type BulkDeleteItem,
@@ -37,10 +38,11 @@ import {
 } from "@/lib/server-action";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { err } from "@/lib/services/types";
-import type {
-  ExtractedContract,
-  ExtractedContractResult,
-  MatchedBaseContract,
+import {
+  RenewContractSchema,
+  type ExtractedContract,
+  type ExtractedContractResult,
+  type MatchedBaseContract,
 } from "@schemas/contract";
 import {
   ALLOWED_MIME_TYPES,
@@ -233,6 +235,87 @@ export async function updateContractAction(
   const result = await updateContract(
     id,
     (input ?? {}) as Record<string, unknown>,
+    {
+      userId: access.user.id,
+      organizationId: access.user.organizationId,
+    },
+  );
+
+  return fromService(result);
+}
+
+export type RenewContractActionPayload = {
+  contractId: string;
+  newExpiryDate: string;
+  newDurationText?: string;
+  notes?: string;
+  appendixFile?: {
+    fileId: string;
+    objectKey: string;
+    uploadReservation: string;
+    filename: string;
+    mimeType: string;
+    fileSize: number;
+    baseContractNumber?: string;
+  };
+};
+
+/** Gia hạn hợp đồng thủ công (cập nhật ngày hết hạn mới, thời hạn, ghi chú và phụ lục nếu có) */
+export async function renewContractAction(
+  payload: RenewContractActionPayload,
+): Promise<ActionResult<ContractRow>> {
+  const access = await authorized();
+  if (!access.ok) return access.result;
+
+  if (!payload || typeof payload !== "object") {
+    return validationFailure("Dữ liệu gia hạn không hợp lệ", [
+      { path: "payload", message: "Yêu cầu cung cấp dữ liệu gia hạn" },
+    ]);
+  }
+
+  const { contractId, newExpiryDate, newDurationText, notes, appendixFile } = payload;
+  const parsed = RenewContractSchema.safeParse({
+    contractId,
+    newExpiryDate,
+    newDurationText,
+    notes,
+  });
+
+  if (!parsed.success) {
+    return validationFailure(
+      "Dữ liệu gia hạn không hợp lệ",
+      parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+    );
+  }
+
+  // Nếu có phụ lục gia hạn gửi kèm, hoàn tất lưu tệp vào DB trước
+  if (appendixFile) {
+    const fileResult = await completeUpload({
+      organizationId: access.user.organizationId,
+      userId: access.user.id,
+      userEmail: access.user.email,
+      contractId: parsed.data.contractId,
+      fileId: appendixFile.fileId,
+      objectKey: appendixFile.objectKey,
+      uploadReservation: appendixFile.uploadReservation,
+      filename: appendixFile.filename,
+      mimeType: appendixFile.mimeType as import("@schemas/file").AllowedMimeType,
+      fileSize: appendixFile.fileSize,
+      kind: "appendix",
+      baseContractNumber: appendixFile.baseContractNumber,
+    });
+    if (!fileResult.ok) {
+      return fromService(fileResult);
+    }
+  }
+
+  const result = await renewContract(
+    parsed.data.contractId,
+    {
+      newExpiryDate: parsed.data.newExpiryDate,
+      newDurationText: parsed.data.newDurationText,
+      renewalNote: parsed.data.notes,
+    },
     {
       userId: access.user.id,
       organizationId: access.user.organizationId,

@@ -4,6 +4,7 @@ import {
   CreateContractSchema,
   UpdateContractSchema,
   emptyToNull,
+  isRealCalendarDate,
   type CreateContractInput,
   type UpdateContractInput,
 } from "@schemas/contract";
@@ -883,6 +884,105 @@ export async function updateContract(
     targetKind: "contract",
     targetId: updated.id,
     metadata: { contractNumber: updated.contract_number ?? null, changed },
+  });
+
+  return ok(updated);
+}
+
+export type RenewContractServiceInput = {
+  newExpiryDate: string;
+  newDurationText?: string | null;
+  renewalNote?: string | null;
+};
+
+/**
+ * Manually renew an existing contract with a new expiry date, duration, and renewal note.
+ */
+export async function renewContract(
+  id: string,
+  input: RenewContractServiceInput,
+  context: CreateContractContext,
+): Promise<ServiceResult<ContractRow>> {
+  if (!id || typeof id !== "string") {
+    return err("validation", "Thiếu ID hợp đồng");
+  }
+
+  const newExpiry = (input.newExpiryDate ?? "").trim();
+  if (!newExpiry || !isRealCalendarDate(newExpiry)) {
+    return err(
+      "validation",
+      "Ngày hết hạn mới phải theo định dạng YYYY-MM-DD và là ngày hợp lệ",
+    );
+  }
+
+  // 1. Kiểm tra hợp đồng tồn tại và thuộc tổ chức
+  const existing = await getContract(id, context.organizationId);
+  if (!existing.ok) return existing;
+  const currentContract = existing.data;
+
+  if (currentContract.archived_at) {
+    return err("forbidden", "Không thể gia hạn hợp đồng đã lưu trữ");
+  }
+
+  // Kiểm tra ngày hết hạn mới không được trước ngày ký hợp đồng
+  if (currentContract.signed_date && newExpiry < currentContract.signed_date) {
+    return err(
+      "validation",
+      `Ngày hết hạn mới (${formatDateOnly(newExpiry)}) không thể trước ngày ký hợp đồng (${formatDateOnly(currentContract.signed_date)})`,
+    );
+  }
+
+  // 2. Chuẩn bị ghi chú nối thêm nếu có
+  let updatedNotes = currentContract.notes ?? "";
+  if (input.renewalNote && input.renewalNote.trim()) {
+    const todayStr = formatDateOnly(new Date().toISOString().slice(0, 10));
+    const renewalEntry = `[Gia hạn ${todayStr}: Hạn mới ${formatDateOnly(newExpiry)}] ${input.renewalNote.trim()}`;
+    updatedNotes = updatedNotes.trim()
+      ? `${updatedNotes.trim()}\n${renewalEntry}`
+      : renewalEntry;
+  }
+
+  // 3. Cập nhật hợp đồng
+  const patch: Record<string, string | null> = {
+    expiry_date: newExpiry,
+  };
+  if (input.newDurationText !== undefined) {
+    patch.duration_text = emptyToNull(input.newDurationText);
+  }
+  if (input.renewalNote && input.renewalNote.trim()) {
+    patch.notes = emptyToNull(updatedNotes);
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("contracts")
+    .update(patch)
+    .eq("id", id)
+    .eq("organization_id", context.organizationId)
+    .is("archived_at", null)
+    .select(CONTRACT_COLUMNS)
+    .maybeSingle();
+
+  if (error) {
+    return dbError("renewContract", error);
+  }
+
+  if (!data) {
+    return explainMissingContract(id, context.organizationId, "update");
+  }
+
+  const updated = data as ContractRow;
+
+  await recordCurrentUserAudit({
+    action: "update_contract",
+    targetKind: "contract",
+    targetId: updated.id,
+    metadata: {
+      action_subtype: "renew_contract",
+      contractNumber: updated.contract_number ?? null,
+      previousExpiryDate: currentContract.expiry_date,
+      newExpiryDate: newExpiry,
+    },
   });
 
   return ok(updated);

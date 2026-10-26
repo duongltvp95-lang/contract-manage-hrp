@@ -173,3 +173,15 @@ export type ExtractedContractResult = ExtractedContract & {
   duplicateContractId?: string | null;
   matchedBaseContract?: MatchedBaseContract | null;
 };
+
+/** Schema for manual contract renewal */
+export const RenewContractSchema = z.object({
+  contractId: z.string().uuid("ID hợp đồng không hợp lệ"),
+  newExpiryDate: z
+    .string()
+    .refine((value) => Boolean(value) && isRealCalendarDate(value), "Ngày hết hạn mới phải theo định dạng YYYY-MM-DD và là ngày hợp lệ"),
+  newDurationText: optionalText(200, "Thời hạn"),
+  notes: optionalText(5000, "Ghi chú"),
+});
+
+export type RenewContractInput = z.infer<typeof RenewContractSchema>;

@@ -1,12 +1,14 @@
 "use client";
 
-import { ArrowLeft, MoreHorizontal } from "lucide-react";
+import { AlertCircle, ArrowLeft, CalendarPlus, MoreHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { format } from "date-fns";
 
 import { ContractActionsMenu } from "@/components/contracts/archive-contract-dialog";
 import { DeleteContractButton } from "@/components/contracts/delete-contract-button";
 import { EditContractSheet } from "@/components/contracts/edit-contract-sheet";
+import { RenewContractDialog } from "@/components/contracts/renew-contract-dialog";
 import { UnarchiveContractButton } from "@/components/contracts/unarchive-contract-button";
 import type { SelectableFile } from "@/components/documents/document-selector";
 import { DocumentViewer } from "@/components/documents/document-viewer";
@@ -14,10 +16,11 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { formatDateOnly, formatDateTime, formatDuration } from "@/lib/format";
+import { formatDateOnly, formatDateTime, formatDuration, formatExpiryHint } from "@/lib/format";
 import { partnerDisplayName } from "@/lib/partner-display";
 import type { PartnerRow } from "@/lib/services/partners";
 import type { ViewUrl } from "@/lib/view-url";
+import { cn } from "@/lib/utils";
 
 /**
  * Contract detail — plan sections 54, 65, 66.
@@ -75,6 +78,8 @@ export function ContractDetail({
 }) {
   const router = useRouter();
   const archived = Boolean(contract.archived_at);
+  const todayStr = format(new Date(), "yyyy-MM-dd");
+  const isExpired = Boolean(contract.expiry_date && contract.expiry_date < todayStr);
 
   const fields: [string, string][] = [
     ["Số hợp đồng", contract.contract_number ?? "—"],
@@ -128,6 +133,22 @@ export function ContractDetail({
           </>
         ) : (
           <>
+            <RenewContractDialog
+              contract={contract}
+              trigger={
+                <Button
+                  variant={isExpired ? "default" : "outline"}
+                  size="sm"
+                  className={cn(
+                    isExpired && "bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm",
+                  )}
+                  data-testid="contract-renew-button"
+                >
+                  <CalendarPlus className="mr-1 h-4 w-4" />
+                  Gia hạn
+                </Button>
+              }
+            />
             <EditContractSheet contract={contract} partners={partners} />
             <ContractActionsMenu
               contractId={contract.id}
@@ -144,6 +165,31 @@ export function ContractDetail({
           />
         )}
       </header>
+
+      {!archived && isExpired && (
+        <div className="border-b px-4 py-3 bg-red-500/[0.04] border-red-500/20">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 text-sm text-red-600 dark:text-red-400">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>
+                Hợp đồng này <strong>đã hết hạn</strong> từ ngày {formatDateOnly(contract.expiry_date)} ({formatExpiryHint(contract.expiry_date)}).
+              </span>
+            </div>
+            <RenewContractDialog
+              contract={contract}
+              trigger={
+                <Button
+                  size="sm"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-sm transition-all hover:shadow"
+                >
+                  <CalendarPlus className="mr-1.5 h-4 w-4" />
+                  Gia hạn ngay
+                </Button>
+              }
+            />
+          </div>
+        </div>
+      )}
 
       {archived && (
         <div className="border-b px-4 py-3">

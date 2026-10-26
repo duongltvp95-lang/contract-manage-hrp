@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ChevronsUpDown, FilePlus2, Paperclip, Plus, SearchX } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarPlus, ChevronsUpDown, FilePlus2, Paperclip, Plus, SearchX } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
@@ -13,6 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { CompanyBadges } from "@/components/partners/partner-badges";
 import { BulkDeleteContractsButton } from "@/components/contracts/bulk-delete-contracts-button";
 import { DeleteContractButton } from "@/components/contracts/delete-contract-button";
+import { RenewContractDialog } from "@/components/contracts/renew-contract-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
 import {
   Table,
@@ -202,17 +203,38 @@ export function ContractsTable({
                 </TableCell>
                 <TableCell className="text-muted-foreground">{formatDateOnly(row.signed_date)}</TableCell>
                 <TableCell>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="inline-flex items-center rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
                       {formatDuration(row.duration_text, row.signed_date, row.expiry_date)}
                     </span>
                     {isExpired && (
-                      <Badge
-                        variant="outline"
-                        className="border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400 text-[10px] px-1.5 py-0 font-normal leading-normal"
-                      >
-                        Hết hạn
-                      </Badge>
+                      <div className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        <Badge
+                          variant="outline"
+                          className="border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400 text-[10px] px-1.5 py-0 font-normal leading-normal"
+                        >
+                          Hết hạn
+                        </Badge>
+                        <RenewContractDialog
+                          contract={{
+                            id: row.id,
+                            contract_number: row.contract_number,
+                            signed_date: row.signed_date,
+                            expiry_date: row.expiry_date,
+                            duration_text: row.duration_text,
+                          }}
+                          trigger={
+                            <button
+                              type="button"
+                              className="text-[11px] text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 hover:underline font-medium inline-flex items-center gap-0.5"
+                              title="Gia hạn hợp đồng này"
+                            >
+                              <CalendarPlus className="h-3 w-3" />
+                              Gia hạn
+                            </button>
+                          }
+                        />
+                      </div>
                     )}
                   </div>
                   <div className={cn("text-xs mt-1", isExpired ? "text-red-600/90 dark:text-red-400/90 font-medium" : "text-muted-foreground")}>
