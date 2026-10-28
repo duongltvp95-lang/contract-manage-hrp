@@ -15,6 +15,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/shared/empty-state";
 import {
+  downloadFileFromUrl,
   formatPdfErrorMessage,
   isImageMime,
   isPdfMime,
@@ -90,6 +91,22 @@ export function DocumentViewer({
       toast.error("Không thể xoá tệp. Vui lòng thử lại.");
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleDownloadFile = async (file: SelectableFile) => {
+    try {
+      let downloadUrl: string;
+      if (loaded && loaded.fileId === file.id && current) {
+        downloadUrl = current.viewUrl;
+      } else {
+        const signed = await requestViewUrl(file.id);
+        downloadUrl = signed.viewUrl;
+      }
+      toast.info(`Đang tải tệp "${file.original_filename}"...`);
+      await downloadFileFromUrl(downloadUrl, file.original_filename);
+    } catch {
+      toast.error("Không thể tải tệp xuống. Vui lòng thử lại.");
     }
   };
 
@@ -213,6 +230,7 @@ export function DocumentViewer({
             : undefined
         }
         onDeleteFile={contractId && canDelete && !readOnly ? handleDeleteFile : undefined}
+        onDownloadFile={handleDownloadFile}
       />
 
       <div className="min-h-0 min-w-0 flex-1">
@@ -257,6 +275,7 @@ export function DocumentViewer({
           <ViewerErrorBoundary onRetry={handleSignatureExpired}>
             <PdfPanel
               url={current.viewUrl}
+              fileName={selected.original_filename}
               onSignatureExpired={handleSignatureExpired}
               onUploadReplacement={
                 contractId && selected && canDelete && !readOnly

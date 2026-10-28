@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, ImageIcon, Plus, Trash2 } from "lucide-react";
+import { Download, FileText, ImageIcon, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -31,6 +31,7 @@ export function DocumentSelector({
   disabled,
   onAddFile,
   onDeleteFile,
+  onDownloadFile,
 }: {
   files: SelectableFile[];
   selectedId: string | null;
@@ -38,6 +39,7 @@ export function DocumentSelector({
   disabled?: boolean;
   onAddFile?: () => void;
   onDeleteFile?: (file: SelectableFile) => void;
+  onDownloadFile?: (file: SelectableFile) => void;
 }) {
   if (files.length === 0) {
     return null;
@@ -72,6 +74,7 @@ export function DocumentSelector({
             onSelect={onSelect}
             disabled={disabled}
             onDeleteFile={onDeleteFile}
+            onDownloadFile={onDownloadFile}
           />
           <FileGroup
             label="Phụ lục hợp đồng"
@@ -80,6 +83,7 @@ export function DocumentSelector({
             onSelect={onSelect}
             disabled={disabled}
             onDeleteFile={onDeleteFile}
+            onDownloadFile={onDownloadFile}
           />
         </div>
       </ScrollArea>
@@ -94,6 +98,7 @@ function FileGroup({
   onSelect,
   disabled,
   onDeleteFile,
+  onDownloadFile,
 }: {
   label: string;
   files: SelectableFile[];
@@ -101,6 +106,7 @@ function FileGroup({
   onSelect: (fileId: string) => void;
   disabled?: boolean;
   onDeleteFile?: (file: SelectableFile) => void;
+  onDownloadFile?: (file: SelectableFile) => void;
 }) {
   if (files.length === 0) {
     return null;
@@ -127,7 +133,11 @@ function FileGroup({
                 onClick={() => onSelect(file.id)}
                 className={cn(
                   "h-auto w-full justify-start gap-2 px-2 py-2 text-left",
-                  onDeleteFile && "pr-8",
+                  onDeleteFile && onDownloadFile
+                    ? "pr-16"
+                    : onDeleteFile || onDownloadFile
+                      ? "pr-8"
+                      : "",
                   active && "ring-1 ring-ring",
                 )}
               >
@@ -139,6 +149,26 @@ function FileGroup({
                   </span>
                 </span>
               </Button>
+              {onDownloadFile && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={disabled}
+                  aria-label={`Tải xuống ${file.original_filename}`}
+                  title="Tải tệp này về máy"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDownloadFile(file);
+                  }}
+                  className={cn(
+                    "absolute top-1/2 -translate-y-1/2 h-7 w-7 text-muted-foreground opacity-0 transition-opacity hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-400 group-hover:opacity-100 focus:opacity-100",
+                    onDeleteFile ? "right-8" : "right-1",
+                  )}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </Button>
+              )}
               {onDeleteFile && (
                 <Button
                   type="button"

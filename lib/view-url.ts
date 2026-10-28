@@ -85,6 +85,35 @@ export function isPdfMime(mimeType: string): boolean {
 }
 
 /**
+ * Downloads a file from a URL to the user's computer with the specified filename.
+ */
+export async function downloadFileFromUrl(url: string, filename: string): Promise<void> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("Fetch failed");
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = filename || "document.pdf";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(blobUrl);
+  } catch {
+    // Fallback: direct download link
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename || "document.pdf";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+}
+
+/**
  * Localizes PDF.js load errors and strips any presigned URLs containing access keys or signatures.
  */
 export function formatPdfErrorMessage(rawMessage?: string): string {

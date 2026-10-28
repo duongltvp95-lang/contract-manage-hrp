@@ -1,11 +1,12 @@
 "use client";
 
-import { Maximize2, RotateCcw, RotateCw, ZoomIn, ZoomOut } from "lucide-react";
+import { Download, Loader2, Maximize2, RotateCcw, RotateCw, ZoomIn, ZoomOut } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { downloadFileFromUrl } from "@/lib/view-url";
 import { cn } from "@/lib/utils";
 
 /**
@@ -28,6 +29,17 @@ export function ImageViewer({ url, alt }: { url: string; alt: string }) {
   const [rotation, setRotation] = useState(0);
   const [fit, setFit] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await downloadFileFromUrl(url, alt || "hinh-anh.png");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const changeZoom = (delta: number) => {
     setFit(false);
@@ -142,6 +154,30 @@ export function ImageViewer({ url, alt }: { url: string; alt: string }) {
             </Button>
           </TooltipTrigger>
           <TooltipContent>Toàn màn hình</TooltipContent>
+        </Tooltip>
+
+        <Separator orientation="vertical" className="mx-1 h-5" />
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="ml-auto gap-1.5 h-8 text-xs font-medium border-emerald-600/30 bg-emerald-50/50 hover:bg-emerald-100/70 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:hover:bg-emerald-900/50 dark:text-emerald-400 shadow-2xs"
+              data-testid="image-download"
+              onClick={handleDownload}
+              disabled={downloading}
+            >
+              {downloading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              <span>Tải ảnh về</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Tải tệp ảnh này về máy tính</TooltipContent>
         </Tooltip>
       </div>
 

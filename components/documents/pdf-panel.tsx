@@ -3,6 +3,7 @@
 import {
   ChevronLeft,
   ChevronRight,
+  Download,
   Loader2,
   Maximize2,
   RotateCcw,
@@ -17,7 +18,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatPdfErrorMessage } from "@/lib/view-url";
+import { downloadFileFromUrl, formatPdfErrorMessage } from "@/lib/view-url";
 
 /**
  * PDF viewer — plan sections 56, 57.
@@ -56,10 +57,12 @@ type UrlScoped<T> = { url: string; value: T };
 
 export function PdfPanel({
   url,
+  fileName,
   onSignatureExpired,
   onUploadReplacement,
 }: {
   url: string;
+  fileName?: string;
   onSignatureExpired: () => void;
   onUploadReplacement?: () => void;
 }) {
@@ -70,6 +73,17 @@ export function PdfPanel({
   const [zoom, setZoom] = useState(1);
   const [fitWidth, setFitWidth] = useState(true);
   const [rotation, setRotation] = useState(0);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await downloadFileFromUrl(url, fileName || "hop-dong.pdf");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const [loadError, setLoadError] = useState<UrlScoped<string> | null>(null);
   const [pageWidth, setPageWidth] = useState<UrlScoped<number> | null>(null);
@@ -257,6 +271,30 @@ export function PdfPanel({
             </Button>
           </TooltipTrigger>
           <TooltipContent>Toàn màn hình</TooltipContent>
+        </Tooltip>
+
+        <Separator orientation="vertical" className="mx-1 h-5" />
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="ml-auto gap-1.5 h-8 text-xs font-medium border-emerald-600/30 bg-emerald-50/50 hover:bg-emerald-100/70 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:hover:bg-emerald-900/50 dark:text-emerald-400 shadow-2xs"
+              data-testid="pdf-download"
+              onClick={handleDownload}
+              disabled={downloading}
+            >
+              {downloading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              <span>Tải file PDF</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Tải tệp PDF này về máy tính</TooltipContent>
         </Tooltip>
       </div>
 
