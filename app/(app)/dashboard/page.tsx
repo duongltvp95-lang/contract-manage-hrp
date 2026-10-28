@@ -177,11 +177,10 @@ async function DashboardContent() {
           <Alert className="border-amber-300/80 bg-amber-50/70 text-amber-900 dark:border-amber-800/80 dark:bg-amber-950/30 dark:text-amber-200">
             <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
             <AlertTitle className="font-semibold text-amber-950 dark:text-amber-200">
-              Lưu ý quan trọng: Cần kiểm tra lại ở ghi chú
+              Cảnh báo: Cần kiểm tra lại ở ghi chú
             </AlertTitle>
             <AlertDescription className="text-xs sm:text-sm text-amber-900/90 dark:text-amber-300/90 mt-1">
-              Các hợp đồng này không có ngày ký, không có ngày hết hạn hoặc là hợp đồng không giới hạn thời hạn.
-              Vui lòng <strong>kiểm tra lại ở ghi chú</strong> của từng hợp đồng để đối chiếu điều khoản hiệu lực và đảm bảo tính pháp lý.
+              Danh sách các hợp đồng không có ngày ký, không có ngày hết hạn hoặc không giới hạn thời hạn. Vui lòng kiểm tra lại ghi chú và điều khoản hiệu lực của từng hợp đồng.
             </AlertDescription>
           </Alert>
 
