@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { AlertTriangle, Plus } from "lucide-react";
 import Link from "next/link";
 import { Suspense } from "react";
 
@@ -12,11 +12,11 @@ import { requireUser } from "@/lib/auth";
 import { contractsHref, parseContractsQuery, type ContractsQuery } from "@/lib/contracts-query";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { listContracts } from "@/lib/services/contracts";
-import { getContractMetrics } from "@/lib/services/dashboard";
+import { getContractMetrics, getUndatedContracts } from "@/lib/services/dashboard";
 import { cn } from "@/lib/utils";
 
 /**
- * Contracts list — plan sections 48-53, 80-82.
+ * Contracts list — plan sections 48-53, 80-82; Round 48.
  *
  * All list state lives in the URL, so this page is a pure function of
  * `searchParams`: parse -> query the database -> render. Search, filters,
@@ -38,16 +38,20 @@ async function ContractsContent({
   // who edits the URL is forced back to active); the expired tab is for everyone.
   const canDelete = canDeleteEntities(me.email);
   const raw = params.scope;
-  const requestedScope = raw === "expired" || raw === "archived" ? raw : "active";
+  const requestedScope =
+    raw === "expired" || raw === "archived" || raw === "undated"
+      ? raw
+      : "active";
   const scope = requestedScope === "archived" && !canDelete ? "active" : requestedScope;
 
-  const [result, metricsResult] = await Promise.all([
+  const [result, metricsResult, undatedResult] = await Promise.all([
     listContracts({
       organizationId: me.organizationId,
       query,
       scope,
     }),
     getContractMetrics(me.organizationId),
+    getUndatedContracts(me.organizationId, 1),
   ]);
 
   const counts = metricsResult.ok
@@ -55,6 +59,7 @@ async function ContractsContent({
         active: metricsResult.data.active,
         expired: metricsResult.data.expired,
         archived: metricsResult.data.archived,
+        undated: undatedResult.ok ? undatedResult.data.total : undefined,
       }
     : undefined;
 
@@ -63,6 +68,19 @@ async function ContractsContent({
       <PageHeader />
 
       <ContractsTabs scope={scope} canDelete={canDelete} query={query} counts={counts} />
+
+      {scope === "undated" && (
+        <Alert className="border-amber-300/80 bg-amber-50/70 text-amber-900 dark:border-amber-800/80 dark:bg-amber-950/30 dark:text-amber-200">
+          <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+          <AlertTitle className="font-semibold text-amber-950 dark:text-amber-200">
+            Cảnh báo: Cần kiểm tra lại ở ghi chú
+          </AlertTitle>
+          <AlertDescription className="text-sm text-amber-900/90 dark:text-amber-300">
+            Danh sách các hợp đồng không có ngày ký, không có ngày hết hạn hoặc không giới hạn thời hạn.
+            Vui lòng kiểm tra lại ghi chú và điều khoản hiệu lực của từng hợp đồng.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <ContractsToolbar query={query} scope={scope} />
 
@@ -94,20 +112,20 @@ async function ContractsContent({
   );
 }
 
-/** Round 20 — active/expired tabs for everyone; archived stays delete-admin only. */
+/** Round 20 & 48 — active/expired/undated tabs for everyone; archived stays delete-admin only. */
 function ContractsTabs({
   scope,
   canDelete,
   query,
   counts,
 }: {
-  scope: "active" | "expired" | "archived";
+  scope: "active" | "expired" | "archived" | "undated";
   canDelete: boolean;
   query: ContractsQuery;
-  counts?: { active: number; expired: number; archived: number };
+  counts?: { active: number; expired: number; archived: number; undated?: number };
 }) {
   const base = contractsHref({}, query);
-  const withScope = (next: "active" | "expired" | "archived") =>
+  const withScope = (next: "active" | "expired" | "undated" | "archived") =>
     next === "active"
       ? base
       : `${base}${base.includes("?") ? "&" : "?"}scope=${next}`;
@@ -130,7 +148,7 @@ function ContractsTabs({
 
   return (
     <div
-      className="inline-flex items-center gap-1.5 rounded-xl border border-border/70 bg-muted/40 p-1 shadow-xs backdrop-blur"
+      className="inline-flex items-center gap-1.5 rounded-xl border border-border/70 bg-muted/40 p-1 shadow-xs backdrop-blur flex-wrap"
       data-testid="contracts-tabs"
     >
       <Link
@@ -151,6 +169,16 @@ function ContractsTabs({
         <span>Đã hết hạn</span>
         {counts !== undefined && (
           <span className={badgeCls(scope === "expired")}>{counts.expired}</span>
+        )}
+      </Link>
+      <Link
+        href={withScope("undated")}
+        data-testid="contract-tab-undated"
+        className={tabCls(scope === "undated")}
+      >
+        <span>Không thời hạn / Thiếu ngày</span>
+        {counts?.undated !== undefined && (
+          <span className={badgeCls(scope === "undated")}>{counts.undated}</span>
         )}
       </Link>
       {canDelete && (

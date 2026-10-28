@@ -534,9 +534,10 @@ export async function listContracts({
   /**
    * Round 19/20 — active (default) lists non-archived, not-yet-expired;
    * expired lists non-archived, already-expired; archived lists only archived;
-   * all lists non-archived, both active and expired.
+   * all lists non-archived, both active and expired;
+   * undated (round 48) lists contracts with no signed date, no expiry date, or indefinite duration.
    */
-  scope?: "active" | "expired" | "archived" | "all";
+  scope?: "active" | "expired" | "archived" | "all" | "undated";
 }): Promise<ServiceResult<ContractListResult>> {
   const supabase = await createClient();
 
@@ -572,6 +573,10 @@ export async function listContracts({
       // expiry date never expires, so it belongs here rather than disappearing
       // from both tabs.
       builder = builder.or(`expiry_date.is.null,expiry_date.gte.${today}`);
+    } else if (scope === "undated") {
+      builder = builder.or(
+        "signed_date.is.null,expiry_date.is.null,duration_text.ilike.%không xác định%,duration_text.ilike.%vô thời hạn%,duration_text.ilike.%không giới hạn%",
+      );
     }
     // scope === "all": không lọc theo ngày hết hạn, hiển thị cả đang hoạt động và đã hết hạn
   }

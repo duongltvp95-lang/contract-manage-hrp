@@ -229,3 +229,33 @@ export function expiringWindowBounds(today: Date = new Date()): {
     to: format(addDays(today, 90), "yyyy-MM-dd"),
   };
 }
+
+/**
+ * Contracts with no signed date, no expiry date, or indefinite duration (round 48).
+ * Ordered by newest created first so contracts needing date check appear on top.
+ */
+export async function getUndatedContracts(
+  organizationId: string,
+  limit: number = DASHBOARD_LIST_LIMIT,
+): Promise<ServiceResult<{ rows: DashboardContractRow[]; total: number }>> {
+  const supabase = await createClient();
+
+  const { data, count, error } = await supabase
+    .from("contracts")
+    .select(DASHBOARD_CONTRACT_COLUMNS, { count: "exact" })
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .or("signed_date.is.null,expiry_date.is.null,duration_text.ilike.%không xác định%,duration_text.ilike.%vô thời hạn%,duration_text.ilike.%không giới hạn%")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    return dbError("getUndatedContracts", error);
+  }
+
+  const rows = (data ?? []) as unknown as EmbeddedContractRow[];
+  return ok({
+    rows: rows.map(formatDashboardRow),
+    total: count ?? rows.length,
+  });
+}
