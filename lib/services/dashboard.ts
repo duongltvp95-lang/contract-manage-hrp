@@ -262,27 +262,52 @@ export async function getUndatedContracts(
 
 /**
  * Đếm số hợp đồng chưa có tệp đính kèm (round 49).
- * Dùng RPC count_contract_files để đếm file_count = 0.
+ *
+ * Dùng 2 query song song:
+ *  1. Tổng hợp đồng không lưu trữ của org
+ *  2. Các contract_id có file (qua bảng contract_files, join ngược về contracts để giới hạn org)
+ * Kết quả = tổng − số hợp đồng có ít nhất 1 file.
  */
 export async function countNoFileContracts(
   organizationId: string,
 ): Promise<ServiceResult<number>> {
   const supabase = await createClient();
 
-  // Lấy tất cả contract id không có file trong contract_files
-  const { count, error } = await supabase
-    .from("contracts")
-    .select(
-      `id, contract_files!left(contract_id)`,
-      { count: "exact", head: false },
-    )
-    .eq("organization_id", organizationId)
-    .is("archived_at", null)
-    .is("contract_files.contract_id", null);
+  const [totalResult, contractIdsResult] = await Promise.all([
+    // 1. Tổng hợp đồng active (không archived) của org
+    supabase
+      .from("contracts")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organizationId)
+      .is("archived_at", null),
 
-  if (error) {
-    return dbError("countNoFileContracts", error);
-  }
+    // 2. Lấy contract_id của tất cả hợp đồng thuộc org này (để dùng lọc contract_files)
+    supabase
+      .from("contracts")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .is("archived_at", null),
+  ]);
 
-  return ok(count ?? 0);
+  if (totalResult.error) return dbError("countNoFileContracts", totalResult.error);
+  if (contractIdsResult.error) return dbError("countNoFileContracts", contractIdsResult.error);
+
+  const total = totalResult.count ?? 0;
+  const allIds = (contractIdsResult.data ?? []).map((r: { id: string }) => r.id);
+
+  if (allIds.length === 0) return ok(0);
+
+  // 3. Lấy distinct contract_id đã có file trong tập allIds
+  const { data: filesData, error: filesError } = await supabase
+    .from("contract_files")
+    .select("contract_id")
+    .in("contract_id", allIds);
+
+  if (filesError) return dbError("countNoFileContracts", filesError);
+
+  const distinctWithFiles = new Set(
+    (filesData ?? []).map((r: { contract_id: string }) => r.contract_id),
+  ).size;
+
+  return ok(Math.max(0, total - distinctWithFiles));
 }

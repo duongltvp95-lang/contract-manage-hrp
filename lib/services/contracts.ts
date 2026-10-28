@@ -584,16 +584,27 @@ export async function listContracts({
         "signed_date.is.null,expiry_date.is.null,duration_text.ilike.%không xác định%,duration_text.ilike.%vô thời hạn%,duration_text.ilike.%không giới hạn%",
       );
     } else if (scope === "no-files") {
-      // Lọc các hợp đồng không có tệp: lấy contract_id đã có file, rồi loại trừ
-      const { data: withFiles } = await supabase
-        .from("contract_files")
-        .select("contract_id")
-        .eq("organization_id", organizationId);
-      const idsWithFiles = [...new Set((withFiles ?? []).map((r: { contract_id: string }) => r.contract_id))];
-      if (idsWithFiles.length > 0) {
-        builder = builder.not("id", "in", `(${idsWithFiles.join(",")})`);
+      // Lọc hợp đồng chưa có tệp: contract_files không có cột organization_id,
+      // nên lấy danh sách contract_id có file từ org trước, rồi loại trừ.
+      // Bước 1: IDs của tất cả contracts trong org (không archived)
+      const { data: orgContracts } = await supabase
+        .from("contracts")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .is("archived_at", null);
+      const orgIds = (orgContracts ?? []).map((r: { id: string }) => r.id);
+
+      if (orgIds.length > 0) {
+        // Bước 2: trong số đó, những contract nào có file
+        const { data: withFiles } = await supabase
+          .from("contract_files")
+          .select("contract_id")
+          .in("contract_id", orgIds);
+        const idsWithFiles = [...new Set((withFiles ?? []).map((r: { contract_id: string }) => r.contract_id))];
+        if (idsWithFiles.length > 0) {
+          builder = builder.not("id", "in", `(${idsWithFiles.join(",")})`);
+        }
       }
-      // Nếu không có hợp đồng nào có file → tất cả đều là "no-files", không cần lọc thêm
     }
     // scope === "all": không lọc theo ngày hết hạn, hiển thị cả đang hoạt động và đã hết hạn
   }
