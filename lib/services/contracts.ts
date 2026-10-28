@@ -535,9 +535,10 @@ export async function listContracts({
    * Round 19/20 — active (default) lists non-archived, not-yet-expired;
    * expired lists non-archived, already-expired; archived lists only archived;
    * all lists non-archived, both active and expired;
+   * expiring (round 49) lists non-archived, expiring within 90 days;
    * undated (round 48) lists contracts with no signed date, no expiry date, or indefinite duration.
    */
-  scope?: "active" | "expired" | "archived" | "all" | "undated";
+  scope?: "active" | "expired" | "expiring" | "archived" | "all" | "undated";
 }): Promise<ServiceResult<ContractListResult>> {
   const supabase = await createClient();
 
@@ -568,6 +569,10 @@ export async function listContracts({
     builder = builder.is("archived_at", null);
     if (scope === "expired") {
       builder = builder.lt("expiry_date", today);
+    } else if (scope === "expiring") {
+      // Tab "Sắp hết hạn": dùng cùng cửa sổ 90 ngày như dashboard card
+      const window = resolveExpiryPreset("expiring90");
+      builder = builder.gte("expiry_date", window.gte!).lte("expiry_date", window.lte!);
     } else if (scope === "active") {
       // "Chưa hết hạn" = a future (or missing) expiry date. A contract with no
       // expiry date never expires, so it belongs here rather than disappearing
@@ -639,10 +644,12 @@ export async function listContracts({
 
   // --- sort + pagination ---------------------------------------------------
   // Round 20: on the expired tab the default sort is "expiry_date desc" (most
-  // recently expired first); an explicit `?sort=` still wins.
-  const sortOverridden = scope === "expired" && query.sort === DEFAULT_SORT;
+  // recently expired first); on the expiring tab default sort is "expiry_date asc"
+  // (soonest to expire first); an explicit `?sort=` still wins.
+  const sortOverridden =
+    (scope === "expired" || scope === "expiring") && query.sort === DEFAULT_SORT;
   const sortField = sortOverridden ? "expiry_date" : query.sort;
-  const sortAscending = sortOverridden ? false : query.dir === "asc";
+  const sortAscending = sortOverridden ? scope === "expiring" : query.dir === "asc";
 
   const { data, count, error } = await builder
     .order(sortField, { ascending: sortAscending, nullsFirst: false })

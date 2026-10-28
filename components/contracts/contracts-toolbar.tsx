@@ -40,7 +40,7 @@ export function ContractsToolbar({
   scope = "active",
 }: {
   query: ContractsQuery;
-  scope?: "active" | "expired" | "archived" | "undated";
+  scope?: "active" | "expired" | "expiring" | "archived" | "undated";
 }) {
   const router = useRouter();
   const go = (patch: Partial<ContractsQuery>) => {
@@ -88,7 +88,7 @@ export function ContractsToolbar({
           scope === "active" ? "lg:grid-cols-5" : "lg:grid-cols-4",
         )}
       >
-        {/* Round 20: the expiry preset is redundant on the expired/archived tabs
+        {/* Round 20: the expiry preset is redundant on the expired/expiring/archived tabs
             (the scope already answers the question), so it is hidden there. */}
         {scope === "active" && (
           <div className="space-y-1.5">

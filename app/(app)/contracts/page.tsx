@@ -39,7 +39,7 @@ async function ContractsContent({
   const canDelete = canDeleteEntities(me.email);
   const raw = params.scope;
   const requestedScope =
-    raw === "expired" || raw === "archived" || raw === "undated"
+    raw === "expired" || raw === "archived" || raw === "undated" || raw === "expiring"
       ? raw
       : "active";
   const scope = requestedScope === "archived" && !canDelete ? "active" : requestedScope;
@@ -57,6 +57,7 @@ async function ContractsContent({
   const counts = metricsResult.ok
     ? {
         active: metricsResult.data.active,
+        expiringSoon: metricsResult.data.expiringSoon,
         expired: metricsResult.data.expired,
         archived: metricsResult.data.archived,
         undated: undatedResult.ok ? undatedResult.data.total : undefined,
@@ -119,13 +120,13 @@ function ContractsTabs({
   query,
   counts,
 }: {
-  scope: "active" | "expired" | "archived" | "undated";
+  scope: "active" | "expired" | "expiring" | "archived" | "undated";
   canDelete: boolean;
   query: ContractsQuery;
-  counts?: { active: number; expired: number; archived: number; undated?: number };
+  counts?: { active: number; expiringSoon: number; expired: number; archived: number; undated?: number };
 }) {
   const base = contractsHref({}, query);
-  const withScope = (next: "active" | "expired" | "undated" | "archived") =>
+  const withScope = (next: "active" | "expired" | "expiring" | "undated" | "archived") =>
     next === "active"
       ? base
       : `${base}${base.includes("?") ? "&" : "?"}scope=${next}`;
@@ -159,6 +160,16 @@ function ContractsTabs({
         <span>Còn hiệu lực</span>
         {counts !== undefined && (
           <span className={badgeCls(scope === "active")}>{counts.active}</span>
+        )}
+      </Link>
+      <Link
+        href={withScope("expiring")}
+        data-testid="contract-tab-expiring"
+        className={tabCls(scope === "expiring")}
+      >
+        <span>Sắp hết hạn</span>
+        {counts !== undefined && (
+          <span className={badgeCls(scope === "expiring")}>{counts.expiringSoon}</span>
         )}
       </Link>
       <Link

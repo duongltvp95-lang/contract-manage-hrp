@@ -37,7 +37,7 @@ export function ContractsPagination({
   pageCount: number;
   /** Where this pagination lives; the partner page reuses it. */
   basePath?: string;
-  scope?: "active" | "expired" | "archived" | "all" | "undated";
+  scope?: "active" | "expired" | "expiring" | "archived" | "all" | "undated";
 }) {
   const router = useRouter();
 
