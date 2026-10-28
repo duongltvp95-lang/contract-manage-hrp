@@ -155,7 +155,7 @@ async function DashboardContent() {
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <CardTitle className="text-base font-semibold tracking-tight">
-                Hợp đồng không ngày ký / không ngày hết hạn / không giới hạn
+                Hợp đồng không xác định hiệu lực
               </CardTitle>
               {undated.ok && undated.data.total > 0 && (
                 <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:text-amber-300 border border-amber-500/30">
