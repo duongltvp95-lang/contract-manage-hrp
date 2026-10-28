@@ -536,9 +536,10 @@ export async function listContracts({
    * expired lists non-archived, already-expired; archived lists only archived;
    * all lists non-archived, both active and expired;
    * expiring (round 49) lists non-archived, expiring within 90 days;
+   * no-files (round 49) lists non-archived contracts with zero uploaded files;
    * undated (round 48) lists contracts with no signed date, no expiry date, or indefinite duration.
    */
-  scope?: "active" | "expired" | "expiring" | "archived" | "all" | "undated";
+  scope?: "active" | "expired" | "expiring" | "no-files" | "archived" | "all" | "undated";
 }): Promise<ServiceResult<ContractListResult>> {
   const supabase = await createClient();
 
@@ -582,6 +583,17 @@ export async function listContracts({
       builder = builder.or(
         "signed_date.is.null,expiry_date.is.null,duration_text.ilike.%không xác định%,duration_text.ilike.%vô thời hạn%,duration_text.ilike.%không giới hạn%",
       );
+    } else if (scope === "no-files") {
+      // Lọc các hợp đồng không có tệp: lấy contract_id đã có file, rồi loại trừ
+      const { data: withFiles } = await supabase
+        .from("contract_files")
+        .select("contract_id")
+        .eq("organization_id", organizationId);
+      const idsWithFiles = [...new Set((withFiles ?? []).map((r: { contract_id: string }) => r.contract_id))];
+      if (idsWithFiles.length > 0) {
+        builder = builder.not("id", "in", `(${idsWithFiles.join(",")})`);
+      }
+      // Nếu không có hợp đồng nào có file → tất cả đều là "no-files", không cần lọc thêm
     }
     // scope === "all": không lọc theo ngày hết hạn, hiển thị cả đang hoạt động và đã hết hạn
   }

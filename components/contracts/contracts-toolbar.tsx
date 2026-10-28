@@ -40,7 +40,7 @@ export function ContractsToolbar({
   scope = "active",
 }: {
   query: ContractsQuery;
-  scope?: "active" | "expired" | "expiring" | "archived" | "undated";
+  scope?: "active" | "expired" | "expiring" | "no-files" | "archived" | "undated";
 }) {
   const router = useRouter();
   const go = (patch: Partial<ContractsQuery>) => {

@@ -66,7 +66,7 @@ export function ContractsTable({
   /** Round 19 — show the delete action (delete-admin emails only). */
   canDelete?: boolean;
   /** Round 19/20 — preserved in the sort links. */
-  scope?: "active" | "expired" | "expiring" | "archived" | "all" | "undated";
+  scope?: "active" | "expired" | "expiring" | "no-files" | "archived" | "all" | "undated";
 }) {
   const router = useRouter();
   // Round 24 — bulk selection. The page remounts this table with a `key` when

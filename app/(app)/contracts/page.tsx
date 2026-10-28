@@ -12,7 +12,7 @@ import { requireUser } from "@/lib/auth";
 import { contractsHref, parseContractsQuery, type ContractsQuery } from "@/lib/contracts-query";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { listContracts } from "@/lib/services/contracts";
-import { getContractMetrics, getUndatedContracts } from "@/lib/services/dashboard";
+import { countNoFileContracts, getContractMetrics, getUndatedContracts } from "@/lib/services/dashboard";
 import { cn } from "@/lib/utils";
 
 /**
@@ -39,12 +39,12 @@ async function ContractsContent({
   const canDelete = canDeleteEntities(me.email);
   const raw = params.scope;
   const requestedScope =
-    raw === "expired" || raw === "archived" || raw === "undated" || raw === "expiring"
+    raw === "expired" || raw === "archived" || raw === "undated" || raw === "expiring" || raw === "no-files"
       ? raw
       : "active";
   const scope = requestedScope === "archived" && !canDelete ? "active" : requestedScope;
 
-  const [result, metricsResult, undatedResult] = await Promise.all([
+  const [result, metricsResult, undatedResult, noFilesResult] = await Promise.all([
     listContracts({
       organizationId: me.organizationId,
       query,
@@ -52,6 +52,7 @@ async function ContractsContent({
     }),
     getContractMetrics(me.organizationId),
     getUndatedContracts(me.organizationId, 1),
+    countNoFileContracts(me.organizationId),
   ]);
 
   const counts = metricsResult.ok
@@ -61,6 +62,7 @@ async function ContractsContent({
         expired: metricsResult.data.expired,
         archived: metricsResult.data.archived,
         undated: undatedResult.ok ? undatedResult.data.total : undefined,
+        noFiles: noFilesResult.ok ? noFilesResult.data : undefined,
       }
     : undefined;
 
@@ -120,13 +122,13 @@ function ContractsTabs({
   query,
   counts,
 }: {
-  scope: "active" | "expired" | "expiring" | "archived" | "undated";
+  scope: "active" | "expired" | "expiring" | "archived" | "undated" | "no-files";
   canDelete: boolean;
   query: ContractsQuery;
-  counts?: { active: number; expiringSoon: number; expired: number; archived: number; undated?: number };
+  counts?: { active: number; expiringSoon: number; expired: number; archived: number; undated?: number; noFiles?: number };
 }) {
   const base = contractsHref({}, query);
-  const withScope = (next: "active" | "expired" | "expiring" | "undated" | "archived") =>
+  const withScope = (next: "active" | "expired" | "expiring" | "undated" | "no-files" | "archived") =>
     next === "active"
       ? base
       : `${base}${base.includes("?") ? "&" : "?"}scope=${next}`;
@@ -190,6 +192,16 @@ function ContractsTabs({
         <span>Không thời hạn / Thiếu ngày</span>
         {counts?.undated !== undefined && (
           <span className={badgeCls(scope === "undated")}>{counts.undated}</span>
+        )}
+      </Link>
+      <Link
+        href={withScope("no-files")}
+        data-testid="contract-tab-no-files"
+        className={tabCls(scope === "no-files")}
+      >
+        <span>Chưa có tệp</span>
+        {counts?.noFiles !== undefined && (
+          <span className={badgeCls(scope === "no-files")}>{counts.noFiles}</span>
         )}
       </Link>
       {canDelete && (

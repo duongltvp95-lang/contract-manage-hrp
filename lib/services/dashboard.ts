@@ -259,3 +259,30 @@ export async function getUndatedContracts(
     total: count ?? rows.length,
   });
 }
+
+/**
+ * Đếm số hợp đồng chưa có tệp đính kèm (round 49).
+ * Dùng RPC count_contract_files để đếm file_count = 0.
+ */
+export async function countNoFileContracts(
+  organizationId: string,
+): Promise<ServiceResult<number>> {
+  const supabase = await createClient();
+
+  // Lấy tất cả contract id không có file trong contract_files
+  const { count, error } = await supabase
+    .from("contracts")
+    .select(
+      `id, contract_files!left(contract_id)`,
+      { count: "exact", head: false },
+    )
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .is("contract_files.contract_id", null);
+
+  if (error) {
+    return dbError("countNoFileContracts", error);
+  }
+
+  return ok(count ?? 0);
+}
