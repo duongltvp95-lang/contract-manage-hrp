@@ -101,7 +101,7 @@ async function DashboardContent() {
         />
         <MetricCard
           testId="metric-undated"
-          title="Không thời hạn"
+          title="Không xác định thời hạn"
           value={undated.ok ? undated.data.total : "—"}
           badgeText={undated.ok && undated.data.total > 0 ? "Cần kiểm tra" : undefined}
           hint="Chưa có ngày ký / ngày hết hạn"
