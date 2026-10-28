@@ -80,7 +80,7 @@ export function formatDuration(
   const expiry = (expiryDate ?? "").trim();
 
   // 1. Không xác định thời hạn
-  if (/không\s*xác\s*định|vô\s*thời\s*hạn|không\s*thời\s*hạn/i.test(raw)) {
+  if (/không\s*xác\s*định|vô\s*thời\s*hạn|không\s*thời\s*hạn|không\s*giới\s*hạn/i.test(raw)) {
     return "Không xác định thời hạn";
   }
 

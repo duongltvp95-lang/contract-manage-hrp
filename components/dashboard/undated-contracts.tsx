@@ -20,6 +20,17 @@ import type { DashboardContractRow } from "@/lib/services/dashboard";
  * hoặc không giới hạn thời hạn trên trang tổng quan (Dashboard).
  * Có cảnh báo nổi bật yêu cầu người dùng kiểm tra lại thông tin ở ghi chú.
  */
+function formatUndatedDuration(durationText?: string | null): string {
+  const text = (durationText ?? "").trim();
+  if (
+    !text ||
+    /không\s*giới\s*hạn|vô\s*thời\s*hạn|không\s*thời\s*hạn|không\s*xác\s*định/i.test(text)
+  ) {
+    return "Không xác định thời hạn";
+  }
+  return text;
+}
+
 export function UndatedContracts({ contracts }: { contracts: DashboardContractRow[] }) {
   if (contracts.length === 0) {
     return (
@@ -87,7 +98,7 @@ export function UndatedContracts({ contracts }: { contracts: DashboardContractRo
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium bg-purple-500/15 text-purple-800 dark:text-purple-300 border border-purple-500/30">
-                      {contract.duration_text?.trim() || "Không giới hạn thời hạn"}
+                      {formatUndatedDuration(contract.duration_text)}
                     </span>
                   )}
                 </TableCell>

@@ -120,6 +120,7 @@ describe("formatDuration", () => {
   it("handles indefinite durations", () => {
     expect(formatDuration("Không xác định thời hạn")).toBe("Không xác định thời hạn");
     expect(formatDuration("Vô thời hạn")).toBe("Không xác định thời hạn");
+    expect(formatDuration("Không giới hạn thời hạn")).toBe("Không xác định thời hạn");
   });
 
   it("calculates from signedDate and expiryDate when durationText is missing", () => {
