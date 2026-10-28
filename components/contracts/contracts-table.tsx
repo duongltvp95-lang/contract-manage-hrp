@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, CalendarPlus, ChevronsUpDown, FilePlus2, Paperclip, Plus, SearchX } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, CalendarPlus, ChevronsUpDown, FilePlus2, Paperclip, Plus, SearchX } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
@@ -248,7 +248,10 @@ export function ContractsTable({
                       {row.file_count}
                     </span>
                   ) : (
-                    <span className="text-xs text-muted-foreground/60">—</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 border border-amber-500/25 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                      <AlertTriangle className="h-3 w-3 shrink-0" />
+                      Chưa có tệp
+                    </span>
                   )}
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
