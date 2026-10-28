@@ -189,7 +189,7 @@ function ContractsTabs({
         data-testid="contract-tab-undated"
         className={tabCls(scope === "undated")}
       >
-        <span>Không thời hạn / Thiếu ngày</span>
+        <span>Không xác định thời hạn</span>
         {counts?.undated !== undefined && (
           <span className={badgeCls(scope === "undated")}>{counts.undated}</span>
         )}
