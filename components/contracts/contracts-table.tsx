@@ -203,43 +203,58 @@ export function ContractsTable({
                 </TableCell>
                 <TableCell className="text-muted-foreground">{formatDateOnly(row.signed_date)}</TableCell>
                 <TableCell>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="inline-flex items-center rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-                      {formatDuration(row.duration_text, row.signed_date, row.expiry_date)}
-                    </span>
-                    {isExpired && (
-                      <div className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                        <Badge
-                          variant="outline"
-                          className="border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400 text-[10px] px-1.5 py-0 font-normal leading-normal"
-                        >
-                          Hết hạn
-                        </Badge>
-                        <RenewContractDialog
-                          contract={{
-                            id: row.id,
-                            contract_number: row.contract_number,
-                            signed_date: row.signed_date,
-                            expiry_date: row.expiry_date,
-                            duration_text: row.duration_text,
-                          }}
-                          trigger={
-                            <button
-                              type="button"
-                              className="text-[11px] text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 hover:underline font-medium inline-flex items-center gap-0.5"
-                              title="Gia hạn hợp đồng này"
-                            >
-                              <CalendarPlus className="h-3 w-3" />
-                              Gia hạn
-                            </button>
-                          }
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <div className={cn("text-xs mt-1", isExpired ? "text-red-600/90 dark:text-red-400/90 font-medium" : "text-muted-foreground")}>
-                    {formatDateOnly(row.expiry_date)}
-                  </div>
+                  {(() => {
+                    const isIndefinite =
+                      !row.expiry_date ||
+                      /không xác định|vô thời hạn|không giới hạn/i.test(row.duration_text ?? "");
+                    return (
+                      <>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="inline-flex items-center rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                            {formatDuration(row.duration_text, row.signed_date, row.expiry_date)}
+                          </span>
+                          {isExpired && (
+                            <div className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <Badge
+                                variant="outline"
+                                className="border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400 text-[10px] px-1.5 py-0 font-normal leading-normal"
+                              >
+                                Hết hạn
+                              </Badge>
+                              <RenewContractDialog
+                                contract={{
+                                  id: row.id,
+                                  contract_number: row.contract_number,
+                                  signed_date: row.signed_date,
+                                  expiry_date: row.expiry_date,
+                                  duration_text: row.duration_text,
+                                }}
+                                trigger={
+                                  <button
+                                    type="button"
+                                    className="text-[11px] text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 hover:underline font-medium inline-flex items-center gap-0.5"
+                                    title="Gia hạn hợp đồng này"
+                                  >
+                                    <CalendarPlus className="h-3 w-3" />
+                                    Gia hạn
+                                  </button>
+                                }
+                              />
+                            </div>
+                          )}
+                          {isIndefinite && !isExpired && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 border border-amber-500/25 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                              <AlertTriangle className="h-3 w-3 shrink-0" />
+                              Chưa có ngày HH
+                            </span>
+                          )}
+                        </div>
+                        <div className={cn("text-xs mt-1", isExpired ? "text-red-600/90 dark:text-red-400/90 font-medium" : "text-muted-foreground")}>
+                          {formatDateOnly(row.expiry_date)}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </TableCell>
                 <TableCell className="text-center">
                   {row.file_count > 0 ? (
