@@ -1,20 +1,9 @@
 "use client";
 
-import {
-  AlertCircle,
-  ArrowLeft,
-  CalendarPlus,
-  ChevronDown,
-  Download,
-  FileText,
-  Loader2,
-  MoreHorizontal,
-} from "lucide-react";
+import { AlertCircle, ArrowLeft, CalendarPlus, MoreHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
 import { format } from "date-fns";
-import { toast } from "sonner";
 
 import { ContractActionsMenu } from "@/components/contracts/archive-contract-dialog";
 import { DeleteContractButton } from "@/components/contracts/delete-contract-button";
@@ -26,17 +15,11 @@ import { DocumentViewer } from "@/components/documents/document-viewer";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import { formatDateOnly, formatDateTime, formatDuration, formatExpiryHint } from "@/lib/format";
 import { partnerDisplayName } from "@/lib/partner-display";
 import type { PartnerRow } from "@/lib/services/partners";
-import { downloadFileFromUrl, isPdfMime, requestViewUrl, type ViewUrl } from "@/lib/view-url";
+import type { ViewUrl } from "@/lib/view-url";
 import { cn } from "@/lib/utils";
 
 /**
@@ -98,29 +81,6 @@ export function ContractDetail({
   const todayStr = format(new Date(), "yyyy-MM-dd");
   const isExpired = Boolean(contract.expiry_date && contract.expiry_date < todayStr);
 
-  const pdfFiles = files.filter((file) => isPdfMime(file.mime_type));
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
-
-  const handleDownloadPdf = async (file: SelectableFile) => {
-    setDownloadingId(file.id);
-    try {
-      toast.info(`Đang tải tệp "${file.original_filename}"...`);
-      let downloadUrl: string;
-      if (initialSelectedId === file.id && initialViewUrl) {
-        downloadUrl = initialViewUrl.viewUrl;
-      } else {
-        const signed = await requestViewUrl(file.id);
-        downloadUrl = signed.viewUrl;
-      }
-      await downloadFileFromUrl(downloadUrl, file.original_filename);
-      toast.success(`Đã tải xuống "${file.original_filename}"`);
-    } catch {
-      toast.error("Không thể tải tệp xuống. Vui lòng thử lại.");
-    } finally {
-      setDownloadingId(null);
-    }
-  };
-
   const fields: [string, string][] = [
     ["Số hợp đồng", contract.contract_number ?? "—"],
     ["Ngày ký", formatDateOnly(contract.signed_date)],
@@ -159,57 +119,6 @@ export function ContractDetail({
           >
             Đã lưu trữ
           </Badge>
-        )}
-
-        {pdfFiles.length === 1 && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5 text-xs font-medium border-emerald-600/30 bg-emerald-50/50 hover:bg-emerald-100/70 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:hover:bg-emerald-900/50 dark:text-emerald-400"
-            onClick={() => handleDownloadPdf(pdfFiles[0])}
-            disabled={Boolean(downloadingId)}
-            title={`Tải file PDF: ${pdfFiles[0].original_filename}`}
-          >
-            {downloadingId === pdfFiles[0].id ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Download className="h-3.5 w-3.5" />
-            )}
-            <span>Tải file PDF</span>
-          </Button>
-        )}
-
-        {pdfFiles.length > 1 && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5 text-xs font-medium border-emerald-600/30 bg-emerald-50/50 hover:bg-emerald-100/70 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-950/30 dark:hover:bg-emerald-900/50 dark:text-emerald-400"
-                disabled={Boolean(downloadingId)}
-              >
-                {downloadingId ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Download className="h-3.5 w-3.5" />
-                )}
-                <span>Tải file PDF</span>
-                <ChevronDown className="h-3 w-3 opacity-60" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              {pdfFiles.map((f) => (
-                <DropdownMenuItem
-                  key={f.id}
-                  className="gap-2 text-xs cursor-pointer"
-                  onClick={() => handleDownloadPdf(f)}
-                >
-                  <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <span className="truncate flex-1">{f.original_filename}</span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
         )}
 
         {archived ? (
