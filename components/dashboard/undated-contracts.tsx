@@ -106,9 +106,12 @@ export function UndatedContracts({ contracts }: { contracts: DashboardContractRo
                       </p>
                     </div>
                   ) : (
-                    <span className="inline-flex items-center gap-1 text-xs font-medium text-rose-700 dark:text-rose-400 bg-rose-500/10 px-2.5 py-1 rounded-md border border-rose-500/20">
-                      <AlertCircle className="h-3.5 w-3.5 text-rose-600 shrink-0" />
-                      Chưa có ghi chú — Cần kiểm tra lại
+                    <span className="inline-flex items-start gap-1.5 text-xs bg-rose-500/10 px-2.5 py-1.5 rounded-md border border-rose-500/20">
+                      <AlertCircle className="h-3.5 w-3.5 text-rose-600 shrink-0 mt-0.5" />
+                      <span className="flex flex-col">
+                        <span className="font-semibold text-rose-700 dark:text-rose-400">Cảnh báo</span>
+                        <span className="text-rose-600/80 dark:text-rose-400/70 font-normal">Kiểm tra lại điều khoản hiệu lực hợp đồng</span>
+                      </span>
                     </span>
                   )}
                 </TableCell>
