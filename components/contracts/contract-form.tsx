@@ -379,8 +379,10 @@ export function ContractForm({
   const [isAttachingToExisting, setIsAttachingToExisting] = useState(false);
   const cancelAiBatchRef = useRef(false);
   const aiRateLimitHitRef = useRef(false);
+  const extractionHadErrorRef = useRef(false);
+  const [, setHasExtractionError] = useState(false);
 
-  const resetFormState = useCallback(() => {
+  const clearExtractedFormFields = useCallback(() => {
     form.reset(EMPTY_VALUES);
     setExtraCompany(null);
     setAiSummary(null);
@@ -390,8 +392,14 @@ export function ContractForm({
     setHasAiExtracted(false);
     setDateConfirmDialogOpen(false);
     setPendingValues(null);
+  }, [form]);
+
+  const resetFormState = useCallback(() => {
+    clearExtractedFormFields();
     resetUploads();
-  }, [form, resetUploads]);
+    extractionHadErrorRef.current = false;
+    setHasExtractionError(false);
+  }, [clearExtractedFormFields, resetUploads]);
 
   useEffect(() => {
     resetFormStateRef.current = resetFormState;
@@ -539,6 +547,8 @@ export function ContractForm({
     options?: { suppressIndividualSuccessToast?: boolean },
   ) {
     if (fileItem.file.size > MAX_AI_FILE_SIZE_BYTES) {
+      extractionHadErrorRef.current = true;
+      setHasExtractionError(true);
       toast.error(`Dung lượng tệp vượt quá giới hạn ${MAX_AI_FILE_SIZE_MB} MB cho phép đối với phân tích AI.`, {
         id: "ai-extract",
       });
@@ -610,6 +620,8 @@ export function ContractForm({
       });
 
       if (!result.ok) {
+        extractionHadErrorRef.current = true;
+        setHasExtractionError(true);
         if (result.code === "rate_limited" || result.code === "rate_limit_unavailable") {
           aiRateLimitHitRef.current = true;
         }
@@ -670,6 +682,8 @@ export function ContractForm({
             file: fileItem,
           });
 
+          extractionHadErrorRef.current = false;
+          setHasExtractionError(false);
           // Hợp đồng gốc ĐÃ CÓ TRÊN HỆ THỐNG:
           // AI phân tích và tự động gán phụ lục vào hợp đồng gốc này
           toast.dismiss("ai-extract");
@@ -681,6 +695,8 @@ export function ContractForm({
           return data;
         } else if (isMatchedWithCurrentForm) {
           setAppendixNotice(null);
+          extractionHadErrorRef.current = false;
+          setHasExtractionError(false);
           if (!options?.suppressIndividualSuccessToast) {
             toast.info(
               `Tệp "${fileItem.file.name}" là Phụ lục của Hợp đồng "${currentFormNum}" trong biểu mẫu. Tệp sẽ được lưu cùng hợp đồng này.`,
@@ -696,6 +712,8 @@ export function ContractForm({
           });
           const blockMsg = `Tệp "${fileItem.file.name}" là Phụ lục của hợp đồng "${baseNum}". Hệ thống chưa có hợp đồng gốc này được tải lên từ trước, không thể lưu hợp đồng khi chưa có hợp đồng gốc.`;
           setFormError(blockMsg);
+          extractionHadErrorRef.current = true;
+          setHasExtractionError(true);
         }
       } else {
         setFileClassification(fileItem.id, "document", {
@@ -833,6 +851,8 @@ export function ContractForm({
       }
 
       if (data.isDuplicate && !isAppendixDoc) {
+        extractionHadErrorRef.current = true;
+        setHasExtractionError(true);
         const signedDisp = data.signedDate ? formatDateOnly(data.signedDate) : "trống";
         const expiryDisp = data.expiryDate ? formatDateOnly(data.expiryDate) : "trống";
         const dupMsg = `Hợp đồng số "${data.contractNumber}" (ngày ký: ${signedDisp}, hết hạn: ${expiryDisp}) đã tồn tại trong hệ thống. Vui lòng không thêm trùng lặp.`;
@@ -891,8 +911,15 @@ export function ContractForm({
         }
       }
 
+      if (!data.isDuplicate && !isAppendixDoc) {
+        extractionHadErrorRef.current = false;
+        setHasExtractionError(false);
+      }
+
       return data;
     } catch (err) {
+      extractionHadErrorRef.current = true;
+      setHasExtractionError(true);
       clientLog.error("executeExtraction thất bại", {
         traceId,
         elapsedMs: Date.now() - clientStartedAt,
@@ -916,6 +943,11 @@ export function ContractForm({
   }
 
   async function handleExtractAi(fileItem: PendingFile) {
+    if (extractionHadErrorRef.current || formError) {
+      clearExtractedFormFields();
+      extractionHadErrorRef.current = false;
+      setHasExtractionError(false);
+    }
     setIsExtractingAi(true);
     setAiSummary(null);
     try {
@@ -931,6 +963,12 @@ export function ContractForm({
     if (fileItems.length === 1) {
       await handleExtractAi(fileItems[0]);
       return;
+    }
+
+    if (extractionHadErrorRef.current || formError) {
+      clearExtractedFormFields();
+      extractionHadErrorRef.current = false;
+      setHasExtractionError(false);
     }
 
     setIsExtractingAi(true);
@@ -998,7 +1036,19 @@ export function ContractForm({
   async function handleAutoExtract(addedFiles: PendingFile[]) {
     if (!addedFiles || addedFiles.length === 0) return;
     if (isExtractingAi || isAttachingToExisting || busy) return;
-    filesRef.current = [...filesRef.current, ...addedFiles];
+
+    // Khi 1 hợp đồng trước đó đọc xong báo lỗi bất kỳ (hoặc biểu mẫu đang có lỗi/trống tệp):
+    // Người dùng tải tệp PDF khác lên sẽ tự động xóa hết các thông tin đọc được trước đó ở các trường thông tin
+    if (extractionHadErrorRef.current || formError || filesRef.current.length === 0) {
+      clearExtractedFormFields();
+      setFiles(() => addedFiles);
+      filesRef.current = addedFiles;
+      extractionHadErrorRef.current = false;
+      setHasExtractionError(false);
+    } else {
+      filesRef.current = [...filesRef.current, ...addedFiles];
+    }
+
     await handleExtractAllAi(addedFiles);
   }
 
