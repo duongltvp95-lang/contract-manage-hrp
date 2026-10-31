@@ -133,4 +133,10 @@ describe("formatDuration", () => {
     expect(formatDuration("")).toBe("—");
     expect(formatDuration(undefined)).toBe("—");
   });
+
+  it("defaults to 'Không xác định thời hạn' when contract has no expiry date", () => {
+    expect(formatDuration(null, "2026-01-01", null)).toBe("Không xác định thời hạn");
+    expect(formatDuration("", "2026-01-01", null)).toBe("Không xác định thời hạn");
+    expect(formatDuration(null, "2026-01-01", "")).toBe("Không xác định thời hạn");
+  });
 });

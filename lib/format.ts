@@ -152,5 +152,12 @@ export function formatDuration(
     return "—";
   }
 
+  // 6. Đối với các hợp đồng không có ngày hết hạn: mặc định "Không xác định thời hạn" khi không có thời hạn cụ thể
+  if (expiryDate === null || (!expiry && Boolean(signed))) {
+    if (!raw || raw === "—") {
+      return "Không xác định thời hạn";
+    }
+  }
+
   return raw || "—";
 }

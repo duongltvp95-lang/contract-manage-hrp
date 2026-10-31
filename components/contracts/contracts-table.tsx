@@ -207,11 +207,16 @@ export function ContractsTable({
                     const isIndefinite =
                       !row.expiry_date ||
                       /không xác định|vô thời hạn|không giới hạn/i.test(row.duration_text ?? "");
+                    const formattedDuration = formatDuration(row.duration_text, row.signed_date, row.expiry_date);
+                    const durationDisplay =
+                      (scope === "undated" || isIndefinite) && (!formattedDuration || formattedDuration === "—")
+                        ? "Không xác định thời hạn"
+                        : formattedDuration;
                     return (
                       <>
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="inline-flex items-center rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-                            {formatDuration(row.duration_text, row.signed_date, row.expiry_date)}
+                            {durationDisplay}
                           </span>
                           {isExpired && (
                             <div className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
