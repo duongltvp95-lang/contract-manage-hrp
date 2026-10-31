@@ -1,3 +1,4 @@
+vi.mock("@/lib/mfa", () => ({ requireMfa: vi.fn().mockResolvedValue({ ok: true, data: true }) }));
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockCreateClient = vi.fn();
@@ -129,7 +130,7 @@ describe("Contract Files Security & Access Control", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRpc.mockReset();
-    mockRpc.mockImplementation(() => createRpcMock(null));
+    mockRpc.mockImplementation((name: string) => createRpcMock(name === "register_contract_upload_intent" ? true : null));
   });
 
   describe("[P1] getContractFileAccess & Archived Contracts", () => {
@@ -532,7 +533,8 @@ describe("Contract Files Security & Access Control", () => {
       ];
 
       mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(mockJobs)));
-      mockRpc.mockImplementationOnce(() => createRpcMock({ status: "cancelled" }));
+      mockRpc.mockImplementationOnce(() => createRpcMock({ exhausted: 0 }))
+        .mockImplementationOnce(() => createRpcMock({ status: "cancelled" }));
 
       const result = await processR2CleanupQueue();
       expect(result.processed).toBe(1);
@@ -554,6 +556,7 @@ describe("Contract Files Security & Access Control", () => {
 
       mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(mockJobs)));
       mockRpc
+        .mockImplementationOnce(() => createRpcMock({ exhausted: 0 }))
         .mockImplementationOnce(() => createRpcMock({ status: "claimed", object_key: "orphan.pdf" }))
         .mockImplementationOnce(() => createRpcMock(true));
 
@@ -563,7 +566,7 @@ describe("Contract Files Security & Access Control", () => {
       expect(result.processed).toBe(1);
       expect(result.succeeded).toBe(1);
       expect(mockDeleteObject).toHaveBeenCalledWith("orphan.pdf", { timeoutMs: 4_000 });
-      expect(mockRpc).toHaveBeenNthCalledWith(2, "finish_r2_cleanup_job", expect.objectContaining({
+      expect(mockRpc).toHaveBeenNthCalledWith(3, "finish_r2_cleanup_job", expect.objectContaining({
         p_job_id: "job-2",
         p_succeeded: true,
       }));
@@ -580,7 +583,8 @@ describe("Contract Files Security & Access Control", () => {
       ];
 
       mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(mockJobs)));
-      mockRpc.mockImplementationOnce(() => createRpcMock(null, { message: "DB verification error" }));
+      mockRpc.mockImplementationOnce(() => createRpcMock({ exhausted: 0 }))
+        .mockImplementationOnce(() => createRpcMock(null, { message: "DB verification error" }));
 
       const result = await processR2CleanupQueue();
       expect(result.processed).toBe(0);
@@ -588,7 +592,7 @@ describe("Contract Files Security & Access Control", () => {
       expect(result.succeeded).toBe(0);
       // KHÔNG được xóa R2 vì lỗi truy vấn đối soát
       expect(mockDeleteObject).not.toHaveBeenCalled();
-      expect(mockRpc).toHaveBeenCalledTimes(1);
+      expect(mockRpc).toHaveBeenCalledTimes(2);
     });
   });
 

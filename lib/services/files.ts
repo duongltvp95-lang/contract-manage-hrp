@@ -1,3 +1,4 @@
+import { requireMfa } from "@/lib/mfa";
 import "server-only";
 
 import {
@@ -305,6 +306,16 @@ export async function createUploadRequest(
     if (cleanupJob) return err("validation", "Phiên tải lên đã được đưa vào hàng đợi dọn dẹp. Vui lòng chọn lại tệp.");
   }
 
+  // Persist before issuing a PUT URL: closing the tab must not orphan an object.
+  const { data: registered, error: intentError } = await createAdminClient()
+    .rpc("register_contract_upload_intent", {
+      p_object_key: objectKey, p_file_id: fileId, p_organization_id: organizationId,
+      p_contract_id: contractId, p_created_by: input.userId,
+    })
+    .abortSignal(AbortSignal.timeout(3_000));
+  if (intentError) return dbError("createUploadRequest.registerIntent", intentError);
+  if (registered !== true) return err("validation", "Phiên tải lên đã hoàn tất hoặc được đưa vào hàng đợi dọn dẹp. Vui lòng chọn lại tệp.");
+
   // Pass fileSize so AWS SigV4 binds Content-Length header, preventing oversized uploads
   const uploadUrl = await createUploadUrl(objectKey, mimeType, fileSize);
 
@@ -565,12 +576,6 @@ export async function completeUpload(
   }
 
   // `completeUpload` runs with a signed-in session user as the actor.
-  await recordCurrentUserAudit({
-    action: "upload_file",
-    targetKind: "file",
-    targetId: row.id,
-    metadata: { filename: row.original_filename, size: row.file_size },
-  });
 
   return ok(row);
 }
@@ -717,6 +722,8 @@ export async function deleteContractFile(
   if (!canDeleteEntities(userEmail)) {
     return err("forbidden", "Không có quyền xoá tệp hợp đồng");
   }
+  const mfa = await requireMfa();
+  if (!mfa.ok) return mfa;
 
   let admin: ReturnType<typeof createAdminClient>;
   try {

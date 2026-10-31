@@ -9,6 +9,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { testTotp } from "../setup/totp";
 
 /**
  * Shared fixtures for the end-to-end suite — W1-WEB-039..043.
@@ -42,28 +43,11 @@ export const HR_VN_COMPANY_ID = "00000000-0000-4000-8000-000000000002";
  *
  * No fallback values, deliberately: an earlier revision defaulted the password
  * to the live admin credential, which committed a working production password
- * to the repository. A test that cannot run without a secret must skip, not
- * carry the secret in source.
+ * to the repository. Missing dedicated test credentials fail setup; secrets
+ * must never have a source-code fallback.
  */
-export const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL ?? "";
-export const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD ?? "";
-
-/**
- * True when this suite can actually reach Supabase and R2.
- *
- * Every spec calls `test.skip(!hasLiveBackend, …)` at file scope, so a checkout
- * without credentials (a fork, or CI on a repository with no secrets) reports
- * the suite as skipped rather than failing it. That is also why the CI workflow
- * needs no `if:` on its jobs — and why it must not have one, since `secrets` is
- * not an allowed context in a job-level condition.
- */
-export const hasLiveBackend = Boolean(
-  process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY &&
-    process.env.SUPABASE_SERVICE_ROLE_KEY &&
-    ADMIN_EMAIL &&
-    ADMIN_PASSWORD,
-);
+export { ADMIN_EMAIL, ADMIN_PASSWORD, hasLiveBackend } from "../setup/env";
+import { ADMIN_EMAIL, ADMIN_PASSWORD } from "../setup/env";
 
 /** Where generated PDF/PNG/JPG fixtures are written for the file inputs. */
 export const ARTIFACT_DIR = join(tmpdir(), "contract-manager-e2e");
@@ -273,6 +257,14 @@ export async function login(
     page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 60_000 }),
     page.getByRole("button", { name: /đăng nhập/i }).click(),
   ]);
+  if (new URL(page.url()).pathname === "/auth/mfa") {
+    await page.fill("#mfa-code", testTotp(process.env.TEST_ADMIN_TOTP_SECRET ?? ""));
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === "/settings", { timeout: 30_000 }),
+      page.getByRole("button", { name: "Xác thực và tiếp tục" }).click(),
+    ]);
+    await gotoAndSettle(page, "/dashboard");
+  }
 }
 
 /**

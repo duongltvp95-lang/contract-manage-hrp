@@ -161,7 +161,7 @@ describe("Manual Contract Renewal (Gia hạn hợp đồng thủ công)", () => 
       }
     });
 
-    it("gia hạn thành công khi ngày hợp lệ, cập nhật expiry_date và ghi audit log", async () => {
+    it("gia hạn thành công; audit được ghi bởi trigger DB, không ghi trùng ở service", async () => {
       const mockSelect = vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
@@ -228,13 +228,7 @@ describe("Manual Contract Renewal (Gia hạn hợp đồng thủ công)", () => 
       if (result.ok) {
         expect(result.data.expiry_date).toBe("2027-01-01");
       }
-      expect(mockRecordCurrentUserAudit).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "update_contract",
-          targetKind: "contract",
-          targetId: "contract-ok",
-        }),
-      );
+      expect(mockRecordCurrentUserAudit).not.toHaveBeenCalled();
     });
   });
 

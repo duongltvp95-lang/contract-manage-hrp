@@ -1,6 +1,7 @@
 "use server";
 
-import { createAdminClient } from "@/lib/supabase/admin";
+import { claimLoginAttempt, clearLoginAttempts } from "@/lib/login-budget";
+import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { recordAudit, recordLogoutAudit } from "@/lib/services/audit-logs";
 import {
@@ -14,7 +15,7 @@ import {
 } from "@/lib/login-attempts";
 
 export type LoginActionResult =
-  | { success: true }
+  | { success: true; mfaRequired?: boolean }
   | { success: false; error: string; remainingAttempts?: number };
 
 /**
@@ -115,152 +116,84 @@ async function clearStoredAttempts(): Promise<void> {
  * 3. Hỗ trợ chính sách: nếu 1 tài khoản bị khóa, chỉ cho phép thử tối đa 1 tài khoản khác.
  * 4. Tự động chuẩn hoá email (trim trailing whitespace do bàn phím iPhone tự gợi ý, lowercase).
  */
+const LoginSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(320),
+  password: z.string().min(1).max(1024),
+});
+
 export async function loginAction(payload: {
-  email: string;
-  password: string;
+  email: string; password: string;
 }): Promise<LoginActionResult> {
-  const email = (payload.email || "").trim().toLowerCase();
-  const password = payload.password || "";
-
-  if (!email || !password) {
-    return {
-      success: false,
-      error: "Vui lòng nhập đầy đủ email và mật khẩu.",
-    };
-  }
-
-  // 1. Kiểm tra chính sách giới hạn phiên (nếu tài khoản chính bị khóa, chỉ cho phép thử 1 tài khoản khác)
+  const parsed = LoginSchema.safeParse(payload);
+  if (!parsed.success) return { success: false, error: "Vui lòng nhập đầy đủ email và mật khẩu hợp lệ." };
+  const { email, password } = parsed.data;
   const session = await getStoredLockoutSession();
-  const allowedCheck = canAttemptLoginWithEmail(session, email);
-  if (!allowedCheck.allowed) {
-    return {
-      success: false,
-      error: allowedCheck.message,
-      remainingAttempts: 0,
-    };
-  }
+  const local = canAttemptLoginWithEmail(session, email);
+  if (!local.allowed) return { success: false, error: local.message, remainingAttempts: 0 };
 
   try {
-    const supabase = await createClient();
-    let { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    // Nếu mật khẩu có khoảng trắng đầu/cuối do bàn phím iPhone tự gợi ý và bị lỗi,
-    // tự động thử lại một lần với mật khẩu đã trim để hỗ trợ người dùng di động.
-    if (error && password.trim() !== password) {
-      const retry = await supabase.auth.signInWithPassword({
-        email,
-        password: password.trim(),
+    let budget = await claimLoginAttempt(email);
+    const lockedResult = async (): Promise<LoginActionResult> => {
+      await saveStoredLockoutSession({
+        ...session, primaryEmail: email, primaryCount: 5,
+        lockedEmail: email, lockedUntil: Date.parse(budget.expires_at),
       });
-      if (!retry.error) {
-        await clearStoredAttempts();
-        return { success: true };
-      }
+      return { success: false, remainingAttempts: 0,
+        error: "Tài khoản này đã hết lượt thử đăng nhập. Vui lòng thử lại sau 15 phút." };
+    };
+    if (!budget.allowed) return lockedResult();
+    const supabase = await createClient({ abortSignal: AbortSignal.timeout(8_000) });
+    let { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error && password.trim() && password.trim() !== password) {
+      budget = await claimLoginAttempt(email);
+      if (!budget.allowed) return lockedResult();
+      const retry = await supabase.auth.signInWithPassword({ email, password: password.trim() });
       error = retry.error;
     }
-
     if (error) {
-      const msg = error.message.toLowerCase();
-
-      // Kiểm tra Rate Limit từ Supabase
-      const isSupabaseRateLimit =
-        msg.includes("too many requests") ||
-        msg.includes("rate limit") ||
-        (typeof (error as { status?: number }).status === "number" &&
-          (error as { status?: number }).status === 429);
-
-      if (isSupabaseRateLimit) {
-        return {
-          success: false,
-          error:
-            "Bạn đã vượt quá số lần thử đăng nhập cho phép (5 lần). Vui lòng thử lại sau 15 phút hoặc sử dụng tính năng 'Quên mật khẩu'.",
-          remainingAttempts: 0,
-        };
-      }
-
-      // Xử lý sai email hoặc mật khẩu -> đếm và cảnh báo số lần còn lại
-      const errCode = (error as { code?: string }).code;
-      const isInvalidCredentials =
-        errCode === "invalid_credentials" ||
-        errCode === "invalid_grant" ||
-        msg.includes("invalid") ||
-        msg.includes("credentials") ||
-        msg.includes("grant") ||
-        msg.includes("password") ||
-        msg.includes("user not found") ||
-        (typeof (error as { status?: number }).status === "number" &&
-          (error as { status?: number }).status === 400);
-
-      if (isInvalidCredentials) {
-        const { remaining, isAlternate } = await recordFailedAttemptSession(email);
-        return {
-          success: false,
-          error: formatRemainingAttemptsMessage(remaining, isAlternate),
-          remainingAttempts: remaining,
-        };
-      }
-
-      if (msg.includes("email not confirmed")) {
-        return {
-          success: false,
-          error: "Email chưa được kích hoạt hoặc xác thực trong hệ thống.",
-        };
-      }
-
-      // Đối với các lỗi khác, vẫn tính là 1 lần thử sai nếu trạng thái là 4xx
-      const { remaining, isAlternate } = await recordFailedAttemptSession(email);
-      return {
-        success: false,
-        error: error.message
-          ? `${error.message}. Bạn còn ${remaining} lần thử.`
-          : formatRemainingAttemptsMessage(remaining, isAlternate),
-        remainingAttempts: remaining,
+      const rateLimited = error.status === 429;
+      if (rateLimited) return {
+        success: false, remainingAttempts: 0,
+        error: "Bạn đã gửi quá nhiều yêu cầu đăng nhập. Vui lòng thử lại sau.",
       };
-    }
-
-    // Đăng nhập thành công -> xóa bỏ bộ đếm thất bại
-    await clearStoredAttempts();
-
-    // Ghi nhận nhật ký đăng nhập sử dụng của tài khoản
-    try {
-      const { data: authData } = await supabase.auth.getUser();
-      if (authData?.user) {
-        const adminClient = createAdminClient();
-        const { data: profile } = await adminClient
-          .from("profiles")
-          .select("organization_id, role")
-          .eq("id", authData.user.id)
-          .maybeSingle();
-
-        if (profile) {
-          await recordAudit({
-            organizationId: profile.organization_id,
-            actorId: authData.user.id,
-            actorRole: profile.role === "admin" ? "admin" : "user",
-            action: "login",
-            targetKind: "user",
-            targetId: authData.user.id,
-            metadata: {
-              email: authData.user.email ?? email,
-            },
-          });
-        }
+      const failed = await recordFailedAttemptSession(email);
+      const remaining = Math.min(failed.remaining, budget.remaining);
+      if (remaining === 0) {
+        await saveStoredLockoutSession({
+          ...failed.session, lockedEmail: email, lockedUntil: Date.parse(budget.expires_at),
+        });
       }
-    } catch (auditErr) {
-      console.error("[login:audit]", auditErr);
+      return { success: false, remainingAttempts: remaining,
+        error: formatRemainingAttemptsMessage(remaining, failed.isAlternate) };
     }
 
-    return { success: true };
-  } catch (err: unknown) {
-    return {
-      success: false,
-      error:
-        err instanceof Error
-          ? err.message
-          : "Đã xảy ra lỗi kết nối khi đăng nhập.",
-    };
+    // Every successful path, including the trimmed-password retry, reaches audit.
+    const { data: authData, error: userError } = await supabase.auth.getUser();
+    if (userError || !authData.user) return { success: false, error: "Không thể xác nhận phiên đăng nhập." };
+    const { data: profile, error: profileError } = await supabase.from("profiles")
+      .select("organization_id, role, is_active").eq("id", authData.user.id).maybeSingle();
+    if (profileError || !profile || !profile.is_active) {
+      await supabase.auth.signOut();
+      return { success: false, error: profileError ? "Không thể kiểm tra quyền truy cập. Vui lòng thử lại." : "Tài khoản đã bị vô hiệu hoá." };
+    }
+    await clearStoredAttempts();
+    await clearLoginAttempts(email);
+    const audit = await recordAudit({
+      organizationId: profile.organization_id, actorId: authData.user.id,
+      actorRole: profile.role === "admin" ? "admin" : "user",
+      action: "login", targetKind: "user", targetId: authData.user.id,
+      metadata: { email: authData.user.email ?? email },
+    }, { timeoutMs: 2_500 });
+    if (!audit.ok) console.error("[login:audit]", audit.code);
+    const { data: assurance, error: assuranceError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (assuranceError) {
+      await supabase.auth.signOut();
+      return { success: false, error: "Không thể kiểm tra xác thực hai bước. Vui lòng thử lại." };
+    }
+    return { success: true, mfaRequired: profile.role === "admin" || assurance?.nextLevel === "aal2" };
+  } catch (error) {
+    console.error("[login]", error instanceof Error ? error.message : "unavailable");
+    return { success: false, error: "Dịch vụ đăng nhập tạm thời không khả dụng. Vui lòng thử lại sau." };
   }
 }
 

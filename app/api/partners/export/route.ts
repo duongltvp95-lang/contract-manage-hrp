@@ -1,3 +1,4 @@
+import { businessDate } from "@/lib/business-date";
 import { type NextRequest, NextResponse } from "next/server";
 import { PARTNER_STATUS_LABELS } from "@schemas/partner";
 
@@ -42,7 +43,7 @@ export async function GET(request: NextRequest) {
     : list.data;
 
   // Ghi nhận nhật ký kiểm toán hành động xuất danh bạ đối tác (P1)
-  void recordAudit({
+  const audit = await recordAudit({
     organizationId: user.organizationId,
     actorId: user.id,
     actorRole: user.role,
@@ -55,9 +56,10 @@ export async function GET(request: NextRequest) {
     },
   });
 
+  if (!audit.ok) console.error("[partners:export:audit]", audit.code);
   const body = await formatXlsx(rows);
 
-  const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  const today = businessDate().replaceAll("-", "");
   const suffix =
     status === "active"
       ? "dang-hop-tac"

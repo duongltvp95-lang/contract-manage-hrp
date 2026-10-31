@@ -125,10 +125,17 @@ suite("delete contract/partner (round 19)", () => {
     const contractId = (created.data as { id: string }).id;
 
     // One real object in R2.
-    const fileId = crypto.randomUUID();
     const filename = `${TEST_PREFIX}xoá.pdf`;
-    const objectKey = `contracts/${ORG_B}/${contractId}/${fileId}/${filename}`;
     const body = Buffer.from(`%PDF-1.4\n% ${stamp}\n%%EOF\n`, "latin1");
+    const issued = await fetch(`${BASE_URL}/api/files/upload-url`, {
+      method: "POST",
+      headers: { cookie: privileged.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ contractId, filename, mimeType: "application/pdf", fileSize: body.length }),
+    });
+    expect(issued.status).toBe(200);
+    const { fileId, objectKey, uploadReservation } = await issued.json() as {
+      fileId: string; objectKey: string; uploadReservation: string;
+    };
     await r2Client().send(
       new PutObjectCommand({
         Bucket: bucketName(),
@@ -141,6 +148,7 @@ suite("delete contract/partner (round 19)", () => {
       contractId,
       fileId,
       objectKey,
+      uploadReservation,
       filename,
       mimeType: "application/pdf",
       fileSize: body.length,

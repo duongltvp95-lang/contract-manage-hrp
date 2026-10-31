@@ -1,3 +1,4 @@
+import { requireMfa } from "@/lib/mfa";
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -226,6 +227,9 @@ export async function requireAdmin() {
       "Chỉ quản trị viên mới có quyền quản lý người dùng",
     );
   }
+
+  const mfa = await requireMfa();
+  if (!mfa.ok) return mfa;
 
   return ok(user);
 }
@@ -630,6 +634,7 @@ export async function updateUser(
     .from("profiles")
     .select("id, full_name, role, is_active, created_at, organization_id")
     .eq("id", userId)
+    .eq("organization_id", admin.data.organizationId)
     .maybeSingle();
 
   if (existingError) {
@@ -640,7 +645,10 @@ export async function updateUser(
   }
 
   const target = existing as ProfileDbRow & { organization_id?: string | null };
-  const targetOrgId = target.organization_id || admin.data.organizationId;
+  if (target.organization_id !== admin.data.organizationId) {
+    return err("forbidden", "Không thể quản lý người dùng của tổ chức khác");
+  }
+  const targetOrgId = admin.data.organizationId;
 
   // --- Owner protection guard --------------------------------------------
   // duongltvp95@gmail.com is the immutable system Owner.
@@ -700,6 +708,7 @@ export async function updateUser(
     .from("profiles")
     .update(patch)
     .eq("id", userId)
+    .eq("organization_id", admin.data.organizationId)
     .select("id, full_name, role, is_active, created_at")
     .single();
 
@@ -825,6 +834,7 @@ export async function deleteUser(
     .from("profiles")
     .select("id, full_name, role, is_active, created_at, organization_id")
     .eq("id", userId)
+    .eq("organization_id", admin.data.organizationId)
     .maybeSingle();
 
   if (targetError) {
@@ -835,7 +845,10 @@ export async function deleteUser(
   }
 
   const targetRow = target as ProfileDbRow & { organization_id?: string | null };
-  const targetOrgId = targetRow.organization_id || admin.data.organizationId;
+  if (targetRow.organization_id !== admin.data.organizationId) {
+    return err("forbidden", "Không thể quản lý người dùng của tổ chức khác");
+  }
+  const targetOrgId = admin.data.organizationId;
 
   // --- guard 4: last-admin ----------------------------------------------
   if (targetRow.role === "admin" && targetRow.is_active) {

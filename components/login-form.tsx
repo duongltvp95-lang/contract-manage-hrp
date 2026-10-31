@@ -279,8 +279,7 @@ export function LoginForm({
       } catch {}
 
       // Hard redirect để đồng bộ hoàn toàn cookie trên Safari iOS và mobile browsers
-      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-      window.location.href = "/dashboard";
+      window.location.href = res.mfaRequired ? "/auth/mfa" : "/dashboard";
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Đã xảy ra lỗi khi đăng nhập.");
       setIsLoading(false);

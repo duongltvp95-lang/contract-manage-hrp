@@ -97,7 +97,7 @@ export async function recordAudit(
   },
   options?: { abortSignal?: AbortSignal; timeoutMs?: number },
 ): Promise<ServiceResult<{ id: string }>> {
-  const signal = options?.abortSignal ?? (options?.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined);
+  const signal = options?.abortSignal ?? AbortSignal.timeout(options?.timeoutMs ?? 2_500);
   if (signal?.aborted) {
     return err("db_error", "Ghi log kiểm toán bị hủy do quá thời gian");
   }

@@ -1,3 +1,4 @@
+vi.mock("@/lib/mfa", () => ({ requireMfa: vi.fn().mockResolvedValue({ ok: true, data: true }) }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
@@ -23,6 +24,28 @@ describe("Route /api/cron/storage-cleanup", () => {
 
   afterEach(() => {
     process.env = originalEnv;
+  });
+
+  it.each([
+    { processed: 0, succeeded: 0, failed: 1, error: "configuration" },
+    { processed: 0, succeeded: 0, failed: 1, error: "database" },
+    { processed: 0, succeeded: 0, failed: 0, exhausted: 3 },
+  ] as const)("returns 503 for an unhealthy worker result: %j", async (result) => {
+    vi.mocked(storageCleanupModule.processR2CleanupQueue).mockResolvedValue(result);
+    const response = await GET(new NextRequest("http://localhost/api/cron/storage-cleanup", {
+      headers: { authorization: "Bearer test-secret-123" },
+    }));
+    expect(response.status).toBe(503);
+    expect((await response.json()).success).toBe(false);
+  });
+
+  it("returns 503 when the worker throws instead of reporting success", async () => {
+    vi.mocked(storageCleanupModule.processR2CleanupQueue).mockRejectedValue(new Error("unavailable"));
+    const response = await GET(new NextRequest("http://localhost/api/cron/storage-cleanup", {
+      headers: { authorization: "Bearer test-secret-123" },
+    }));
+    expect(response.status).toBe(503);
+    expect((await response.json()).success).toBe(false);
   });
 
   it("từ chối 401 khi không có Authorization header và không có phiên đăng nhập", async () => {
@@ -63,9 +86,9 @@ describe("Route /api/cron/storage-cleanup", () => {
       },
     });
     const res = await GET(req);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     const body = await res.json();
-    expect(body.success).toBe(true);
+    expect(body.success).toBe(false);
     expect(body.processed).toBe(5);
     expect(body.succeeded).toBe(4);
     expect(body.failed).toBe(1);

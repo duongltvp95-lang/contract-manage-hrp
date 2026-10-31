@@ -48,6 +48,8 @@ if (process.env.NEXT_PUBLIC_APP_URL) {
 
 const nextConfig: NextConfig = {
   cacheComponents: true,
+  // Keep the existing prefetch behavior while upgrading this application.
+  partialPrefetching: false,
 
   experimental: {
     serverActions: {

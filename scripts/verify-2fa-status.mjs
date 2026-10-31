@@ -38,9 +38,10 @@ for (const email of targetEmails) {
     continue;
   }
 
-  const factorCount = user.factors ? user.factors.length : 0;
+  const factorCount = (user.factors ?? []).filter((factor) => factor.status === "verified").length;
   console.log(`\n> Tài khoản: ${email} (ID: ${user.id})`);
-  console.log(`  - Trạng thái 2FA (MFA Factors): ${factorCount > 0 ? "ĐÃ BẬT (" + factorCount + " factor)" : "CHƯA BẬT (0 factor)"}`);
+  console.log(`  - Trạng thái 2FA (MFA Factors): ${factorCount > 0 ? "ĐÃ ĐĂNG KÝ FACTOR VERIFIED (" + factorCount + " factor)" : "CHƯA CÓ FACTOR VERIFIED"}`);
+  console.log("  - Mỗi phiên thao tác nhạy cảm còn phải được nâng lên AAL2 trong ứng dụng.");
   if (factorCount > 0) {
     user.factors.forEach((f, idx) => {
       console.log(`    [Factor #${idx + 1}] Loại: ${f.factor_type} | Tên: ${f.friendly_name || "Mặc định"} | Trạng thái: ${f.status}`);

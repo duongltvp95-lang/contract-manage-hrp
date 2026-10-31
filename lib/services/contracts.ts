@@ -1,3 +1,5 @@
+import { requireMfa } from "@/lib/mfa";
+import { businessDate } from "@/lib/business-date";
 import "server-only";
 
 import {
@@ -61,15 +63,13 @@ export type ContractDetail = ContractRow & {
   company_name: string | null;
 };
 
-/**
- * How many matching partner ids may be folded into the search filter.
- *
- * The directory is expected to be small (tens, maybe low hundreds), so this
- * bound is not reached in practice — it exists so that a pathological term
- * ("a") cannot build a URL longer than the server accepts. When it is reached
- * the search still works; it simply covers the first N matching partners.
- */
-const PARTNER_SEARCH_ID_LIMIT = 150;
+function contractWriteError(scope: string, error: unknown): ServiceErr {
+  const failure = error as { code?: string; message?: string };
+  if (failure?.code === "23505" && failure.message?.includes("contracts_active_identity_unique")) {
+    return err("validation", "Hợp đồng có cùng số, ngày ký và ngày hết hạn đã tồn tại trong hệ thống");
+  }
+  return dbError(scope, error);
+}
 
 export type CreateContractContext = {
   userId: string;
@@ -139,9 +139,8 @@ export async function findDuplicateContract(
     .limit(1)
     .maybeSingle();
 
-  if (error || !data) {
-    return null;
-  }
+  if (error) throw new Error("Không thể kiểm tra hợp đồng trùng", { cause: error });
+  if (!data) return null;
 
   return data as ContractRow;
 }
@@ -293,14 +292,12 @@ export async function createContract(
    */
   const partnerId = values.partnerId;
 
-  let partnerName: string | null = null;
-
   if (partnerId) {
     const partner = await getPartner(partnerId, { organizationId });
     if (!partner.ok) {
       return err("validation", "Đối tác được chọn không thuộc tổ chức của bạn");
     }
-    partnerName = partner.data.name;
+
   }
 
   /**
@@ -333,12 +330,13 @@ export async function createContract(
    * Chặn thêm hợp đồng trùng lặp: nếu số hợp đồng, ngày ký và ngày hết hạn
    * đã tồn tại trong cùng tổ chức thì không cho thêm.
    */
-  const duplicate = await findDuplicateContract({
-    contractNumber: values.contractNumber,
-    signedDate: values.signedDate,
-    expiryDate: values.expiryDate,
-    organizationId,
-  });
+  let duplicate: ContractRow | null;
+  try {
+    duplicate = await findDuplicateContract({
+      contractNumber: values.contractNumber, signedDate: values.signedDate,
+      expiryDate: values.expiryDate, organizationId,
+    });
+  } catch (error) { return dbError("createContract.checkDuplicate", error); }
 
   if (duplicate) {
     const signedDisplay = duplicate.signed_date ? formatDateOnly(duplicate.signed_date) : "trống";
@@ -370,21 +368,10 @@ export async function createContract(
     .single();
 
   if (error) {
-    return dbError("createContract", error);
+    return contractWriteError("createContract", error);
   }
 
   const created = data as ContractRow;
-
-  await recordCurrentUserAudit({
-    action: "create_contract",
-    targetKind: "contract",
-    targetId: created.id,
-    metadata: {
-      contractNumber: created.contract_number ?? null,
-      partnerName,
-      companyName: company.data.name,
-    },
-  });
 
   return ok(created);
 }
@@ -476,45 +463,6 @@ export type ContractListResult = {
 };
 
 /**
- * Counts files per contract for one page of rows.
- *
- * Giai đoạn 2: Tối ưu đếm số file bằng DB aggregate RPC (security invoker),
- * gom nhóm và tính toán trực tiếp trong Postgres để giảm tải bộ nhớ Node.js.
- * Có fallback an toàn sang truy vấn truyền thống nếu RPC chưa sẵn sàng.
- */
-async function countFilesByContract(
-  contractIds: string[],
-): Promise<Map<string, number>> {
-  const counts = new Map<string, number>();
-  if (contractIds.length === 0) return counts;
-
-  const supabase = await createClient();
-
-  const { data: rpcData, error: rpcError } = await supabase.rpc(
-    "count_contract_files",
-    { contract_ids: contractIds },
-  );
-
-  if (!rpcError && rpcData) {
-    for (const row of rpcData as { contract_id: string; file_count: number | string }[]) {
-      counts.set(row.contract_id, Number(row.file_count) || 0);
-    }
-    return counts;
-  }
-
-  const { data } = await supabase
-    .from("contract_files")
-    .select("contract_id")
-    .in("contract_id", contractIds);
-
-  for (const row of (data ?? []) as { contract_id: string }[]) {
-    counts.set(row.contract_id, (counts.get(row.contract_id) ?? 0) + 1);
-  }
-
-  return counts;
-}
-
-/**
  * Server-side list with search, filters, sorting and pagination
  * (plan sections 48-53).
  *
@@ -551,15 +499,8 @@ export async function listContracts({
   const to = from + query.pageSize - 1;
 
   let builder = supabase
-    .from("contracts")
-    // Round 37 — the "Công ty" column on the contract list shows the company
-    // the contract is signed for (contracts.company_id), NOT every company the
-    // partner is linked to via partner_companies. Before this fix, a merged
-    // partner (e.g. DONGYANG after round 35) showed the full partner_companies
-    // set on every one of its contracts, which was misleading. The embed
-    // `companies!contracts_company_id_fkey(name)` reads the company through the
-    // many-to-one FK set up in round 33, and is the only writer for this column.
-    .select(`${CONTRACT_COLUMNS}, partners(name), companies!contracts_company_id_fkey(name)`, { count: "exact" })
+    .from("contract_listing")
+    .select(`${CONTRACT_COLUMNS}, partner_name, company_name, file_count`, { count: "exact" })
     .eq("organization_id", organizationId);
 
   if (scope === "archived") {
@@ -584,67 +525,17 @@ export async function listContracts({
         "signed_date.is.null,expiry_date.is.null,duration_text.ilike.%không xác định%,duration_text.ilike.%vô thời hạn%,duration_text.ilike.%không giới hạn%",
       );
     } else if (scope === "no-files") {
-      // Lọc hợp đồng chưa có tệp: contract_files không có cột organization_id,
-      // nên lấy danh sách contract_id có file từ org trước, rồi loại trừ.
-      // Bước 1: IDs của tất cả contracts trong org (không archived)
-      const { data: orgContracts } = await supabase
-        .from("contracts")
-        .select("id")
-        .eq("organization_id", organizationId)
-        .is("archived_at", null);
-      const orgIds = (orgContracts ?? []).map((r: { id: string }) => r.id);
-
-      if (orgIds.length > 0) {
-        // Bước 2: trong số đó, những contract nào có file
-        const { data: withFiles } = await supabase
-          .from("contract_files")
-          .select("contract_id")
-          .in("contract_id", orgIds);
-        const idsWithFiles = [...new Set((withFiles ?? []).map((r: { contract_id: string }) => r.contract_id))];
-        if (idsWithFiles.length > 0) {
-          builder = builder.not("id", "in", `(${idsWithFiles.join(",")})`);
-        }
-      }
+      builder = builder.eq("has_files", false);
     }
     // scope === "all": không lọc theo ngày hết hạn, hiển thị cả đang hoạt động và đã hết hạn
   }
 
-  // --- search (plan sections 50, 51; feature round 2 adds the partner link) --
-  // Three sources, OR'd: the contract number, the free-text partner name that
-  // every pre-round-2 row carries, and the name of the partner the contract is
-  // now linked to.
-  //
-  // The linked-name case is resolved as a set of partner ids rather than as a
-  // join inside the filter. PostgREST cannot OR a column of an embedded
-  // resource with a column of the base table in one `or`, and folding the
-  // matching contract ids in instead would put an unbounded list in the URL.
-  // The partner directory is small by design (`listPartners` returns all of it
-  // for the filter controls), so a `partner_id.in.(…)` list stays short.
+  // Search the joined partner name without truncating a client-side ID set.
   const term = sanitizeSearchTerm(query.q);
   if (term) {
-    const { data: matchingPartners, error: partnerSearchError } = await supabase
-      .from("partners")
-      .select("id")
-      .eq("organization_id", organizationId)
-      .ilike("name", `%${term}%`)
-      .limit(PARTNER_SEARCH_ID_LIMIT);
-
-    if (partnerSearchError) {
-      return dbError("listContracts", partnerSearchError);
-    }
-
-    const clauses = [
-      `contract_number.ilike.%${term}%`,
-      `partner_text.ilike.%${term}%`,
-    ];
-
-    const partnerIds = (matchingPartners ?? []).map((row) => row.id);
-
-    if (partnerIds.length > 0) {
-      clauses.push(`partner_id.in.(${partnerIds.join(",")})`);
-    }
-
-    builder = builder.or(clauses.join(","));
+    builder = builder.or(
+      `contract_number.ilike.%${term}%,partner_text.ilike.%${term}%,partner_name.ilike.%${term}%`,
+    );
   }
 
   // --- partner filter (feature round 2) ------------------------------------
@@ -683,38 +574,14 @@ export async function listContracts({
   }
 
   const rawRows = (data ?? []) as unknown as (ContractRow & {
-    partners: { name: string } | { name: string }[] | null;
-    companies: { name: string } | { name: string }[] | null;
+    partner_name: string | null; company_name: string | null; file_count: number | string;
   })[];
-  const fileCounts = await countFilesByContract(rawRows.map((row) => row.id));
   const total = count ?? rawRows.length;
-
   return ok({
-    rows: rawRows.map(({ partners, companies: companiesEmbed, ...row }) => {
-      // A many-to-one embed arrives as an object; the generated types cannot
-      // tell it apart from a to-many embed, so both shapes are accepted.
-      const embeddedPartner = Array.isArray(partners)
-        ? (partners[0] ?? null)
-        : partners;
-      const embeddedCompany = Array.isArray(companiesEmbed)
-        ? (companiesEmbed[0] ?? null)
-        : companiesEmbed;
-
-      return {
-        ...row,
-        file_count: fileCounts.get(row.id) ?? 0,
-        partner_name: embeddedPartner?.name ?? null,
-        // Round 37 — the company shown on the contract is the company the
-        // contract is signed for (`contracts.company_id`), not the partner's
-        // full company set. Pre-round-33 contracts (company_id IS NULL) get an
-        // empty array, which the UI renders as no badge — same as today, just
-        // for the right reason now.
-        companies: embeddedCompany?.name ? [embeddedCompany.name] : [],
-      };
-    }),
-    total,
-    page: query.page,
-    pageSize: query.pageSize,
+    rows: rawRows.map(({ company_name, file_count, ...row }) => ({
+      ...row, file_count: Number(file_count), companies: company_name ? [company_name] : [],
+    })),
+    total, page: query.page, pageSize: query.pageSize,
     pageCount: Math.max(1, Math.ceil(total / query.pageSize)),
   });
 }
@@ -894,7 +761,7 @@ export async function updateContract(
     .maybeSingle();
 
   if (error) {
-    return dbError("updateContract", error);
+    return contractWriteError("updateContract", error);
   }
 
   if (!data) {
@@ -902,25 +769,6 @@ export async function updateContract(
   }
 
   const updated = data as ContractRow;
-  const FIELD_LABELS: Record<string, string> = {
-    contract_number: "contractNumber",
-    signed_date: "signedDate",
-    duration_text: "durationText",
-    expiry_date: "expiryDate",
-    partner_text: "partnerText",
-    partner_id: "partnerId",
-    company_id: "companyId",
-    notes: "notes",
-  };
-  const changed = Object.keys(patch).map((key) => FIELD_LABELS[key] ?? key);
-
-  await recordCurrentUserAudit({
-    action: "update_contract",
-    targetKind: "contract",
-    targetId: updated.id,
-    metadata: { contractNumber: updated.contract_number ?? null, changed },
-  });
-
   return ok(updated);
 }
 
@@ -970,7 +818,7 @@ export async function renewContract(
   // 2. Chuẩn bị ghi chú nối thêm nếu có
   let updatedNotes = currentContract.notes ?? "";
   if (input.renewalNote && input.renewalNote.trim()) {
-    const todayStr = formatDateOnly(new Date().toISOString().slice(0, 10));
+    const todayStr = formatDateOnly(businessDate());
     const renewalEntry = `[Gia hạn ${todayStr}: Hạn mới ${formatDateOnly(newExpiry)}] ${input.renewalNote.trim()}`;
     updatedNotes = updatedNotes.trim()
       ? `${updatedNotes.trim()}\n${renewalEntry}`
@@ -999,7 +847,7 @@ export async function renewContract(
     .maybeSingle();
 
   if (error) {
-    return dbError("renewContract", error);
+    return contractWriteError("renewContract", error);
   }
 
   if (!data) {
@@ -1007,18 +855,6 @@ export async function renewContract(
   }
 
   const updated = data as ContractRow;
-
-  await recordCurrentUserAudit({
-    action: "update_contract",
-    targetKind: "contract",
-    targetId: updated.id,
-    metadata: {
-      action_subtype: "renew_contract",
-      contractNumber: updated.contract_number ?? null,
-      previousExpiryDate: currentContract.expiry_date,
-      newExpiryDate: newExpiry,
-    },
-  });
 
   return ok(updated);
 }
@@ -1057,13 +893,6 @@ export async function archiveContract(
 
   const archived = data as ContractRow;
 
-  await recordCurrentUserAudit({
-    action: "archive_contract",
-    targetKind: "contract",
-    targetId: archived.id,
-    metadata: { contractNumber: archived.contract_number ?? null },
-  });
-
   return ok(archived);
 }
 
@@ -1084,6 +913,8 @@ export async function deleteContract(
   if (!canDeleteEntities(user.email)) {
     return err("forbidden", "Không có quyền xoá hợp đồng");
   }
+  const mfa = await requireMfa();
+  if (!mfa.ok) return mfa;
 
   // A contract in another organization reads as not found — nothing leaks.
   const contract = await getContract(id, organizationId);
@@ -1145,6 +976,8 @@ export async function deleteContracts(
   if (!canDeleteEntities(user.email)) {
     return err("forbidden", "Không có quyền xoá hợp đồng");
   }
+  const mfa = await requireMfa();
+  if (!mfa.ok) return mfa;
 
   if (ids.length > BULK_DELETE_LIMIT) {
     return err(
@@ -1177,6 +1010,8 @@ export async function unarchiveContract(id: string): Promise<ServiceResult<Contr
   if (!canDeleteEntities(user.email)) {
     return err("forbidden", "Không có quyền bỏ lưu trữ hợp đồng");
   }
+  const mfa = await requireMfa();
+  if (!mfa.ok) return mfa;
 
   // Org check — a contract in another organization reads as not found.
   const contract = await getContract(id, user.organizationId);
@@ -1194,7 +1029,7 @@ export async function unarchiveContract(id: string): Promise<ServiceResult<Contr
   try {
     admin = createAdminClient();
   } catch (error) {
-    return dbError("unarchiveContract", error);
+    return contractWriteError("unarchiveContract", error);
   }
 
   const { data, error } = await admin
@@ -1206,7 +1041,7 @@ export async function unarchiveContract(id: string): Promise<ServiceResult<Contr
     .maybeSingle();
 
   if (error) {
-    return dbError("unarchiveContract", error);
+    return contractWriteError("unarchiveContract", error);
   }
 
   if (!data) {

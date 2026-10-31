@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { processR2CleanupQueue } from "@/lib/services/storage-cleanup";
+import { requireMfa } from "@/lib/mfa";
 
 /**
  * Handles R2 storage cleanup outbox processing.
@@ -23,6 +24,8 @@ async function handleCleanup(request: NextRequest) {
   if (!isBearerAuthorized) {
     const user = await getCurrentUser();
     if (user?.role === "admin") {
+      const mfa = await requireMfa();
+      if (!mfa.ok) return NextResponse.json({ error: mfa.message, code: mfa.code }, { status: 403 });
       isAdminAuthorized = true;
     }
   }
@@ -40,14 +43,14 @@ async function handleCleanup(request: NextRequest) {
     ? Math.min(Math.max(parseInt(limitParam, 10) || 50, 1), 200)
     : 50;
 
-  const result = await processR2CleanupQueue({ limit, maxAttempts: 5 });
-
-  return NextResponse.json({
-    success: true,
-    processed: result.processed,
-    succeeded: result.succeeded,
-    failed: result.failed,
-  });
+  try {
+    const result = await processR2CleanupQueue({ limit, maxAttempts: 5 });
+    const success = !result.error && result.failed === 0 && !result.exhausted;
+    return NextResponse.json({ ...result, success }, { status: success ? 200 : 503 });
+  } catch (error) {
+    console.error("[storage-cleanup:cron]", error);
+    return NextResponse.json({ success: false, error: "cleanup_unavailable" }, { status: 503 });
+  }
 }
 
 export async function GET(request: NextRequest) {

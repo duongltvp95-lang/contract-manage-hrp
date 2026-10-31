@@ -2,16 +2,14 @@ name: CI
 
 # Wave 1 — plan sections 85, 96, 108.
 #
-# Every job runs on every push. The suites that need a live backend skip
-# themselves when the credentials are absent (`tests/integration/setup.ts` and
-# the `hasLiveBackend` guard in `tests/e2e/helpers.ts`), so a fork without
-# secrets gets a green build instead of a red one it cannot fix.
+# Live tests require dedicated TEST_* secrets and a backend marker.
+# Forks run quality + isolated Docker database checks; they explicitly skip live jobs.
 #
 # NOTE: `secrets` is NOT an allowed context in a job-level `if:` — only
 # `github`, `needs`, `vars` and `inputs` are. Gating a job on a secret makes the
 # entire workflow file invalid, and GitHub then reports a failed run with zero
-# jobs. That is exactly what this repository's first push did; the skip logic
-# now lives in the test suites, where it belongs.
+# jobs. Live jobs use an explicit fork condition; missing test credentials on
+# internal runs fail setup instead of silently passing.
 
 on:
   push:
@@ -39,7 +37,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 11.25.0
 
       - uses: actions/setup-node@v4
         with:
@@ -58,6 +56,12 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      - name: Production dependency security gate
+        run: pnpm audit --prod --audit-level=high
+
+      - name: Database migration and RLS regression tests
+        run: pnpm test:db
+
       # The build needs *some* Supabase values to exist; they are never used at
       # build time, and the real ones are injected by the hosting platform.
       - name: Build
@@ -74,6 +78,7 @@ jobs:
 
   integration:
     name: integration (RLS · authorization · rate limit)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: quality
@@ -83,7 +88,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 11.25.0
 
       - uses: actions/setup-node@v4
         with:
@@ -95,19 +100,21 @@ jobs:
 
       - name: Write the environment file from secrets
         run: |
-          cat > .env.local <<'EOF'
-          NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          cat > .env.test.local <<'EOF'
+          TEST_BACKEND_ISOLATED=1
+          TEST_SUPABASE_URL=${{ secrets.TEST_SUPABASE_URL }}
+          TEST_SUPABASE_ANON_KEY=${{ secrets.TEST_SUPABASE_ANON_KEY }}
+          TEST_SUPABASE_SERVICE_ROLE_KEY=${{ secrets.TEST_SUPABASE_SERVICE_ROLE_KEY }}
           APP_URL=http://localhost:3100
           MAX_UPLOAD_SIZE_MB=50
-          R2_ACCOUNT_ID=${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY=${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET_NAME=${{ secrets.R2_BUCKET_NAME }}
-          R2_ENDPOINT=${{ secrets.R2_ENDPOINT }}
+          TEST_R2_ACCOUNT_ID=${{ secrets.TEST_R2_ACCOUNT_ID }}
+          TEST_R2_ACCESS_KEY_ID=${{ secrets.TEST_R2_ACCESS_KEY_ID }}
+          TEST_R2_SECRET_ACCESS_KEY=${{ secrets.TEST_R2_SECRET_ACCESS_KEY }}
+          TEST_R2_BUCKET_NAME=${{ secrets.TEST_R2_BUCKET_NAME }}
+          TEST_R2_ENDPOINT=${{ secrets.TEST_R2_ENDPOINT }}
           TEST_ADMIN_EMAIL=${{ secrets.TEST_ADMIN_EMAIL }}
           TEST_ADMIN_PASSWORD=${{ secrets.TEST_ADMIN_PASSWORD }}
+          TEST_ADMIN_TOTP_SECRET=${{ secrets.TEST_ADMIN_TOTP_SECRET }}
           EOF
 
       - name: Integration tests
@@ -115,20 +122,21 @@ jobs:
 
       - name: Remove the environment file
         if: always()
-        run: rm -f .env.local
+        run: rm -f .env.test.local
 
   e2e:
     name: e2e (Playwright)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: quality
+    needs: [quality, integration]
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 11.25.0
 
       - uses: actions/setup-node@v4
         with:
@@ -143,19 +151,21 @@ jobs:
 
       - name: Write the environment file from secrets
         run: |
-          cat > .env.local <<'EOF'
-          NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          cat > .env.test.local <<'EOF'
+          TEST_BACKEND_ISOLATED=1
+          TEST_SUPABASE_URL=${{ secrets.TEST_SUPABASE_URL }}
+          TEST_SUPABASE_ANON_KEY=${{ secrets.TEST_SUPABASE_ANON_KEY }}
+          TEST_SUPABASE_SERVICE_ROLE_KEY=${{ secrets.TEST_SUPABASE_SERVICE_ROLE_KEY }}
           APP_URL=http://localhost:3200
           MAX_UPLOAD_SIZE_MB=50
-          R2_ACCOUNT_ID=${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY=${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET_NAME=${{ secrets.R2_BUCKET_NAME }}
-          R2_ENDPOINT=${{ secrets.R2_ENDPOINT }}
+          TEST_R2_ACCOUNT_ID=${{ secrets.TEST_R2_ACCOUNT_ID }}
+          TEST_R2_ACCESS_KEY_ID=${{ secrets.TEST_R2_ACCESS_KEY_ID }}
+          TEST_R2_SECRET_ACCESS_KEY=${{ secrets.TEST_R2_SECRET_ACCESS_KEY }}
+          TEST_R2_BUCKET_NAME=${{ secrets.TEST_R2_BUCKET_NAME }}
+          TEST_R2_ENDPOINT=${{ secrets.TEST_R2_ENDPOINT }}
           TEST_ADMIN_EMAIL=${{ secrets.TEST_ADMIN_EMAIL }}
           TEST_ADMIN_PASSWORD=${{ secrets.TEST_ADMIN_PASSWORD }}
+          TEST_ADMIN_TOTP_SECRET=${{ secrets.TEST_ADMIN_TOTP_SECRET }}
           EOF
 
       - name: End-to-end tests
@@ -163,7 +173,7 @@ jobs:
 
       - name: Remove the environment file
         if: always()
-        run: rm -f .env.local
+        run: rm -f .env.test.local
 
       - name: Upload the Playwright report
         if: always()
@@ -181,6 +191,11 @@ jobs:
     steps:
       - name: Verify all quality gates
         run: |
+          if [ "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true }}" = "true" ]; then
+            [ "${{ needs.quality.result }}" = "success" ] || exit 1
+            echo "Fork: quality and isolated DB tests passed; live tests deliberately unavailable."
+            exit 0
+          fi
           echo "Quality: ${{ needs.quality.result }}"
           echo "Integration: ${{ needs.integration.result }}"
           echo "E2E: ${{ needs.e2e.result }}"

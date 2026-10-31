@@ -48,9 +48,17 @@ async function uploadOne(
     baseContractNumber?: string;
   },
 ): Promise<{ fileId: string; objectKey: string; size: number }> {
-  const fileId = crypto.randomUUID();
-  const objectKey = `contracts/${ORG_B}/${contractId}/${fileId}/${filename}`;
   const body = Buffer.from(`%PDF-1.4\n% ${filename}\n%%EOF\n`, "latin1");
+  const issued = await fetch(`${BASE_URL}/api/files/upload-url`, {
+    method: "POST",
+    headers: { cookie: orgB.cookie, "content-type": "application/json" },
+    body: JSON.stringify({ contractId, filename, mimeType: "application/pdf", fileSize: body.length,
+      ...(kind ? { kind } : {}), ...(baseContractNumber ? { baseContractNumber } : {}) }),
+  });
+  expect(issued.status).toBe(200);
+  const { fileId, objectKey, uploadReservation } = await issued.json() as {
+    fileId: string; objectKey: string; uploadReservation: string;
+  };
 
   await r2Client().send(
     new PutObjectCommand({
@@ -65,6 +73,7 @@ async function uploadOne(
     contractId,
     fileId,
     objectKey,
+    uploadReservation,
     filename,
     mimeType: "application/pdf",
     fileSize: body.length,
@@ -139,21 +148,17 @@ suite("contract_files.kind (round 16)", () => {
     expect(directDbOrphan.error).not.toBeNull();
     expect(directDbOrphan.error?.code).toBe("23514"); // PostgreSQL check_violation từ require_main_contract_before_appendix()
 
-    // 2. Kiểm tra tại tầng Service: completeUpload từ chối nếu thiếu hợp đồng chính
-    const orphanFileId = crypto.randomUUID();
-    const orphanKey = `contracts/${ORG_B}/${contractId}/${orphanFileId}/${TEST_PREFIX}phu-luc-fail.pdf`;
-    const orphanAppendix = await probe(orgB, "complete_upload", {
-      contractId,
-      fileId: orphanFileId,
-      objectKey: orphanKey,
-      filename: `${TEST_PREFIX}phu-luc-fail.pdf`,
-      mimeType: "application/pdf",
-      fileSize: 1024,
-      kind: "appendix",
-      baseContractNumber: contractNum,
+    // 2. No reservation or signed URL may be issued for an orphan appendix.
+    const orphanResponse = await fetch(`${BASE_URL}/api/files/upload-url`, {
+      method: "POST",
+      headers: { cookie: orgB.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ contractId, filename: `${TEST_PREFIX}phu-luc-fail.pdf`,
+        mimeType: "application/pdf", fileSize: 1024, kind: "appendix", baseContractNumber: contractNum }),
     });
-    expect(orphanAppendix.ok).toBe(false);
-    expect(orphanAppendix.message).toContain("Cần tải tệp hợp đồng chính lên trước khi lưu phụ lục");
+    expect(orphanResponse.status).toBe(400);
+    const orphanAppendix = await orphanResponse.json();
+    expect(orphanAppendix.error).toContain("Cần tải tệp hợp đồng chính lên trước khi tải phụ lục");
+    expect(orphanAppendix).not.toHaveProperty("uploadReservation");
 
     // 3. Tải tệp hợp đồng chính lên trước (kind omitted → mặc định 'document')
     const document = await uploadOne(orgB, contractId, {

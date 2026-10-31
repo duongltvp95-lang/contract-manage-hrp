@@ -1,5 +1,7 @@
 "use client";
 
+import { businessDate } from "@/lib/business-date";
+
 import { AlertTriangle, ArrowDown, ArrowUp, CalendarPlus, ChevronsUpDown, FilePlus2, Paperclip, Plus, SearchX } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -7,7 +9,6 @@ import { useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { CompanyBadges } from "@/components/partners/partner-badges";
@@ -151,7 +152,7 @@ export function ContractsTable({
         <TableBody>
           {rows.map((row) => {
             const href = `/contracts/${row.id}`;
-            const todayStr = format(new Date(), "yyyy-MM-dd");
+            const todayStr = businessDate();
             const isExpired = Boolean(row.expiry_date && row.expiry_date < todayStr);
             const partnerName = partnerDisplayName(row);
             const initial = partnerName && partnerName !== "—" ? partnerName.trim().charAt(0).toUpperCase() : null;

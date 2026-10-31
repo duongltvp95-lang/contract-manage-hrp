@@ -1,6 +1,6 @@
 /** Formatting helpers shared by server and client code. */
 
-import { differenceInCalendarDays, parseISO } from "date-fns";
+import { BUSINESS_TIME_ZONE, businessDaysUntil } from "@/lib/business-date";
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -26,6 +26,7 @@ export function formatDateOnly(value: string | null | undefined): string {
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return "—";
   return new Date(value).toLocaleString("vi-VN", {
+    timeZone: BUSINESS_TIME_ZONE,
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
@@ -48,9 +49,7 @@ export function daysUntil(
   today: Date = new Date(),
 ): number | null {
   if (!value) return null;
-  const target = parseISO(value);
-  if (Number.isNaN(target.getTime())) return null;
-  return differenceInCalendarDays(target, today);
+  return businessDaysUntil(value, today);
 }
 
 /** Human phrasing for the "Expiring" column on the dashboard. */

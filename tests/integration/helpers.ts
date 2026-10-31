@@ -7,6 +7,7 @@ import {
 } from "@aws-sdk/client-s3";
 
 import { ADMIN_EMAIL, ADMIN_PASSWORD, SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, SUPABASE_URL } from "../setup/env";
+import { elevateTestAdmin } from "../setup/totp";
 import { ORG_A, ORG_B, TEST_PREFIX } from "./config";
 
 /**
@@ -89,6 +90,10 @@ export async function signInAs(email: string, password: string): Promise<TestSes
   if (error) throw new Error(`sign-in failed for ${email}: ${error.message}`);
 
   const { data } = await client.auth.getUser();
+  const { data: profile } = await client.from("profiles").select("role,is_active").eq("id", data.user?.id ?? "").single();
+  if (profile?.role === "admin" && profile.is_active) {
+    await elevateTestAdmin(client, email === ADMIN_EMAIL);
+  }
 
   return {
     userId: data.user?.id ?? "",
