@@ -469,6 +469,26 @@ export type SeededContract = {
   cleanup: () => Promise<void>;
 };
 
+/** A disposable ordinary account for browser authorization tests in the isolated backend. */
+export async function seedRegularUser(admin: SupabaseClient) {
+  const email = `e2e.regular.${crypto.randomUUID()}@hrpartner.test`;
+  const password = `${crypto.randomUUID()}!aA9`;
+  const { data, error } = await admin.auth.admin.createUser({
+    email, password, email_confirm: true,
+    user_metadata: { full_name: `${TEST_PREFIX}Regular user` },
+  });
+  if (error || !data.user) throw new Error("Cannot create isolated ordinary account");
+  const id = data.user.id;
+  return {
+    id, email, password,
+    async cleanup() {
+      const profile = await admin.from("profiles").delete().eq("id", id);
+      const auth = await admin.auth.admin.deleteUser(id);
+      if (profile.error || auth.error) throw new Error("Cannot remove disposable ordinary account");
+    },
+  };
+}
+
 /**
  * Deletes a contract, its file rows AND their objects.
  *

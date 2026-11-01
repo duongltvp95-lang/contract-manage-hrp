@@ -8,6 +8,7 @@ import {
   hasLiveBackend,
   login,
   saveContractAndOpenDetail,
+  seedRegularUser,
   runId,
   selectCompany,
   selectPartner,
@@ -59,11 +60,15 @@ test.describe("/admin/logs (round 3, part 1)", () => {
     await expect(page.getByTestId("app-logo")).toBeVisible();
   });
 
-  test("a non-admin cannot reach /admin/logs", async () => {
-    // The /settings > "non-admin does not see the section" case is in
-    // settings.spec.ts. Here we keep the assertion close to the page that
-    // enforces it.
-    test.skip(true, "covered by the round-2 non-admin flow in settings.spec.ts");
+  test("a non-admin cannot reach /admin/logs", async ({ page }) => {
+    const user = await seedRegularUser(adminClient());
+    try {
+      await login(page, user.email, user.password);
+      await gotoAndSettle(page, "/admin/logs");
+      await expect(page).toHaveURL(/\/dashboard$/);
+      await expect(page.getByTestId("logs-table")).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "Nhật ký", exact: true })).toHaveCount(0);
+    } finally { await user.cleanup(); }
   });
 
   test("the admin page renders and shows the filter form", async ({ page }) => {

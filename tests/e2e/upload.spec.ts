@@ -248,7 +248,7 @@ test.describe("upload", () => {
     // Plan section 44: the contract is saved, the form keeps its values, and the
     // user is offered a retry rather than losing their input.
     const body = page.locator("body");
-    await expect(body).toContainText("tải tệp lên thất bại", { timeout: 60_000 });
+    await expect(body).toContainText("tải tệp lên chưa hoàn tất", { timeout: 60_000 });
     await expect(body).toContainText("Thử lại");
     await expect(page.locator('input[name="contractNumber"]')).toHaveValue(contractNumber);
     await expect(page.getByTestId("partner-combobox")).toContainText(partner.name);
@@ -263,7 +263,7 @@ test.describe("upload", () => {
 
     expect(failedPuts).toBeGreaterThanOrEqual(2);
     storageUnavailable = false;
-    await page.getByRole("button", { name: "Thử lại" }).click();
+    await page.getByRole("button", { name: "Thử lại tải tệp", exact: true }).click();
     await openSavedContract(page);
 
     const id = page.url().split("/").pop() as string;
