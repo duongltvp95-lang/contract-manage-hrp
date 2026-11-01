@@ -41,6 +41,7 @@ export async function GET(request: NextRequest) {
   const rows = status
     ? list.data.filter((row) => row.status === status)
     : list.data;
+  const body = await formatXlsx(rows);
 
   // Ghi nhận nhật ký kiểm toán hành động xuất danh bạ đối tác (P1)
   const audit = await recordAudit({
@@ -56,8 +57,10 @@ export async function GET(request: NextRequest) {
     },
   });
 
-  if (!audit.ok) console.error("[partners:export:audit]", audit.code);
-  const body = await formatXlsx(rows);
+  if (!audit.ok) {
+    console.error("[partners:export:audit]", audit.code);
+    return NextResponse.json({ error: "Không thể ghi nhận lượt xuất dữ liệu. Vui lòng thử lại.", code: "db_error" }, { status: 503 });
+  }
 
   const today = businessDate().replaceAll("-", "");
   const suffix =

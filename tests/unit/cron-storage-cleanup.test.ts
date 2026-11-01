@@ -13,6 +13,8 @@ vi.mock("@/lib/auth", () => ({
 vi.mock("@/lib/services/storage-cleanup", () => ({
   processR2CleanupQueue: vi.fn(),
 }));
+vi.mock("@/lib/services/audit-outbox", () => ({ processAuditOutbox: vi.fn() }));
+import { processAuditOutbox } from "@/lib/services/audit-outbox";
 
 describe("Route /api/cron/storage-cleanup", () => {
   const originalEnv = process.env;
@@ -20,6 +22,7 @@ describe("Route /api/cron/storage-cleanup", () => {
   beforeEach(() => {
     process.env = { ...originalEnv, CRON_SECRET: "test-secret-123" };
     vi.clearAllMocks();
+    vi.mocked(processAuditOutbox).mockResolvedValue({ processed: 0, succeeded: 0, failed: 0, exhausted: 0 });
   });
 
   afterEach(() => {
@@ -46,6 +49,15 @@ describe("Route /api/cron/storage-cleanup", () => {
     }));
     expect(response.status).toBe(503);
     expect((await response.json()).success).toBe(false);
+  });
+  it("reports exhausted audit events even when storage is healthy", async () => {
+    vi.mocked(storageCleanupModule.processR2CleanupQueue).mockResolvedValue({ processed: 0, succeeded: 0, failed: 0 });
+    vi.mocked(processAuditOutbox).mockResolvedValue({ processed: 0, succeeded: 0, failed: 0, exhausted: 1 });
+    const response = await GET(new NextRequest("http://localhost/api/cron/storage-cleanup", {
+      headers: { authorization: "Bearer test-secret-123" },
+    }));
+    expect(response.status).toBe(503);
+    expect((await response.json()).audit.exhausted).toBe(1);
   });
 
   it("từ chối 401 khi không có Authorization header và không có phiên đăng nhập", async () => {

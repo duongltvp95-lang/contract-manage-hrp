@@ -12,6 +12,7 @@ import {
   destroySecondTenant,
   hasR2,
   r2Client,
+  runStorageCleanup,
   signInAs,
   sweepTestRows,
   type TestSession,
@@ -125,7 +126,7 @@ suite("delete contract/partner (round 19)", () => {
     const contractId = (created.data as { id: string }).id;
 
     // One real object in R2.
-    const filename = `${TEST_PREFIX}xoá.pdf`;
+    const filename = `${TEST_PREFIX}xoa.pdf`;
     const body = Buffer.from(`%PDF-1.4\n% ${stamp}\n%%EOF\n`, "latin1");
     const issued = await fetch(`${BASE_URL}/api/files/upload-url`, {
       method: "POST",
@@ -158,6 +159,7 @@ suite("delete contract/partner (round 19)", () => {
 
     const deleted = await probe(privileged, "delete_contract", { id: contractId });
     expect(deleted.ok).toBe(true);
+    await runStorageCleanup(privileged);
 
     // R2 object, file row and contract row are all gone.
     expect(await objectExists(objectKey)).toBe(false);

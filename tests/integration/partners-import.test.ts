@@ -231,7 +231,7 @@ suite("partner import — Excel (round 7)", () => {
       .eq("name", `${TEST_PREFIX}Không trùng ${stamp}`);
     expect(imported ?? []).toHaveLength(1);
 
-    // The merge wrote an update_partner audit row.
+    // Select the field-change event for the merge, excluding the initial link write.
     const { data: audit } = await admin
       .from("audit_logs")
       .select("target_id")
@@ -428,6 +428,7 @@ suite("partner import — merge (round 25)", () => {
       .from("audit_logs")
       .select("target_id")
       .eq("action", "update_partner")
+      .contains("metadata", { changed: ["name"] })
       .gte("created_at", startedAt);
     expect(audit ?? []).toHaveLength(1);
   }, 120_000);

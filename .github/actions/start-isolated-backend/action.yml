@@ -1,0 +1,15 @@
+name: Start isolated HRP backend
+description: Start disposable Supabase Auth/PostgREST/PostgreSQL and S3-compatible storage without production secrets.
+runs:
+  using: composite
+  steps:
+    - uses: supabase/setup-cli@v1
+      with:
+        version: 2.122.0
+    - name: Start backend and prepare fixtures
+      shell: bash
+      run: |
+        mkdir -p test-results
+        supabase start --workdir tests/setup --exclude realtime,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor > test-results/backend-start.log 2>&1
+        supabase status --workdir tests/setup --output json > test-results/backend-status.json
+        node scripts/setup-isolated-tests.mjs --status-json test-results/backend-status.json --database-container supabase_db_hrp-isolated-tests --local-storage --bucket hrp-review-test-ci

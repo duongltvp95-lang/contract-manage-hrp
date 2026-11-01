@@ -10,6 +10,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { testTotp } from "../setup/totp";
+import { addCalendarDays, businessDate } from "../../lib/business-date";
 
 /**
  * Shared fixtures for the end-to-end suite — W1-WEB-039..043.
@@ -191,12 +192,8 @@ export function writeArtifact(name: string, contents: Buffer): string {
 // Date helpers
 // ---------------------------------------------------------------------------
 
-const pad = (value: number) => String(value).padStart(2, "0");
-
 export function isoDate(offsetDays = 0): string {
-  const date = new Date();
-  date.setDate(date.getDate() + offsetDays);
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return addCalendarDays(businessDate(), offsetDays);
 }
 
 /** `2026-10-03` -> `03/10/2026`, the format the UI renders. */
@@ -369,17 +366,10 @@ export async function pickDate(page: Page, iso: string): Promise<void> {
   await dayButton.click();
 }
 
-/**
- * Matches the presigned R2 requests, for tests that need to slow one down or
- * make it fail.
- *
- * A regex rather than a glob on purpose: the literal host is
- * `<account>.r2.cloudflarestorage.com`, and the obvious glob
- * `**‌/r2.cloudflarestorage.com/**` never matches it — the character before `r2`
- * is a dot, not a slash. Getting that wrong makes an interception test pass
- * without intercepting anything.
- */
-export const R2_REQUEST = /r2\.cloudflarestorage\.com/;
+/** Match the configured isolated S3 endpoint so failure/progress tests intercept actual PUTs. */
+export const R2_REQUEST = new RegExp(
+  "^" + (process.env.R2_ENDPOINT ?? "").replace(/\/$/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "/",
+);
 
 /** Waits for the contract detail page and returns its id. */
 export async function waitForContractDetail(page: Page): Promise<string> {
@@ -443,6 +433,30 @@ export async function selectCompany(
   const option = page.getByRole("option", { name: companyName, exact: true });
   await option.waitFor({ state: "visible", timeout: 15_000 });
   await option.click();
+}
+
+/** Save follows the current UX: confirm date warnings, reset, then open the toast action. */
+export async function submitContract(page: Page): Promise<void> {
+  const confirm = page.getByRole("button", { name: "Xác nhận lưu", exact: true });
+  const open = page.getByRole("button", { name: "Xem hợp đồng", exact: true });
+  await page.getByTestId("contract-form-submit").click();
+  await expect(confirm.or(open).first()).toBeVisible({ timeout: 120_000 });
+  if (await confirm.isVisible()) await confirm.click();
+}
+
+export async function openSavedContract(page: Page): Promise<void> {
+  const open = page.getByRole("button", { name: "Xem hợp đồng", exact: true });
+  await expect(open).toBeVisible({ timeout: 120_000 });
+  await expect(page.locator('input[name="contractNumber"]')).toHaveValue("");
+  await expect(page.getByTestId("partner-combobox")).toContainText("Chọn đối tác");
+  await open.click();
+  await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 30_000 });
+  await waitForHydration(page);
+}
+
+export async function saveContractAndOpenDetail(page: Page): Promise<void> {
+  await submitContract(page);
+  await openSavedContract(page);
 }
 
 // ---------------------------------------------------------------------------

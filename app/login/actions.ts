@@ -131,6 +131,7 @@ export async function loginAction(payload: {
   const local = canAttemptLoginWithEmail(session, email);
   if (!local.allowed) return { success: false, error: local.message, remainingAttempts: 0 };
 
+  let authenticatedClient: Awaited<ReturnType<typeof createClient>> | undefined;
   try {
     let budget = await claimLoginAttempt(email);
     const lockedResult = async (): Promise<LoginActionResult> => {
@@ -168,8 +169,12 @@ export async function loginAction(payload: {
     }
 
     // Every successful path, including the trimmed-password retry, reaches audit.
+    authenticatedClient = supabase;
     const { data: authData, error: userError } = await supabase.auth.getUser();
-    if (userError || !authData.user) return { success: false, error: "Không thể xác nhận phiên đăng nhập." };
+    if (userError || !authData.user) {
+      await supabase.auth.signOut();
+      return { success: false, error: "Không thể xác nhận phiên đăng nhập." };
+    }
     const { data: profile, error: profileError } = await supabase.from("profiles")
       .select("organization_id, role, is_active").eq("id", authData.user.id).maybeSingle();
     if (profileError || !profile || !profile.is_active) {
@@ -184,7 +189,11 @@ export async function loginAction(payload: {
       action: "login", targetKind: "user", targetId: authData.user.id,
       metadata: { email: authData.user.email ?? email },
     }, { timeoutMs: 2_500 });
-    if (!audit.ok) console.error("[login:audit]", audit.code);
+    if (!audit.ok) {
+      console.error("[login:audit]", audit.code);
+      await supabase.auth.signOut();
+      return { success: false, error: "Không thể ghi nhận phiên đăng nhập an toàn. Vui lòng thử lại." };
+    }
     const { data: assurance, error: assuranceError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
     if (assuranceError) {
       await supabase.auth.signOut();
@@ -192,6 +201,10 @@ export async function loginAction(payload: {
     }
     return { success: true, mfaRequired: profile.role === "admin" || assurance?.nextLevel === "aal2" };
   } catch (error) {
+    if (authenticatedClient) {
+      try { await authenticatedClient.auth.signOut(); }
+      catch { console.error("[login:session]", "Could not revoke incomplete login"); }
+    }
     console.error("[login]", error instanceof Error ? error.message : "unavailable");
     return { success: false, error: "Dịch vụ đăng nhập tạm thời không khả dụng. Vui lòng thử lại sau." };
   }

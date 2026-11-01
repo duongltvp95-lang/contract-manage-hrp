@@ -17,6 +17,7 @@ import {
 
 import { formatAuditSentence } from "@/lib/audit-display";
 import { getCurrentUser } from "@/lib/auth";
+import { businessDate } from "@/lib/business-date";
 import {
   listAuditLogs,
   recordAudit,
@@ -93,9 +94,9 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Log the export itself. Failures here are non-fatal (the file is already
-  // ready), so the result is dropped without rethrowing.
-  void recordAudit({
+  const body = format === "txt" ? formatTxt(list.data.rows) : Buffer.from(await formatXlsx(list.data.rows));
+  // Do not release the export unless its audit event has been durably accepted.
+  const audit = await recordAudit({
     organizationId: user.organizationId,
     actorId: user.id,
     actorRole: "admin",
@@ -104,10 +105,12 @@ export async function GET(request: NextRequest) {
     targetId: null,
     metadata: { format, count: list.data.rows.length },
   });
+  if (!audit.ok) {
+    return NextResponse.json({ error: "Không thể ghi nhận lượt xuất nhật ký. Vui lòng thử lại.", code: "db_error" }, { status: 503 });
+  }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = businessDate();
   if (format === "txt") {
-    const body = formatTxt(list.data.rows);
     return new NextResponse(body, {
       status: 200,
       headers: {
@@ -118,7 +121,6 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const body = await formatXlsx(list.data.rows);
   return new NextResponse(Buffer.from(body), {
     status: 200,
     headers: {

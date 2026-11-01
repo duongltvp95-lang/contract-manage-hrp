@@ -12,6 +12,9 @@ import {
   gotoAndSettle,
   hasLiveBackend,
   login,
+  saveContractAndOpenDetail,
+  submitContract,
+  openSavedContract,
   R2_REQUEST,
   runId,
   seedPartner,
@@ -78,8 +81,7 @@ test.describe("upload", () => {
 
     await expect(page.locator("body")).toContainText(`e2e-${stamp}.pdf`);
 
-    await clickSafe(page, '[data-testid="contract-form-submit"]');
-    await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 90_000 });
+    await saveContractAndOpenDetail(page);
 
     const id = page.url().split("/").pop() as string;
     const admin = adminClient();
@@ -116,14 +118,19 @@ test.describe("upload", () => {
     // No notes field on the create form (round 16).
     await expect(page.locator('textarea[name="notes"]')).toHaveCount(0);
 
-    // One PDF in each dropzone.
+    // Save the main document before attaching an appendix, as the database requires.
     await page.setInputFiles('[data-testid="document-dropzone-input"]', docPath);
-    await page.setInputFiles('[data-testid="appendix-dropzone-input"]', appPath);
     await expect(page.locator("body")).toContainText(`e2e-doc-${stamp}.pdf`);
-    await expect(page.locator("body")).toContainText(`e2e-app-${stamp}.pdf`);
 
-    await clickSafe(page, '[data-testid="contract-form-submit"]');
-    await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 120_000 });
+    await saveContractAndOpenDetail(page);
+    await page.getByRole("button", { name: "Thêm tài liệu", exact: true }).click();
+    const uploadDialog = page.getByTestId("upload-contract-file-dialog");
+    await uploadDialog.locator('input[type="file"]').setInputFiles(appPath);
+    await uploadDialog.getByRole("combobox").click();
+    await page.getByRole("option", { name: "Phụ lục hợp đồng", exact: true }).click();
+    await uploadDialog.getByLabel("Số hợp đồng gốc", { exact: true }).fill(contractNumber);
+    await uploadDialog.getByRole("button", { name: "Tải lên", exact: true }).click();
+    await expect(uploadDialog).not.toBeVisible({ timeout: 60_000 });
 
     // Two labelled groups, each with its file.
     await expect(page.getByTestId("file-group-document")).toBeVisible();
@@ -158,8 +165,7 @@ test.describe("upload", () => {
     await expect(queue).toContainText(`e2e-${stamp}.png`);
     await expect(queue).toContainText(`e2e-${stamp}.jpg`);
 
-    await clickSafe(page, '[data-testid="contract-form-submit"]');
-    await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 120_000 });
+    await saveContractAndOpenDetail(page);
 
     const id = page.url().split("/").pop() as string;
     const admin = adminClient();
@@ -192,7 +198,9 @@ test.describe("upload", () => {
     // Slow the PUT down so the progress UI is observable; without this the
     // upload of a tiny fixture finishes before a single frame is painted.
     await page.route(R2_PUT, async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      if (route.request().method() === "PUT") {
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
+      }
       await route.continue();
     });
 
@@ -204,22 +212,23 @@ test.describe("upload", () => {
     await selectCompany(page);
     await page.setInputFiles('[data-testid="document-dropzone-input"]', pdfPath);
 
-    await clickSafe(page, '[data-testid="contract-form-submit"]');
+    await submitContract(page);
 
     const progress = page.locator('[role="progressbar"]').first();
     await expect(progress).toBeVisible({ timeout: 30_000 });
 
-    await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 120_000 });
+    await openSavedContract(page);
     await page.unroute(R2_PUT);
   });
 
   test("keeps the contract when the upload fails, then retries successfully", async ({ page }) => {
     const contractNumber = `${TEST_PREFIX}UPLOAD-RETRY-${stamp}`;
-    let failNextPut = true;
+    let storageUnavailable = true;
+    let failedPuts = 0;
 
     await page.route(R2_PUT, async (route) => {
-      if (failNextPut) {
-        failNextPut = false;
+      if (storageUnavailable && route.request().method() === "PUT") {
+        failedPuts += 1;
         await route.abort("connectionfailed");
         return;
       }
@@ -234,13 +243,15 @@ test.describe("upload", () => {
     await selectCompany(page);
     await page.setInputFiles('[data-testid="document-dropzone-input"]', pdfPath);
 
-    await clickSafe(page, '[data-testid="contract-form-submit"]');
+    await submitContract(page);
 
     // Plan section 44: the contract is saved, the form keeps its values, and the
     // user is offered a retry rather than losing their input.
     const body = page.locator("body");
     await expect(body).toContainText("tải tệp lên thất bại", { timeout: 60_000 });
     await expect(body).toContainText("Thử lại");
+    await expect(page.locator('input[name="contractNumber"]')).toHaveValue(contractNumber);
+    await expect(page.getByTestId("partner-combobox")).toContainText(partner.name);
 
     const admin = adminClient();
     const { data: saved } = await admin
@@ -250,8 +261,10 @@ test.describe("upload", () => {
       .maybeSingle();
     expect(saved?.id).toBeTruthy();
 
+    expect(failedPuts).toBeGreaterThanOrEqual(2);
+    storageUnavailable = false;
     await page.getByRole("button", { name: "Thử lại" }).click();
-    await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 120_000 });
+    await openSavedContract(page);
 
     const id = page.url().split("/").pop() as string;
     const { data: files } = await admin

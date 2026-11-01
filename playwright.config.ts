@@ -21,6 +21,7 @@ const BASE_URL = process.env.E2E_BASE_URL ?? `http://localhost:${PORT}`;
 export default defineConfig({
   globalSetup: "./tests/e2e/global-setup.ts",
   testDir: "./tests/e2e",
+  outputDir: "test-results/playwright",
   // Every spec shares one database and one admin account, and several of them
   // assert on counts; running them in parallel would make those flaky.
   fullyParallel: false,

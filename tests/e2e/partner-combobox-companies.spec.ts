@@ -10,6 +10,7 @@ import {
   gotoAndSettle,
   hasLiveBackend,
   login,
+  saveContractAndOpenDetail,
   runId,
   seedPartner,
   seedPartnerCompanyLink,
@@ -115,8 +116,7 @@ test("form hợp đồng lọc công ty theo đối tác đang chọn (round 33+
   const contractNumber = `${TEST_PREFIX}C${stamp}`;
   await page.fill('input[name="contractNumber"]', contractNumber);
 
-  await page.getByTestId("contract-form-submit").click();
-  await page.waitForURL(/\/contracts\/[0-9a-f-]{36}/, { timeout: 120_000 });
+  await saveContractAndOpenDetail(page);
   const contractId = page.url().split("/").pop() as string;
 
   const { data: saved, error: savedError } = await admin

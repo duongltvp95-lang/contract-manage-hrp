@@ -413,9 +413,11 @@ async function deletePartnerRollback(
 export async function listPartners({
   organizationId,
   contracts,
+  status,
 }: PartnerContext & {
   /** Round 28 — filter by the computed contract count; absent = all. */
   contracts?: "has" | "none";
+  status?: PartnerStatus;
 }): Promise<ServiceResult<PartnerWithCount[]>> {
   const supabase = await createClient();
 
@@ -466,6 +468,8 @@ export async function listPartners({
       companies: (companyMap.get(row.id) ?? []).sort(),
     }));
   }
+
+  if (status) withCounts = withCounts.filter((row) => row.status === status);
 
   // Round 28 — the count-based filter runs AFTER the counts are computed
   // (JS filter; the list has no pagination).

@@ -3,6 +3,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { processR2CleanupQueue } from "@/lib/services/storage-cleanup";
 import { requireMfa } from "@/lib/mfa";
+import { processAuditOutbox } from "@/lib/services/audit-outbox";
 
 /**
  * Handles R2 storage cleanup outbox processing.
@@ -44,9 +45,11 @@ async function handleCleanup(request: NextRequest) {
     : 50;
 
   try {
-    const result = await processR2CleanupQueue({ limit, maxAttempts: 5 });
-    const success = !result.error && result.failed === 0 && !result.exhausted;
-    return NextResponse.json({ ...result, success }, { status: success ? 200 : 503 });
+    const [result, audit] = await Promise.all([
+      processR2CleanupQueue({ limit, maxAttempts: 5 }), processAuditOutbox(),
+    ]);
+    const success = !result.error && result.failed === 0 && !result.exhausted && audit.failed === 0 && audit.exhausted === 0;
+    return NextResponse.json({ ...result, audit, success }, { status: success ? 200 : 503 });
   } catch (error) {
     console.error("[storage-cleanup:cron]", error);
     return NextResponse.json({ success: false, error: "cleanup_unavailable" }, { status: 503 });

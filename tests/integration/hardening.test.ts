@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -39,6 +39,7 @@ type Presign = {
   objectKey: string;
   uploadUrl: string;
   uploadReservation: string;
+  declaredSize: number;
 };
 
 async function presign(
@@ -62,7 +63,7 @@ async function presign(
     throw new Error(`presign failed: ${response.status} ${await response.text()}`);
   }
 
-  return (await response.json()) as Presign;
+  return { ...(await response.json()), declaredSize: fileSize } as Presign;
 }
 
 async function completeViaProbe(
@@ -79,7 +80,7 @@ async function completeViaProbe(
       uploadReservation: input.uploadReservation,
       filename: input.filename,
       mimeType: "application/pdf",
-      fileSize: DECLARED_BYTES,
+      fileSize: input.declaredSize,
     }),
   });
 
@@ -138,17 +139,12 @@ suite("M8 hardening — the real upload size is enforced", () => {
 
   it("rejects an oversized upload with 422 AND removes the object from R2", async () => {
     const filename = "oversized.pdf";
-    // Declared at 1 KB so the presign accepts it — which is precisely the hole:
-    // the signature fixes the key and the content type, never a maximum length.
+    // An admin fixture bypasses the signed PUT to exercise the independent HEAD check.
     const signed = await presign(contract.contractId, filename, DECLARED_BYTES, orgA.cookie);
 
     const body = Buffer.alloc(OVERSIZED_BYTES, 0x20);
-    const put = await fetch(signed.uploadUrl, {
-      method: "PUT",
-      headers: { "Content-Type": "application/pdf" },
-      body,
-    });
-    expect(put.status, "R2 itself has no reason to refuse the PUT").toBe(200);
+    await r2Client().send(new PutObjectCommand({ Bucket: bucketName(), Key: signed.objectKey,
+      Body: body, ContentType: "application/pdf" }));
 
     // The bytes are really there — this is the state the old code accepted.
     const beforeHead = await r2Client().send(
@@ -181,23 +177,16 @@ suite("M8 hardening — the real upload size is enforced", () => {
     ).rejects.toMatchObject({ name: "NotFound" });
   }, 180_000);
 
-  it("rejects the oversized upload even when the client under-reports nothing", async () => {
-    // Same case through a different door: presign with an honest-looking size,
-    // then hand `completeUpload` a declared size that matches the lie.
+  it("binds the signed PUT URL to the declared content length", async () => {
     const filename = "oversized-declared-small.pdf";
     const signed = await presign(contract.contractId, filename, 512, orgA.cookie);
 
-    await fetch(signed.uploadUrl, {
+    const put = await fetch(signed.uploadUrl, {
       method: "PUT",
       headers: { "Content-Type": "application/pdf" },
       body: Buffer.alloc(OVERSIZED_BYTES, 0x20),
     });
-
-    const completed = await completeViaProbe(
-      { ...signed, contractId: contract.contractId, filename },
-      orgA.cookie,
-    );
-    expect(completed.status).toBe(422);
+    expect(put.status).toBe(403);
 
     await expect(
       r2Client().send(
@@ -211,11 +200,8 @@ suite("M8 hardening — the real upload size is enforced", () => {
     const filename = "size-recorded.pdf";
     const signed = await presign(contract.contractId, filename, 300, orgA.cookie);
 
-    await fetch(signed.uploadUrl, {
-      method: "PUT",
-      headers: { "Content-Type": "application/pdf" },
-      body: Buffer.alloc(700, 0x20),
-    });
+    await r2Client().send(new PutObjectCommand({ Bucket: bucketName(), Key: signed.objectKey,
+      Body: Buffer.alloc(700, 0x20), ContentType: "application/pdf" }));
 
     const completed = await completeViaProbe(
       { ...signed, contractId: contract.contractId, filename },

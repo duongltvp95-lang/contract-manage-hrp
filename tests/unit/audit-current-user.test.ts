@@ -61,7 +61,7 @@ describe("recordCurrentUserAudit", () => {
     expect(mockCreateAdminClient).not.toHaveBeenCalled();
   });
 
-  it("forwards the session identity into the insert", async () => {
+  it("forwards the session identity into durable event acceptance", async () => {
     mockGetCurrentUser.mockResolvedValue({
       id: "actor-1",
       role: "user",
@@ -73,16 +73,12 @@ describe("recordCurrentUserAudit", () => {
     let inserted: Record<string, unknown> | undefined;
 
     mockCreateAdminClient.mockResolvedValue({
-      from: () => ({
-        insert: (payload: Record<string, unknown>) => {
+      rpc: (_name: string, payload: Record<string, unknown>) => {
           inserted = payload;
           return {
-            select: () => ({
-              single: async () => ({ data: { id: "row-1" }, error: null }),
-            }),
+            abortSignal: async () => ({ data: { id: payload.p_id, delivered: true }, error: null }),
           };
-        },
-      }),
+      },
     });
 
     await recordCurrentUserAudit({
@@ -93,13 +89,13 @@ describe("recordCurrentUserAudit", () => {
     });
 
     expect(inserted).toMatchObject({
-      organization_id: "org-1",
-      actor_id: "actor-1",
-      actor_role: "user",
-      action: "update_partner",
-      target_kind: "partner",
-      target_id: "target-1",
-      metadata: { name: "X", changed: ["name"] },
+      p_organization_id: "org-1",
+      p_actor_id: "actor-1",
+      p_actor_role: "user",
+      p_action: "update_partner",
+      p_target_kind: "partner",
+      p_target_id: "target-1",
+      p_metadata: { name: "X", changed: ["name"] },
     });
   });
 });

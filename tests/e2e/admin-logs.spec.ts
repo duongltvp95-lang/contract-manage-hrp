@@ -7,6 +7,7 @@ import {
   gotoAndSettle,
   hasLiveBackend,
   login,
+  saveContractAndOpenDetail,
   runId,
   selectCompany,
   selectPartner,
@@ -194,8 +195,15 @@ test.describe("business action labels (round 8, part 2)", () => {
     await selectPartner(page, partnerName);
     // Round 33: a new contract must also name its company.
     await selectCompany(page);
-    await clickSafe(page, '[data-testid="contract-form-submit"]');
-    await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 60_000 });
+    await saveContractAndOpenDetail(page);
+    const contractId = page.url().split("/").pop()!;
+    const { data: savedContract, error: contractError } = await adminClient()
+      .from("contracts").select("created_by").eq("id", contractId).single();
+    expect(contractError).toBeNull();
+    const { data: actor, error: actorError } = await adminClient()
+      .from("profiles").select("full_name").eq("id", savedContract!.created_by).single();
+    expect(actorError).toBeNull();
+    expect(actor?.full_name).toBeTruthy();
 
     // 3. The audit table shows both actions, localised, with the actor's NAME
     //    and natural sentences in the detail column.
@@ -204,7 +212,7 @@ test.describe("business action labels (round 8, part 2)", () => {
     await expect(logsTable).toContainText("Thêm đối tác");
     await expect(logsTable).toContainText("Thêm hợp đồng");
     // Actor name, not a truncated UUID.
-    await expect(logsTable).toContainText("E2E Wave 2 Admin");
+    await expect(logsTable).toContainText(actor!.full_name!);
     // Natural sentences.
     await expect(logsTable).toContainText(`đã thêm đối tác “${partnerName}”`);
     await expect(logsTable).toContainText(

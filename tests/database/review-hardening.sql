@@ -87,6 +87,9 @@ select public.test_assert(
 select public.test_assert(not has_function_privilege('authenticated',
  'public.complete_contract_file_upload(uuid,uuid,uuid,text,text,text,text,bigint,text,uuid,text)', 'EXECUTE'),
  'authenticated callers cannot bypass R2 verification through the completion RPC');
+select public.test_assert(not has_function_privilege('anon','public.exec_sql(text)','execute')
+ and not has_function_privilege('authenticated','public.exec_sql(text)','execute'),
+ 'operational SQL RPC revokes explicit Supabase API-role grants');
 select public.claim_login_attempt(repeat('a',64)) from generate_series(1,4);
 select public.test_assert(
  (public.claim_login_attempt(repeat('a',64))->>'allowed')::boolean=false, 'sixth attempt blocked without cookies');

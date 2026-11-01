@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -16,21 +17,11 @@ import { dbError, err, ok, type ServiceResult } from "./types";
 /**
  * Audit-log service — feature round 3, part 1.
  *
- * Three things to keep in mind:
- *
- *   1. The table is INSERT-only for the application. `recordAudit()` uses the
- *      service-role client, which bypasses RLS — that is the entire point of
- *      the policy decision (no authenticated INSERT policy, and no UPDATE/
- *      DELETE policy either). It also means a failure to log cannot be fixed
- *      by retrying through PostgREST.
- *   2. The caller is already authorised (`requireAdmin()` ran before us). We
- *      do not re-check the role here: that is the layer that decides who can
- *      log, and a log helper has no business second-guessing it.
- *   3. `recordAudit()` deliberately returns a `ServiceResult` rather than
- *      throwing. The caller is expected to `try/catch` (or pattern-match the
- *      result) and SWALLOW the failure: a missing log line is much less bad
- *      than blocking a real user-management action because the audit table is
- *      momentarily unhappy.
+ * Database business writes are audited by transactional triggers. Events from
+ * Auth, exports and other external operations enter a private durable outbox.
+ * Success from recordAudit means the event was accepted, even if delivery to
+ * audit_logs needs a retry. Login/export refuse success if acceptance fails.
+ * The maintenance cron retries delivery and reports exhausted events as errors.
  */
 
 export type AuditLogRow = {
@@ -82,8 +73,7 @@ async function getService(): Promise<SupabaseClient> {
 }
 
 /**
- * Write one row. The caller chooses to swallow the error — see the file-level
- * comment for why.
+ * Durably accept one event. A lost acknowledgement is retried with the same ID.
  */
 export async function recordAudit(
   input: {
@@ -109,30 +99,22 @@ export async function recordAudit(
     return dbError("recordAudit", error);
   }
 
-  let query = service
-    .from("audit_logs")
-    .insert({
-      organization_id: input.organizationId,
-      actor_id: input.actorId,
-      actor_role: input.actorRole,
-      action: input.action,
-      target_kind: input.targetKind,
-      target_id: input.targetId,
-      metadata: input.metadata ?? {},
-    })
-    .select("id");
-
-  if (signal) {
-    query = query.abortSignal(signal);
+  const id = randomUUID();
+  const payload = {
+    p_id: id, p_organization_id: input.organizationId, p_actor_id: input.actorId,
+    p_actor_role: input.actorRole, p_action: input.action, p_target_kind: input.targetKind,
+    p_target_id: input.targetId, p_metadata: input.metadata ?? {},
+  };
+  let lastError: unknown;
+  // A response can be lost after commit. Retry the same event ID, never a new one.
+  for (let attempt = 0; attempt < 2 && !signal.aborted; attempt++) {
+    try {
+      const { data, error } = await service.rpc("enqueue_audit_event", payload).abortSignal(signal);
+      if (!error && data?.id === id) return ok({ id });
+      lastError = error ?? new Error("Audit event acknowledgement unavailable");
+    } catch (error) { lastError = error; }
   }
-
-  const { data, error } = await query.single();
-
-  if (error) {
-    return dbError("recordAudit", error);
-  }
-
-  return ok({ id: (data as { id: string }).id });
+  return dbError("recordAudit.enqueue", lastError ?? new Error("Audit request timed out"));
 }
 
 /**

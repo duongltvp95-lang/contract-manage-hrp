@@ -13,7 +13,6 @@ import {
   getRecentContracts,
 } from "@/lib/services/dashboard";
 import { completeUpload, listContractFiles } from "@/lib/services/files";
-import { createUploadReservation } from "@/lib/services/upload-reservation";
 import {
   createPartner,
   deletePartner,
@@ -106,18 +105,7 @@ export async function POST(request: NextRequest) {
           contractId: String(payload.contractId ?? ""),
           fileId: String(payload.fileId ?? ""),
           objectKey: String(payload.objectKey ?? ""),
-          uploadReservation: createUploadReservation({
-            userId: access.user.id,
-            organizationId,
-            contractId: String(payload.contractId ?? ""),
-            fileId: String(payload.fileId ?? ""),
-            objectKey: String(payload.objectKey ?? ""),
-            filename: String(payload.filename ?? ""),
-            mimeType: String(payload.mimeType ?? ""),
-            fileSize: Number(payload.fileSize ?? 0),
-            kind: payload.kind === "appendix" ? "appendix" : "document",
-            baseContractNumber: typeof payload.baseContractNumber === "string" ? payload.baseContractNumber : "",
-          }),
+          uploadReservation: String(payload.uploadReservation ?? ""),
           filename: String(payload.filename ?? ""),
           mimeType: String(payload.mimeType ?? ""),
           fileSize: Number(payload.fileSize ?? 0),
@@ -188,6 +176,7 @@ export async function POST(request: NextRequest) {
       return result(
         await listPartners({
           organizationId,
+          status: payload.status === "active" || payload.status === "stopped" ? payload.status : undefined,
           contracts:
             payload.contracts === "has" || payload.contracts === "none"
               ? (payload.contracts as "has" | "none")

@@ -1,6 +1,8 @@
 create role anon nologin;
 create role authenticated nologin;
 create role service_role nologin bypassrls;
+-- Match Supabase's explicit API-role defaults, not only PostgreSQL's PUBLIC grant.
+alter default privileges in schema public grant execute on functions to anon,authenticated,service_role;
 create schema auth;
 create schema extensions;
 alter database postgres set search_path = public, extensions;

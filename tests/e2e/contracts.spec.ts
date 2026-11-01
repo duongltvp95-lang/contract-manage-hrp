@@ -10,6 +10,7 @@ import {
   isoDate,
   hasLiveBackend,
   login,
+  saveContractAndOpenDetail,
   pickDate,
   runId,
   seedPartner,
@@ -87,8 +88,7 @@ test.describe("contract lifecycle", () => {
     await clickSafe(page, "#expiryDate");
     await pickDate(page, expiry);
 
-    await clickSafe(page, '[data-testid="contract-form-submit"]');
-    await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 60_000 });
+    await saveContractAndOpenDetail(page);
 
     const id = page.url().split("/").pop() as string;
     created.push(id);

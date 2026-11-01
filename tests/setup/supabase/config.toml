@@ -1,0 +1,44 @@
+project_id = "hrp-isolated-tests"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.seed]
+enabled = false
+
+[studio]
+enabled = false
+
+[analytics]
+enabled = false
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[storage.s3_protocol]
+enabled = true
+
+[auth]
+enabled = true
+site_url = "http://localhost:3308"
+additional_redirect_urls = ["http://localhost:3308/auth/confirm", "http://localhost:3108/auth/confirm"]
+enable_signup = false
+
+[auth.rate_limit]
+sign_in_sign_ups = 2000
+token_verifications = 2000
+token_refresh = 2000
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true

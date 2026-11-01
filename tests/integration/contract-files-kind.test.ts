@@ -155,7 +155,7 @@ suite("contract_files.kind (round 16)", () => {
       body: JSON.stringify({ contractId, filename: `${TEST_PREFIX}phu-luc-fail.pdf`,
         mimeType: "application/pdf", fileSize: 1024, kind: "appendix", baseContractNumber: contractNum }),
     });
-    expect(orphanResponse.status).toBe(400);
+    expect(orphanResponse.status).toBe(422);
     const orphanAppendix = await orphanResponse.json();
     expect(orphanAppendix.error).toContain("Cần tải tệp hợp đồng chính lên trước khi tải phụ lục");
     expect(orphanAppendix).not.toHaveProperty("uploadReservation");
