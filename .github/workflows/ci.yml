@@ -35,6 +35,12 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+        env:
+          TZ: UTC
+      - name: Vietnam calendar under a second server time zone
+        run: pnpm exec vitest run --project unit tests/unit/business-date.test.ts tests/unit/format.test.ts tests/unit/contracts-query.test.ts
+        env:
+          TZ: America/Los_Angeles
       - name: Reject all reported production vulnerabilities
         run: pnpm audit --prod --audit-level=low
       - run: pnpm test:db

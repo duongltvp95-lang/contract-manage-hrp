@@ -156,7 +156,7 @@ describe("hasActiveFilters", () => {
 });
 
 describe("resolveExpiryPreset (plan sections 69, 70)", () => {
-  const today = new Date(2026, 9, 3); // 3 October 2026, local time
+  const today = new Date("2026-10-03T00:00:00+07:00");
 
   it("expired means strictly before today", () => {
     expect(resolveExpiryPreset("expired", today)).toEqual({ lt: "2026-10-03" });
@@ -177,7 +177,7 @@ describe("resolveExpiryPreset (plan sections 69, 70)", () => {
   });
 
   it("crosses a month and a year boundary correctly", () => {
-    expect(resolveExpiryPreset("expiring90", new Date(2026, 11, 20))).toEqual({
+    expect(resolveExpiryPreset("expiring90", new Date("2026-12-20T00:00:00+07:00"))).toEqual({
       gte: "2026-12-20",
       lte: "2027-03-20",
     });
