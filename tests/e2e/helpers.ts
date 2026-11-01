@@ -482,9 +482,14 @@ export async function seedRegularUser(admin: SupabaseClient) {
   return {
     id, email, password,
     async cleanup() {
+      // Only this disposable actor's test events; no production environment can load this helper.
+      const outbox = await admin.from("audit_event_outbox").delete().eq("actor_id", id);
+      const audit = await admin.from("audit_logs").delete().eq("actor_id", id);
       const profile = await admin.from("profiles").delete().eq("id", id);
       const auth = await admin.auth.admin.deleteUser(id);
-      if (profile.error || auth.error) throw new Error("Cannot remove disposable ordinary account");
+      if (outbox.error || audit.error || profile.error || auth.error) {
+        throw new Error("Cannot remove disposable ordinary account");
+      }
     },
   };
 }
