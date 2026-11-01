@@ -1,13 +1,25 @@
-import { readFileSync,readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
 const quote = value => "'" + value.replaceAll("'", "''") + "'";
 export function reviewMigrationManifest() {
   const directory = new URL('../../supabase/migrations/',import.meta.url);
-  const files = readdirSync(directory).filter(name => name.endsWith('.sql') && name >= '20261031000000').sort();
-  // Reapply this idempotent forward repair: production was provisioned manually
-  // and its old completion RPC grant differs from the repository baseline.
-  files.unshift('20261028000000_harden_contract_file_invariants.sql');
+  // Freeze this release. Future migrations must never enter an old operational bundle.
+  // The first entry repairs production's manually provisioned completion RPC grants.
+  const files = [
+    '20261028000000_harden_contract_file_invariants.sql',
+    '20261031090000_review_access_hardening.sql',
+    '20261031091000_atomic_partner_update.sql',
+    '20261031092000_contract_identity_and_listing.sql',
+    '20261031093000_server_login_budget.sql',
+    '20261031094000_mfa_audit_action.sql',
+    '20261031095000_pending_upload_cleanup.sql',
+    '20261031100000_transactional_business_audit.sql',
+    '20261101085500_lock_operational_sql_rpc.sql',
+    '20261101085600_lock_profile_update_columns.sql',
+    '20261101085700_preserve_partner_tax_update_rules.sql',
+    '20261101090000_durable_audit_outbox.sql',
+  ];
   return files.map(version => {
     const sql=readFileSync(new URL(version,directory),'utf8');
     return {version,sha256:createHash('sha256').update(sql).digest('hex'),sql};
