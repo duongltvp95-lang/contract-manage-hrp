@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, codex/fix-review-20261031]
+    paths-ignore: ["docs/**"]
   pull_request:
     branches: [main]
   workflow_dispatch:
