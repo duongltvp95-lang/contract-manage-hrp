@@ -31,6 +31,7 @@ import {
   gotoAndSettle,
   hasLiveBackend,
   login,
+  saveContractAndOpenDetail,
   mergePartnersByTaxCode,
   runId,
   seedPartner,
@@ -316,11 +317,7 @@ test("sau gộp: tạo hợp đồng mới với HRP lưu thành công (round 35
 
   const contractNumber = `${TEST_PREFIX}HD-gop-${stamp}`;
   await page.fill('input[name="contractNumber"]', contractNumber);
-  await clickSafe(page, '[data-testid="contract-form-submit"]');
-
-  // Sau khi submit, app điều hướng sang /contracts/<id>. Đợi URL
-  // thay đổi (không còn /new) để chắc form đã gửi thành công.
-  await expect(page).not.toHaveURL(/\/contracts\/new$/, { timeout: 30_000 });
+  await saveContractAndOpenDetail(page);
 
   // Khẳng định ở tầng DB: hợp đồng đã được tạo với partner_id = a.id
   // (giữ lại sau gộp), company_id = HRP. Không cần kiểm tra UI ở đây

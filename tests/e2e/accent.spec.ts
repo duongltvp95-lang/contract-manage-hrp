@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { adminClient, gotoAndSettle, hasLiveBackend, login } from "./helpers";
+import { ADMIN_EMAIL, adminClient, gotoAndSettle, hasLiveBackend, login } from "./helpers";
 
 test.skip(!hasLiveBackend, "Supabase/R2 credentials are not configured");
 
@@ -27,12 +27,13 @@ test.describe("theme palette (round 12–14)", () => {
     // Reset the shared admin's colors to default, no matter how the tests ended.
     const admin = adminClient();
     const { data } = await admin.auth.admin.listUsers({ perPage: 200 });
-    const wave2 = data?.users?.find((u) => u.email === "e2e.wave2@hrpartner.vn");
-    if (wave2) {
+    const administrator = data?.users?.find((u) => u.email === ADMIN_EMAIL);
+    expect(administrator?.id).toBeTruthy();
+    if (administrator) {
       await admin
         .from("profiles")
         .update({ accent_color: null, background_color: null, sidebar_color: null })
-        .eq("id", wave2.id);
+        .eq("id", administrator.id);
     }
   });
 
