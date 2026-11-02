@@ -4,7 +4,6 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { parse } from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { S3Client, HeadBucketCommand, CreateBucketCommand, GetObjectCommand, PutObjectCommand, PutBucketCorsCommand } from '@aws-sdk/client-s3';
-import { testTotp } from '../tests/setup/totp.ts';
 
 const argument = (name) => { const index = process.argv.indexOf(name); return index < 0 ? undefined : process.argv[index + 1]; };
 const statusFile = argument('--status-json');
@@ -57,10 +56,6 @@ if (profile.error) throw new Error('Cannot prepare isolated administrator profil
 const user = createClient(status.API_URL, status.ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 const signedIn = await user.auth.signInWithPassword({ email, password });
 if (signedIn.error) throw new Error('Cannot sign in isolated administrator');
-const factor = await user.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Isolated HRP tests' });
-if (factor.error) throw new Error('Enable TOTP enrollment in the isolated Supabase config', { cause: factor.error });
-const verification = await user.auth.mfa.challengeAndVerify({ factorId: factor.data.id, code: testTotp(factor.data.totp.secret) });
-if (verification.error) throw new Error('Cannot verify isolated TOTP fixture');
 const storage = localStorage ? {
   R2_ENDPOINT: status.STORAGE_S3_URL || status.S3_PROTOCOL_URL || status.API_URL + '/storage/v1/s3',
   R2_ACCESS_KEY_ID: status.S3_PROTOCOL_ACCESS_KEY_ID || status.S3_ACCESS_KEY,
@@ -91,9 +86,9 @@ if (!localStorage) await s3.send(new PutBucketCorsCommand({ Bucket: bucket, CORS
 const env = {
   TEST_BACKEND_ISOLATED: '1', TEST_SUPABASE_URL: status.API_URL, TEST_SUPABASE_ANON_KEY: status.ANON_KEY,
   TEST_SUPABASE_SERVICE_ROLE_KEY: status.SERVICE_ROLE_KEY, TEST_ADMIN_EMAIL: email, TEST_ADMIN_PASSWORD: password,
-  TEST_ADMIN_TOTP_SECRET: factor.data.totp.secret, TEST_R2_ACCOUNT_ID: storage.R2_ACCOUNT_ID || 'isolated',
+  TEST_R2_ACCOUNT_ID: storage.R2_ACCOUNT_ID || 'isolated',
   TEST_R2_ACCESS_KEY_ID: storage.R2_ACCESS_KEY_ID, TEST_R2_SECRET_ACCESS_KEY: storage.R2_SECRET_ACCESS_KEY,
   TEST_R2_ENDPOINT: storage.R2_ENDPOINT, TEST_R2_BUCKET_NAME: bucket, TEST_PORT: '3108', E2E_PORT: '3308',
 };
 writeFileSync(new URL('../.env.test.local', import.meta.url), Object.entries(env).map(([key,value]) => key + '=' + JSON.stringify(value)).join('\n') + '\n', { mode: 0o600 });
-console.log('PASS isolated migrations, backend marker, administrator TOTP and private test bucket; .env.test.local written without printing credentials');
+console.log('PASS isolated migrations, backend marker, password-only administrator and private test bucket; .env.test.local written without printing credentials');

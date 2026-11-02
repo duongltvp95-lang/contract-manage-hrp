@@ -9,7 +9,6 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { testTotp } from "../setup/totp";
 import { addCalendarDays, businessDate } from "../../lib/business-date";
 
 /**
@@ -254,14 +253,7 @@ export async function login(
     page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 60_000 }),
     page.getByRole("button", { name: /đăng nhập/i }).click(),
   ]);
-  if (new URL(page.url()).pathname === "/auth/mfa") {
-    await page.fill("#mfa-code", testTotp(process.env.TEST_ADMIN_TOTP_SECRET ?? ""));
-    await Promise.all([
-      page.waitForURL((url) => url.pathname === "/settings", { timeout: 30_000 }),
-      page.getByRole("button", { name: "Xác thực và tiếp tục" }).click(),
-    ]);
-    await gotoAndSettle(page, "/dashboard");
-  }
+  await expect(page).toHaveURL(/\/dashboard$/);
 }
 
 /**

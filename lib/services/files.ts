@@ -1,4 +1,3 @@
-import { requireMfa } from "@/lib/mfa";
 import "server-only";
 
 import {
@@ -722,8 +721,6 @@ export async function deleteContractFile(
   if (!canDeleteEntities(userEmail)) {
     return err("forbidden", "Không có quyền xoá tệp hợp đồng");
   }
-  const mfa = await requireMfa();
-  if (!mfa.ok) return mfa;
 
   let admin: ReturnType<typeof createAdminClient>;
   try {

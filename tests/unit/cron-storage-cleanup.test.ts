@@ -1,4 +1,3 @@
-vi.mock("@/lib/mfa", () => ({ requireMfa: vi.fn().mockResolvedValue({ ok: true, data: true }) }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 

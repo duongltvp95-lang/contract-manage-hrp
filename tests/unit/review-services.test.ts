@@ -1,11 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
-  createClient: vi.fn(), createAdminClient: vi.fn(), currentUser: vi.fn(), mfa: vi.fn(),
+  createClient: vi.fn(), createAdminClient: vi.fn(), currentUser: vi.fn(),
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: mocks.createAdminClient }));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: mocks.currentUser }));
-vi.mock("@/lib/mfa", () => ({ requireMfa: mocks.mfa }));
 vi.mock("@/lib/services/audit-logs", () => ({ recordCurrentUserAudit: vi.fn() }));
 import { deletePartner, deletePartners, updatePartner } from "@/lib/services/partners";
 import { deleteContract, deleteContracts, listContracts, unarchiveContract } from "@/lib/services/contracts";
@@ -27,7 +26,6 @@ function query(data: unknown, error: unknown = null, count = 0) {
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.mfa.mockResolvedValue({ ok: true, data: true });
   mocks.currentUser.mockResolvedValue({
     id: "aaaaaaaa-0000-4000-8000-000000000001", email: "admin@test.invalid",
     organizationId: org, role: "admin", fullName: "Test", accentColor: null, backgroundColor: null, sidebarColor: null,
@@ -42,13 +40,12 @@ describe("review service regressions", () => {
     ["unarchive contract", () => unarchiveContract(target)],
     ["delete partner", () => deletePartner(target, { organizationId: org })],
     ["bulk delete partners", () => deletePartners([target], { organizationId: org })],
-    ["delete file", () => deleteContractFile(target, org, "duongltvp95@gmail.com")],
-  ] as const)("blocks AAL1 before privileged I/O: %s", async (_, operation) => {
-    mocks.currentUser.mockResolvedValue({ id: target, email: "duongltvp95@gmail.com", organizationId: org, role: "admin" });
-    mocks.mfa.mockResolvedValue({ ok: false, code: "mfa_required", message: "OTP required" });
+    ["delete file", () => deleteContractFile(target, org, "regular@test.invalid")],
+  ] as const)("still blocks an unauthorized user before privileged I/O: %s", async (_, operation) => {
+    mocks.currentUser.mockResolvedValue({ id: target, email: "regular@test.invalid", organizationId: org, role: "user" });
     const result = await operation();
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe("mfa_required");
+    if (!result.ok) expect(result.code).toBe("forbidden");
     expect(mocks.createAdminClient).not.toHaveBeenCalled();
     expect(mocks.createClient).not.toHaveBeenCalled();
   });

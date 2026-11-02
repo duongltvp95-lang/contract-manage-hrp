@@ -2,7 +2,6 @@ import { type NextRequest, NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { processR2CleanupQueue } from "@/lib/services/storage-cleanup";
-import { requireMfa } from "@/lib/mfa";
 import { processAuditOutbox } from "@/lib/services/audit-outbox";
 
 /**
@@ -25,8 +24,6 @@ async function handleCleanup(request: NextRequest) {
   if (!isBearerAuthorized) {
     const user = await getCurrentUser();
     if (user?.role === "admin") {
-      const mfa = await requireMfa();
-      if (!mfa.ok) return NextResponse.json({ error: mfa.message, code: mfa.code }, { status: 403 });
       isAdminAuthorized = true;
     }
   }

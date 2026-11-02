@@ -1,15 +1,6 @@
-import { Suspense } from "react";
-import { requireUser } from "@/lib/auth";
-import { readMfaState } from "@/lib/mfa";
-import { MfaForm } from "@/components/mfa-form";
+import { redirect } from "next/navigation";
 
-async function MfaContent() {
-  await requireUser();
-  const state = await readMfaState();
-  return state.ok ? <MfaForm initialState={state.data} />
-    : <p role="alert" className="p-8 text-destructive">{state.message}</p>;
-}
-
-export default function MfaPage() {
-  return <Suspense fallback={<p className="p-8">Đang kiểm tra bảo mật...</p>}><MfaContent /></Suspense>;
+/** Keep old bookmarks usable after the application stopped using 2FA. */
+export default function FormerMfaPage() {
+  redirect("/settings");
 }

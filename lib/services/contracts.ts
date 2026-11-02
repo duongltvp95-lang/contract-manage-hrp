@@ -1,4 +1,3 @@
-import { requireMfa } from "@/lib/mfa";
 import { businessDate } from "@/lib/business-date";
 import "server-only";
 
@@ -913,8 +912,6 @@ export async function deleteContract(
   if (!canDeleteEntities(user.email)) {
     return err("forbidden", "Không có quyền xoá hợp đồng");
   }
-  const mfa = await requireMfa();
-  if (!mfa.ok) return mfa;
 
   // A contract in another organization reads as not found — nothing leaks.
   const contract = await getContract(id, organizationId);
@@ -976,8 +973,6 @@ export async function deleteContracts(
   if (!canDeleteEntities(user.email)) {
     return err("forbidden", "Không có quyền xoá hợp đồng");
   }
-  const mfa = await requireMfa();
-  if (!mfa.ok) return mfa;
 
   if (ids.length > BULK_DELETE_LIMIT) {
     return err(
@@ -1010,8 +1005,6 @@ export async function unarchiveContract(id: string): Promise<ServiceResult<Contr
   if (!canDeleteEntities(user.email)) {
     return err("forbidden", "Không có quyền bỏ lưu trữ hợp đồng");
   }
-  const mfa = await requireMfa();
-  if (!mfa.ok) return mfa;
 
   // Org check — a contract in another organization reads as not found.
   const contract = await getContract(id, user.organizationId);

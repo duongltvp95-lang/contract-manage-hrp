@@ -1,6 +1,6 @@
 export function assertIsolatedTestEnvironment(env: Record<string, string | undefined>): void {
   const required = ["TEST_SUPABASE_URL", "TEST_SUPABASE_ANON_KEY", "TEST_SUPABASE_SERVICE_ROLE_KEY",
-    "TEST_ADMIN_EMAIL", "TEST_ADMIN_PASSWORD", "TEST_ADMIN_TOTP_SECRET",
+    "TEST_ADMIN_EMAIL", "TEST_ADMIN_PASSWORD",
     "TEST_R2_ACCOUNT_ID", "TEST_R2_ACCESS_KEY_ID", "TEST_R2_SECRET_ACCESS_KEY", "TEST_R2_BUCKET_NAME", "TEST_R2_ENDPOINT"];
   if (env.TEST_BACKEND_ISOLATED !== "1") throw new Error("Live tests require TEST_BACKEND_ISOLATED=1 and a dedicated test backend.");
   const missing = required.filter((name) => !env[name]?.trim());

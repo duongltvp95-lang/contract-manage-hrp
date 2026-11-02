@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   claim: vi.fn(), clear: vi.fn(), signIn: vi.fn(), audit: vi.fn(),
-  profile: vi.fn(), cookieGet: vi.fn(), signOut: vi.fn(), getUser: vi.fn(),
+  profile: vi.fn(), cookieGet: vi.fn(), signOut: vi.fn(), getUser: vi.fn(), assurance: vi.fn(),
 }));
 vi.mock("@/lib/login-budget", () => ({ claimLoginAttempt: mocks.claim, clearLoginAttempts: mocks.clear }));
 vi.mock("@/lib/services/audit-logs", () => ({ recordAudit: mocks.audit, recordLogoutAudit: vi.fn() }));
@@ -12,7 +12,7 @@ vi.mock("@/lib/supabase/server", () => ({
       signInWithPassword: mocks.signIn,
       getUser: mocks.getUser,
       signOut: mocks.signOut,
-      mfa: { getAuthenticatorAssuranceLevel: async () => ({ data: { currentLevel: "aal1", nextLevel: "aal1" }, error: null }) },
+      mfa: { getAuthenticatorAssuranceLevel: mocks.assurance },
     },
     from: () => ({ select: () => ({ eq: () => ({ maybeSingle: mocks.profile }) }) }),
   }),
@@ -67,8 +67,10 @@ describe("server login budget and success audit", () => {
     expect(mocks.audit).toHaveBeenCalledWith(expect.objectContaining({ action: "login", actorId: "test-user" }), { timeoutMs: 2500 });
     expect(mocks.clear).toHaveBeenCalledWith("user@test.invalid");
   });
-  it("sends an administrator to MFA enrollment/challenge", async () => {
+  it("allows an administrator to sign in with a password without consulting MFA", async () => {
     mocks.profile.mockResolvedValue({ data: { organization_id: "org", role: "admin", is_active: true }, error: null });
-    expect(await loginAction({ email: "user@test.invalid", password: "test" })).toEqual({ success: true, mfaRequired: true });
+    mocks.assurance.mockRejectedValue(new Error("MFA is disabled"));
+    expect(await loginAction({ email: "user@test.invalid", password: "test" })).toEqual({ success: true });
+    expect(mocks.assurance).not.toHaveBeenCalled();
   });
 });

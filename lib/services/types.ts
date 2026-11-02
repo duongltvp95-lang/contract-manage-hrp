@@ -11,7 +11,6 @@ import { STATIC_ERROR_CATALOG } from "@/lib/errors/catalog";
 export type ServiceErrorCode =
   | "unauthenticated"
   | "forbidden"
-  | "mfa_required"
   | "not_found"
   | "validation"
   | "upload_incomplete"
@@ -50,7 +49,6 @@ export function statusForCode(code: ServiceErrorCode): number {
     case "unauthenticated":
       return 401;
     case "forbidden":
-    case "mfa_required":
       return 403;
     case "not_found":
       return 404;

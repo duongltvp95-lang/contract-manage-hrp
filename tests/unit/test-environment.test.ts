@@ -3,7 +3,7 @@ import { assertIsolatedTestEnvironment } from "../setup/environment-policy";
 const isolated = {
   TEST_BACKEND_ISOLATED: "1", TEST_SUPABASE_URL: "https://dedicated-tests.supabase.co",
   TEST_SUPABASE_ANON_KEY: "test", TEST_SUPABASE_SERVICE_ROLE_KEY: "test",
-  TEST_ADMIN_EMAIL: "test@example.invalid", TEST_ADMIN_PASSWORD: "test", TEST_ADMIN_TOTP_SECRET: "test",
+  TEST_ADMIN_EMAIL: "test@example.invalid", TEST_ADMIN_PASSWORD: "test",
   TEST_R2_ACCOUNT_ID: "test", TEST_R2_ACCESS_KEY_ID: "test", TEST_R2_SECRET_ACCESS_KEY: "test",
   TEST_R2_BUCKET_NAME: "hrp-contract-tests", TEST_R2_ENDPOINT: "https://test.r2.cloudflarestorage.com",
 };

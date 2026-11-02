@@ -2,6 +2,9 @@
 
 Cập nhật hoàn tất triển khai: **02/11/2026 (giờ Việt Nam)**.
 
+> Chính sách F13/2FA trong biên bản này đã được người dùng thay đổi sau nghiệm thu:
+> ứng dụng không sử dụng 2FA. Xem [thay đổi ngày 02/11](NO-2FA-2026-11-02.md).
+
 Nhánh: `codex/fix-review-20261031`. Kế tiếp gói `94a77d7` đã sửa F01–F14 trong
 [biên bản 31/10](FIXES-2026-10-31.md); [báo cáo gốc](REVIEW-2026-10-31.md) là lịch sử trước sửa.
 

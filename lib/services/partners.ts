@@ -1,4 +1,3 @@
-import { requireMfa } from "@/lib/mfa";
 import "server-only";
 
 import {
@@ -1378,8 +1377,6 @@ export async function deletePartner(
   if (!canDeleteEntities(user.email)) {
     return err("forbidden", "Không có quyền xoá đối tác");
   }
-  const mfa = await requireMfa();
-  if (!mfa.ok) return mfa;
 
   // A partner in another organization reads as not found — nothing leaks.
   const partner = await getPartner(id, { organizationId });
@@ -1433,8 +1430,6 @@ export async function deletePartners(
   if (!canDeleteEntities(user.email)) {
     return err("forbidden", "Không có quyền xoá đối tác");
   }
-  const mfa = await requireMfa();
-  if (!mfa.ok) return mfa;
 
   if (ids.length > BULK_DELETE_LIMIT) {
     return err(

@@ -120,9 +120,6 @@ async function SettingsContent() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                <Button variant="outline" asChild>
-                  <Link href="/auth/mfa">Bảo mật 2FA</Link>
-                </Button>
                 <Button variant="outline" asChild className="h-10 justify-center">
                   <Link href="/auth/update-password" data-testid="change-password-link">
                     <KeyRound className="mr-2 h-4 w-4" />

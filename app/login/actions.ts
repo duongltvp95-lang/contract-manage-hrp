@@ -15,7 +15,7 @@ import {
 } from "@/lib/login-attempts";
 
 export type LoginActionResult =
-  | { success: true; mfaRequired?: boolean }
+  | { success: true }
   | { success: false; error: string; remainingAttempts?: number };
 
 /**
@@ -194,12 +194,7 @@ export async function loginAction(payload: {
       await supabase.auth.signOut();
       return { success: false, error: "Không thể ghi nhận phiên đăng nhập an toàn. Vui lòng thử lại." };
     }
-    const { data: assurance, error: assuranceError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    if (assuranceError) {
-      await supabase.auth.signOut();
-      return { success: false, error: "Không thể kiểm tra xác thực hai bước. Vui lòng thử lại." };
-    }
-    return { success: true, mfaRequired: profile.role === "admin" || assurance?.nextLevel === "aal2" };
+    return { success: true };
   } catch (error) {
     if (authenticatedClient) {
       try { await authenticatedClient.auth.signOut(); }

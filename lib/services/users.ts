@@ -1,4 +1,3 @@
-import { requireMfa } from "@/lib/mfa";
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -228,8 +227,6 @@ export async function requireAdmin() {
     );
   }
 
-  const mfa = await requireMfa();
-  if (!mfa.ok) return mfa;
 
   return ok(user);
 }
