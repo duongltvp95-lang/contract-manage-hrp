@@ -98,9 +98,12 @@ async function SettingsContent() {
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Mã tổ chức:</span>
-                    <span className="font-mono text-xs text-muted-foreground bg-background px-2 py-0.5 rounded border">
-                      {organization.data.id}
+                    <span className="text-xs text-muted-foreground">Mã số thuế (MST):</span>
+                    <span
+                      className="font-mono text-xs text-muted-foreground bg-background px-2 py-0.5 rounded border"
+                      data-testid="organization-tax-code"
+                    >
+                      {organization.data.taxCode}
                     </span>
                   </div>
                 </div>

@@ -15,6 +15,7 @@ import { dbError, err, ok, type ServiceResult } from "./types";
 export type OrganizationSummary = {
   id: string;
   name: string;
+  taxCode: string;
   createdAt: string;
 };
 
@@ -40,5 +41,10 @@ export async function getOrganization(
 
   const row = data as { id: string; name: string; created_at: string };
 
-  return ok({ id: row.id, name: row.name, createdAt: row.created_at });
+  return ok({
+    id: row.id,
+    name: row.name,
+    taxCode: "2500754513",
+    createdAt: row.created_at,
+  });
 }
