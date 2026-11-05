@@ -1,5 +1,23 @@
-import { AppSidebar } from "@/components/app-sidebar";
+import { Suspense } from "react";
+
+import { AppSidebar, type SidebarAccountInfo } from "@/components/app-sidebar";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { getCurrentUser } from "@/lib/auth";
+
+async function AppSidebarServer() {
+  const user = await getCurrentUser();
+  const initialAccount: SidebarAccountInfo | null = user
+    ? {
+        accountLabel: user.fullName?.trim() || user.email || null,
+        isAdmin: user.role === "admin",
+        accentColor: user.accentColor,
+        backgroundColor: user.backgroundColor,
+        sidebarColor: user.sidebarColor,
+      }
+    : null;
+
+  return <AppSidebar initialAccount={initialAccount} />;
+}
 
 /**
  * Application shell for every authenticated route
@@ -16,7 +34,9 @@ export default function AppLayout({
 }) {
   return (
     <SidebarProvider>
-      <AppSidebar />
+      <Suspense fallback={<AppSidebar initialAccount={null} />}>
+        <AppSidebarServer />
+      </Suspense>
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Thanh điều hướng cố định trên thiết bị di động */}
         <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b bg-background/95 px-4 backdrop-blur md:hidden">
