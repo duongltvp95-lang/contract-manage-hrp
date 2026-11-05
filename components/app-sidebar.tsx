@@ -1,8 +1,17 @@
 "use client";
 
-import { Building2, ChevronUp, FileText, LayoutDashboard, ScrollText, Settings, User2 } from "lucide-react";
+import {
+  Building2,
+  ChevronUp,
+  FileText,
+  LayoutDashboard,
+  Loader2,
+  ScrollText,
+  Settings,
+  User2,
+} from "lucide-react";
 import Image from "next/image";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -46,17 +55,77 @@ const items: { title: string; url: string; icon: typeof FileText; admin?: boolea
   { title: "Cài đặt", url: "/settings", icon: Settings },
 ];
 
-export function AppSidebar() {
+export type SidebarAccountInfo = {
+  accountLabel: string | null;
+  isAdmin: boolean;
+  accentColor: string | null;
+  backgroundColor: string | null;
+  sidebarColor: string | null;
+};
+
+function SidebarNavPendingIndicator() {
+  const { pending } = useLinkStatus();
+  return (
+    <Loader2
+      aria-hidden="true"
+      data-testid="sidebar-nav-pending"
+      data-pending={pending ? "true" : "false"}
+      className={
+        pending
+          ? "ml-auto h-3.5 w-3.5 shrink-0 animate-spin text-emerald-600/80 dark:text-emerald-400/80 opacity-80 transition-opacity delay-75 duration-150 group-data-[collapsible=icon]:hidden"
+          : "ml-auto h-3.5 w-3.5 shrink-0 opacity-0 pointer-events-none group-data-[collapsible=icon]:hidden"
+      }
+    />
+  );
+}
+
+export function AppSidebar({
+  initialAccount,
+}: {
+  initialAccount?: SidebarAccountInfo | null;
+} = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const { isMobile, setOpenMobile } = useSidebar();
-  const [accountLabel, setAccountLabel] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [accentColor, setAccentColor] = useState<string | null>(null);
-  const [backgroundColor, setBackgroundColor] = useState<string | null>(null);
-  const [sidebarColor, setSidebarColor] = useState<string | null>(null);
+
+  const [fallbackAccountLabel, setFallbackAccountLabel] = useState<string | null>(null);
+  const [fallbackIsAdmin, setFallbackIsAdmin] = useState(false);
+  const [fallbackColors, setFallbackColors] = useState<{
+    accent: string | null;
+    background: string | null;
+    sidebar: string | null;
+  }>({
+    accent: null,
+    background: null,
+    sidebar: null,
+  });
+
+  // Phản hồi thị giác tức thì ngay khung hình click đầu tiên (< 16ms),
+  // tự hết hiệu lực ngay khi router cập nhật `pathname` sang tuyến mới.
+  const [navIntent, setNavIntent] = useState<{
+    fromPathname: string;
+    targetUrl: string;
+  } | null>(null);
+
+  const serverColorsKey =
+    initialAccount !== undefined
+      ? `${initialAccount?.accentColor ?? ""}|${initialAccount?.backgroundColor ?? ""}|${initialAccount?.sidebarColor ?? ""}`
+      : "client-fallback";
+
+  const [optimisticColors, setOptimisticColors] = useState<{
+    baseKey: string;
+    accent: string | null;
+    background: string | null;
+    sidebar: string | null;
+  } | null>(null);
 
   useEffect(() => {
+    // Khi đã có dữ liệu tài khoản truyền từ Server Component xuống (dùng chung cache xác thực),
+    // bỏ qua hoàn toàn 2 lượt gọi Supabase trùng lặp ở trình duyệt.
+    if (initialAccount !== undefined) {
+      return;
+    }
+
     const supabase = createClient();
 
     supabase.auth
@@ -64,16 +133,11 @@ export function AppSidebar() {
       .then(async ({ data }) => {
         const user = data.user;
         if (!user) {
-          setAccountLabel(null);
-          setIsAdmin(false);
+          setFallbackAccountLabel(null);
+          setFallbackIsAdmin(false);
           return;
         }
 
-        // Prefer the profile's display name so a change in Settings shows up
-        // here too; the email stays the fallback when no name is set. The role
-        // controls the "Nhật ký" item — the page redirects non-admins, so the
-        // link must be hidden too. The accent/background/sidebar colors feed the
-        // theme palette popover (round 13–14).
         const { data: profile } = await supabase
           .from("profiles")
           .select("full_name, role, accent_color, background_color, sidebar_color")
@@ -87,17 +151,37 @@ export function AppSidebar() {
           background_color: string | null;
           sidebar_color: string | null;
         } | null;
-        setAccountLabel(typed?.full_name?.trim() || user.email || null);
-        setIsAdmin(typed?.role === "admin");
-        setAccentColor(typed?.accent_color ?? null);
-        setBackgroundColor(typed?.background_color ?? null);
-        setSidebarColor(typed?.sidebar_color ?? null);
+        setFallbackAccountLabel(typed?.full_name?.trim() || user.email || null);
+        setFallbackIsAdmin(typed?.role === "admin");
+        setFallbackColors({
+          accent: typed?.accent_color ?? null,
+          background: typed?.background_color ?? null,
+          sidebar: typed?.sidebar_color ?? null,
+        });
       })
       .catch(() => {
-        setAccountLabel(null);
-        setIsAdmin(false);
+        setFallbackAccountLabel(null);
+        setFallbackIsAdmin(false);
       });
-  }, []);
+  }, [initialAccount]);
+
+  const accountLabel =
+    initialAccount !== undefined ? initialAccount?.accountLabel ?? null : fallbackAccountLabel;
+  const isAdmin =
+    initialAccount !== undefined ? Boolean(initialAccount?.isAdmin) : fallbackIsAdmin;
+  const resolvedColors =
+    optimisticColors && optimisticColors.baseKey === serverColorsKey
+      ? optimisticColors
+      : initialAccount !== undefined
+        ? {
+            accent: initialAccount?.accentColor ?? null,
+            background: initialAccount?.backgroundColor ?? null,
+            sidebar: initialAccount?.sidebarColor ?? null,
+          }
+        : fallbackColors;
+
+  const effectiveTargetUrl =
+    navIntent && navIntent.fromPathname === pathname ? navIntent.targetUrl : null;
 
   const handleSignOut = async () => {
     try {
@@ -138,23 +222,43 @@ export function AppSidebar() {
             <SidebarMenu>
               {items
                 .filter((item) => !item.admin || isAdmin)
-                .map((item) => (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={pathname.startsWith(item.url)}
-                      onClick={() => {
-                        if (isMobile) setOpenMobile(false);
-                      }}
-                      className="rounded-lg transition-colors hover:bg-emerald-500/[0.06] data-[active=true]:bg-emerald-500/10 data-[active=true]:text-emerald-700 dark:data-[active=true]:text-emerald-300 data-[active=true]:font-semibold data-[active=true]:hover:bg-emerald-500/15"
-                    >
-                      <Link href={item.url}>
-                        <item.icon />
-                        <span>{item.title}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
+                .map((item) => {
+                  const isActive = effectiveTargetUrl
+                    ? effectiveTargetUrl === item.url
+                    : pathname.startsWith(item.url);
+
+                  return (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={isActive}
+                        onClick={(event) => {
+                          if (
+                            event.button === 0 &&
+                            !event.metaKey &&
+                            !event.ctrlKey &&
+                            !event.shiftKey &&
+                            !event.altKey &&
+                            !pathname.startsWith(item.url)
+                          ) {
+                            setNavIntent({
+                              fromPathname: pathname,
+                              targetUrl: item.url,
+                            });
+                          }
+                          if (isMobile) setOpenMobile(false);
+                        }}
+                        className="rounded-lg transition-colors hover:bg-emerald-500/[0.06] data-[active=true]:bg-emerald-500/10 data-[active=true]:text-emerald-700 dark:data-[active=true]:text-emerald-300 data-[active=true]:font-semibold data-[active=true]:hover:bg-emerald-500/15"
+                      >
+                        <Link href={item.url}>
+                          <item.icon />
+                          <span>{item.title}</span>
+                          <SidebarNavPendingIndicator />
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -163,13 +267,16 @@ export function AppSidebar() {
         <div className="flex items-center gap-1 px-1 pb-1">
           <ThemeSwitcher />
           <ThemePalettePopover
-            accent={accentColor}
-            background={backgroundColor}
-            sidebar={sidebarColor}
+            accent={resolvedColors.accent}
+            background={resolvedColors.background}
+            sidebar={resolvedColors.sidebar}
             onChanged={({ accent, background, sidebar }) => {
-              setAccentColor(accent);
-              setBackgroundColor(background);
-              setSidebarColor(sidebar);
+              setOptimisticColors({
+                baseKey: serverColorsKey,
+                accent,
+                background,
+                sidebar,
+              });
             }}
           />
         </div>

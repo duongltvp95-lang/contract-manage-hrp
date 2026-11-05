@@ -48,73 +48,134 @@ type ProfileRow = {
   sidebar_color: string | null;
 };
 
-/**
- * Single source of truth for "who is calling, and may they?".
- *
- * Route handlers should use this so they can answer 401 / 403 instead of an
- * HTML redirect, which is what a page-level guard would produce.
- */
-export const resolveAccess = cache(
-  async (options?: { abortSignal?: AbortSignal }): Promise<AccessResult> => {
-    if (!hasEnvVars) {
-      return { status: "unauthenticated" };
-    }
+async function resolveAccessUncached(
+  options?: { abortSignal?: AbortSignal },
+): Promise<AccessResult> {
+  if (!hasEnvVars) {
+    return { status: "unauthenticated" };
+  }
 
-    if (options?.abortSignal?.aborted) {
-      throw new Error("AbortError");
-    }
+  if (options?.abortSignal?.aborted) {
+    throw new Error("AbortError");
+  }
 
-    const supabase = await createClient(options);
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+  const supabase = await createClient(options);
 
-    if (!user) {
-      return { status: "unauthenticated" };
-    }
-
+  const fetchProfile = async (userId: string) => {
     // RLS already limits this to the signed-in user's own row.
     let query = supabase
       .from("profiles")
-      .select("id, organization_id, full_name, role, is_active, accent_color, background_color, sidebar_color")
-      .eq("id", user.id);
+      .select(
+        "id, organization_id, full_name, role, is_active, accent_color, background_color, sidebar_color",
+      )
+      .eq("id", userId);
 
     if (options?.abortSignal) {
       query = query.abortSignal(options.abortSignal);
     }
 
-    const { data } = await query.maybeSingle();
+    const { data, error } = await query.maybeSingle();
+    return {
+      profile: (data as ProfileRow | null) ?? null,
+      error,
+    };
+  };
 
-    const profile = data as ProfileRow | null;
+  let sessionUserId: string | null = null;
+  if (typeof supabase.auth.getSession === "function") {
+    const { data: sessionData } = await supabase.auth.getSession();
+    sessionUserId = sessionData?.session?.user?.id ?? null;
+  }
 
-    // Either the profile is missing (should be impossible — the
-    // on_auth_user_created trigger guarantees one) or an administrator
-    // deactivated the account.
-    if (!profile || !profile.is_active) {
-      return { status: "disabled" };
+  let user: { id: string; email?: string | null } | null = null;
+  let profile: ProfileRow | null = null;
+
+  if (sessionUserId) {
+    // Chạy song song xác thực phiên (GoTrue) và đọc hồ sơ (PostgREST) khi cookie phiên đã có userId,
+    // tiết kiệm 1 round-trip tuần tự mà vẫn giữ nguyên kiểm tra authoritative từ auth.getUser().
+    const [userRes, initialProfileRes] = await Promise.all([
+      supabase.auth.getUser(),
+      fetchProfile(sessionUserId),
+    ]);
+
+    user = userRes.data.user;
+    if (!user) {
+      return { status: "unauthenticated" };
     }
 
-    return {
-      status: "ok",
-      user: {
-        id: user.id,
-        email: user.email ?? null,
-        fullName: profile.full_name,
-        organizationId: profile.organization_id,
-        role: profile.role === "admin" ? "admin" : "user",
-        accentColor: profile.accent_color ?? null,
-        backgroundColor: profile.background_color ?? null,
-        sidebarColor: profile.sidebar_color ?? null,
-      },
-    };
+    if (initialProfileRes.error || user.id !== sessionUserId) {
+      const retryRes = await fetchProfile(user.id);
+      profile = retryRes.profile;
+    } else {
+      profile = initialProfileRes.profile;
+    }
+  } else {
+    const { data } = await supabase.auth.getUser();
+    user = data.user;
+    if (!user) {
+      return { status: "unauthenticated" };
+    }
+    const profileRes = await fetchProfile(user.id);
+    profile = profileRes.profile;
+  }
+
+  // Either the profile is missing (should be impossible — the
+  // on_auth_user_created trigger guarantees one) or an administrator
+  // deactivated the account.
+  if (!profile || !profile.is_active) {
+    return { status: "disabled" };
+  }
+
+  return {
+    status: "ok",
+    user: {
+      id: user.id,
+      email: user.email ?? null,
+      fullName: profile.full_name,
+      organizationId: profile.organization_id,
+      role: profile.role === "admin" ? "admin" : "user",
+      accentColor: profile.accent_color ?? null,
+      backgroundColor: profile.background_color ?? null,
+      sidebarColor: profile.sidebar_color ?? null,
+    },
+  };
+}
+
+const resolveAccessDefault = cache((): Promise<AccessResult> => {
+  return resolveAccessUncached();
+});
+
+const resolveAccessWithSignal = cache(
+  (abortSignal: AbortSignal): Promise<AccessResult> => {
+    return resolveAccessUncached({ abortSignal });
   },
 );
+
+/**
+ * Single source of truth for "who is calling, and may they?".
+ *
+ * Route handlers should use this so they can answer 401 / 403 instead of an
+ * HTML redirect, which is what a page-level guard would produce.
+ *
+ * Normalized so `resolveAccess()`, `resolveAccess(undefined)`, and `resolveAccess({})`
+ * all hit the exact same 0-arg `React.cache` bucket within a request.
+ */
+export async function resolveAccess(
+  options?: { abortSignal?: AbortSignal },
+): Promise<AccessResult> {
+  if (options?.abortSignal) {
+    return resolveAccessWithSignal(options.abortSignal);
+  }
+  return resolveAccessDefault();
+}
 
 /** Convenience wrapper for code that only needs "is there a usable user?". */
 export async function getCurrentUser(
   options?: { abortSignal?: AbortSignal },
 ): Promise<CurrentUser | null> {
-  const result = await resolveAccess(options);
+  const result = options?.abortSignal
+    ? await resolveAccess(options)
+    : await resolveAccess();
   return result.status === "ok" ? result.user : null;
 }
 

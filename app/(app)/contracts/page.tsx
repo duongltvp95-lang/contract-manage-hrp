@@ -1,6 +1,6 @@
 import { AlertTriangle, Plus } from "lucide-react";
 import Link from "next/link";
-import { Suspense } from "react";
+import { cache, Suspense } from "react";
 
 import { ContractsPagination } from "@/components/contracts/contracts-pagination";
 import { ContractsTable } from "@/components/contracts/contracts-table";
@@ -12,7 +12,11 @@ import { requireUser } from "@/lib/auth";
 import { contractsHref, parseContractsQuery, type ContractsQuery } from "@/lib/contracts-query";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import { listContracts } from "@/lib/services/contracts";
-import { countNoFileContracts, getContractMetrics, getUndatedContracts } from "@/lib/services/dashboard";
+import {
+  countNoFileContracts,
+  countUndatedContracts,
+  getContractMetrics,
+} from "@/lib/services/dashboard";
 import { cn } from "@/lib/utils";
 
 /**
@@ -24,6 +28,76 @@ import { cn } from "@/lib/utils";
  */
 
 type RawSearchParams = Record<string, string | string[] | undefined>;
+type ContractScope = "active" | "expired" | "expiring" | "archived" | "undated" | "no-files";
+type ContractCountKey = "active" | "expiringSoon" | "expired" | "archived" | "undated" | "noFiles";
+
+const getCachedContractTabCounts = cache(async (organizationId: string) => {
+  const [metricsResult, undatedResult, noFilesResult] = await Promise.all([
+    getContractMetrics(organizationId),
+    countUndatedContracts(organizationId),
+    countNoFileContracts(organizationId),
+  ]);
+
+  if (!metricsResult.ok) {
+    return undefined;
+  }
+
+  return {
+    active: metricsResult.data.active,
+    expiringSoon: metricsResult.data.expiringSoon,
+    expired: metricsResult.data.expired,
+    archived: metricsResult.data.archived,
+    undated: undatedResult.ok ? undatedResult.data : undefined,
+    noFiles: noFilesResult.ok ? noFilesResult.data : undefined,
+  };
+});
+
+async function ContractsListSection({
+  organizationId,
+  query,
+  scope,
+  canDelete,
+}: {
+  organizationId: string;
+  query: ContractsQuery;
+  scope: ContractScope;
+  canDelete: boolean;
+}) {
+  const result = await listContracts({
+    organizationId,
+    query,
+    scope,
+  });
+
+  if (!result.ok) {
+    // Plan section 80: a readable message, never a raw stack trace.
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Không tải được danh sách hợp đồng</AlertTitle>
+        <AlertDescription>{result.message}</AlertDescription>
+      </Alert>
+    );
+  }
+
+  return (
+    <>
+      <ContractsTable
+        key={JSON.stringify([scope, query])}
+        rows={result.data.rows}
+        query={query}
+        total={result.data.total}
+        canDelete={canDelete}
+        scope={scope}
+      />
+      <ContractsPagination
+        query={query}
+        total={result.data.total}
+        pageCount={result.data.pageCount}
+        scope={scope}
+      />
+    </>
+  );
+}
 
 async function ContractsContent({
   searchParams,
@@ -42,35 +116,18 @@ async function ContractsContent({
     raw === "expired" || raw === "archived" || raw === "undated" || raw === "expiring" || raw === "no-files"
       ? raw
       : "active";
-  const scope = requestedScope === "archived" && !canDelete ? "active" : requestedScope;
-
-  const [result, metricsResult, undatedResult, noFilesResult] = await Promise.all([
-    listContracts({
-      organizationId: me.organizationId,
-      query,
-      scope,
-    }),
-    getContractMetrics(me.organizationId),
-    getUndatedContracts(me.organizationId, 1),
-    countNoFileContracts(me.organizationId),
-  ]);
-
-  const counts = metricsResult.ok
-    ? {
-        active: metricsResult.data.active,
-        expiringSoon: metricsResult.data.expiringSoon,
-        expired: metricsResult.data.expired,
-        archived: metricsResult.data.archived,
-        undated: undatedResult.ok ? undatedResult.data.total : undefined,
-        noFiles: noFilesResult.ok ? noFilesResult.data : undefined,
-      }
-    : undefined;
+  const scope: ContractScope = requestedScope === "archived" && !canDelete ? "active" : requestedScope;
 
   return (
     <div className="space-y-6 p-4 sm:p-6 md:p-8">
       <PageHeader />
 
-      <ContractsTabs scope={scope} canDelete={canDelete} query={query} counts={counts} />
+      <ContractsTabs
+        scope={scope}
+        canDelete={canDelete}
+        query={query}
+        organizationId={me.organizationId}
+      />
 
       {scope === "undated" && (
         <Alert className="border-amber-300/80 bg-amber-50/70 text-amber-900 dark:border-amber-800/80 dark:bg-amber-950/30 dark:text-amber-200">
@@ -86,31 +143,74 @@ async function ContractsContent({
 
       <ContractsToolbar query={query} scope={scope} />
 
-      {result.ok ? (
-        <>
-          <ContractsTable
-            key={JSON.stringify([scope, query])}
-            rows={result.data.rows}
-            query={query}
-            total={result.data.total}
-            canDelete={canDelete}
-            scope={scope}
-          />
-          <ContractsPagination
-            query={query}
-            total={result.data.total}
-            pageCount={result.data.pageCount}
-            scope={scope}
-          />
-        </>
-      ) : (
-        // Plan section 80: a readable message, never a raw stack trace.
-        <Alert variant="destructive">
-          <AlertTitle>Không tải được danh sách hợp đồng</AlertTitle>
-          <AlertDescription>{result.message}</AlertDescription>
-        </Alert>
-      )}
+      <Suspense
+        key={JSON.stringify([scope, query])}
+        fallback={<ContractsTableSkeleton />}
+      >
+        <ContractsListSection
+          organizationId={me.organizationId}
+          query={query}
+          scope={scope}
+          canDelete={canDelete}
+        />
+      </Suspense>
     </div>
+  );
+}
+
+function badgeCls(active: boolean) {
+  return cn(
+    "rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums leading-none",
+    active
+      ? "bg-white/20 text-white"
+      : "bg-muted text-muted-foreground",
+  );
+}
+
+async function ContractTabCountBadge({
+  organizationId,
+  countKey,
+  active,
+}: {
+  organizationId: string;
+  countKey: ContractCountKey;
+  active: boolean;
+}) {
+  const counts = await getCachedContractTabCounts(organizationId);
+  const value = counts?.[countKey];
+  if (value === undefined) {
+    return null;
+  }
+  return <span className={badgeCls(active)}>{value}</span>;
+}
+
+function ContractTabBadgeSlot({
+  organizationId,
+  countKey,
+  active,
+}: {
+  organizationId: string;
+  countKey: ContractCountKey;
+  active: boolean;
+}) {
+  return (
+    <Suspense
+      fallback={
+        <span
+          aria-hidden="true"
+          className={cn(
+            "inline-block h-4 w-6 rounded-full",
+            active ? "bg-white/15" : "bg-muted/70",
+          )}
+        />
+      }
+    >
+      <ContractTabCountBadge
+        organizationId={organizationId}
+        countKey={countKey}
+        active={active}
+      />
+    </Suspense>
   );
 }
 
@@ -119,15 +219,15 @@ function ContractsTabs({
   scope,
   canDelete,
   query,
-  counts,
+  organizationId,
 }: {
-  scope: "active" | "expired" | "expiring" | "archived" | "undated" | "no-files";
+  scope: ContractScope;
   canDelete: boolean;
   query: ContractsQuery;
-  counts?: { active: number; expiringSoon: number; expired: number; archived: number; undated?: number; noFiles?: number };
+  organizationId: string;
 }) {
   const base = contractsHref({}, query);
-  const withScope = (next: "active" | "expired" | "expiring" | "undated" | "no-files" | "archived") =>
+  const withScope = (next: ContractScope) =>
     next === "active"
       ? base
       : `${base}${base.includes("?") ? "&" : "?"}scope=${next}`;
@@ -138,14 +238,6 @@ function ContractsTabs({
       active
         ? "bg-emerald-600 text-white shadow-sm font-semibold"
         : "text-muted-foreground hover:bg-background/80 hover:text-foreground",
-    );
-
-  const badgeCls = (active: boolean) =>
-    cn(
-      "rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums leading-none",
-      active
-        ? "bg-white/20 text-white"
-        : "bg-muted text-muted-foreground",
     );
 
   return (
@@ -159,9 +251,11 @@ function ContractsTabs({
         className={tabCls(scope === "active")}
       >
         <span>Còn hiệu lực</span>
-        {counts !== undefined && (
-          <span className={badgeCls(scope === "active")}>{counts.active}</span>
-        )}
+        <ContractTabBadgeSlot
+          organizationId={organizationId}
+          countKey="active"
+          active={scope === "active"}
+        />
       </Link>
       <Link
         href={withScope("expiring")}
@@ -169,9 +263,11 @@ function ContractsTabs({
         className={tabCls(scope === "expiring")}
       >
         <span>Sắp hết hạn</span>
-        {counts !== undefined && (
-          <span className={badgeCls(scope === "expiring")}>{counts.expiringSoon}</span>
-        )}
+        <ContractTabBadgeSlot
+          organizationId={organizationId}
+          countKey="expiringSoon"
+          active={scope === "expiring"}
+        />
       </Link>
       <Link
         href={withScope("expired")}
@@ -179,9 +275,11 @@ function ContractsTabs({
         className={tabCls(scope === "expired")}
       >
         <span>Đã hết hạn</span>
-        {counts !== undefined && (
-          <span className={badgeCls(scope === "expired")}>{counts.expired}</span>
-        )}
+        <ContractTabBadgeSlot
+          organizationId={organizationId}
+          countKey="expired"
+          active={scope === "expired"}
+        />
       </Link>
       <Link
         href={withScope("undated")}
@@ -189,9 +287,11 @@ function ContractsTabs({
         className={tabCls(scope === "undated")}
       >
         <span>Không xác định thời hạn</span>
-        {counts?.undated !== undefined && (
-          <span className={badgeCls(scope === "undated")}>{counts.undated}</span>
-        )}
+        <ContractTabBadgeSlot
+          organizationId={organizationId}
+          countKey="undated"
+          active={scope === "undated"}
+        />
       </Link>
       <Link
         href={withScope("no-files")}
@@ -199,9 +299,11 @@ function ContractsTabs({
         className={tabCls(scope === "no-files")}
       >
         <span>Chưa có tệp</span>
-        {counts?.noFiles !== undefined && (
-          <span className={badgeCls(scope === "no-files")}>{counts.noFiles}</span>
-        )}
+        <ContractTabBadgeSlot
+          organizationId={organizationId}
+          countKey="noFiles"
+          active={scope === "no-files"}
+        />
       </Link>
       {canDelete && (
         <Link
@@ -210,9 +312,11 @@ function ContractsTabs({
           className={tabCls(scope === "archived")}
         >
           <span>Đã lưu trữ</span>
-          {counts !== undefined && (
-            <span className={badgeCls(scope === "archived")}>{counts.archived}</span>
-          )}
+          <ContractTabBadgeSlot
+            organizationId={organizationId}
+            countKey="archived"
+            active={scope === "archived"}
+          />
         </Link>
       )}
     </div>
