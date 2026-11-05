@@ -50,6 +50,7 @@ import {
   MAX_AI_FILE_SIZE_BYTES,
   MAX_AI_FILE_SIZE_MB,
   resolveMimeType,
+  type AiExtractionTelemetry,
 } from "@/lib/ai/gemini";
 import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
 import { aiLog } from "@/lib/ai/log";
@@ -538,6 +539,7 @@ export async function extractContractAction(
   let geminiFileUri: string | null = null;
   let r2KeyToClean: string | null = null;
   let extractedData: ExtractedContract | null = null;
+  const telemetryRef: { current: AiExtractionTelemetry | null } = { current: null };
   let preExtractedPdfTextLength: number | null = null;
   let pdfTextExtractionAttempted = false;
   let pdfTextCharacters: number | null = null;
@@ -564,7 +566,11 @@ export async function extractContractAction(
 
   try {
     const authTimeoutMs = Math.min(5_000, Math.max(1_000, actionDeadline - Date.now() - 40_000));
-    const access = await authorized({ timeoutMs: authTimeoutMs });
+    const access = await measureAiStage(
+      traceId,
+      "auth",
+      () => authorized({ timeoutMs: authTimeoutMs }),
+    );
     if (!access.ok) return access.result;
 
     const ownedObjectKey =
@@ -720,20 +726,18 @@ export async function extractContractAction(
 
     // Kiểm tra định dạng tệp trước khi upload lên Gemini Files API
     const resolvedMime = resolveMimeType(filename, mimeType);
-    const clientR2UploadValue = formData.get("clientR2UploadMs");
-    const rawClientR2UploadMs =
-      typeof clientR2UploadValue === "string" ? Number(clientR2UploadValue) : Number.NaN;
-    const clientR2UploadMs =
-      Number.isFinite(rawClientR2UploadMs) &&
-      rawClientR2UploadMs >= 0 &&
-      rawClientR2UploadMs <= 300_000
-        ? rawClientR2UploadMs
-        : undefined;
+    const parseBoundedClientMs = (value: FormDataEntryValue | null): number | undefined => {
+      const raw = typeof value === "string" ? Number(value) : Number.NaN;
+      return Number.isFinite(raw) && raw >= 0 && raw <= 300_000 ? raw : undefined;
+    };
+    const clientPresignMs = parseBoundedClientMs(formData.get("clientPresignMs"));
+    const clientR2UploadMs = parseBoundedClientMs(formData.get("clientR2UploadMs"));
     aiLog.info("Tệp AI đã được nhận", {
       traceId,
       sizeBytes: inputSizeBytes,
       mimeType: resolvedMime,
       source,
+      clientPresignMs,
       clientR2UploadMs,
     });
     if (!ALLOWED_MIME_TYPES.has(resolvedMime)) {
@@ -758,34 +762,63 @@ export async function extractContractAction(
     }
 
     // Thử trích xuất nhanh lớp văn bản PDF trước.
-    // Với các tệp PDF có text layer (kể cả >= 2 MB), việc trích xuất văn bản cục bộ
-    // chỉ mất ~100-300ms và cho phép gửi văn bản trực tiếp cho Gemini, tránh hoàn toàn
-    // việc upload tệp lớn lên Gemini Files API (tiết kiệm 5-15s và quota mạng).
+    // Với các tệp PDF có text layer (kể cả >= 2 MB, tối đa 30 trang / 50.000 ký tự),
+    // việc trích xuất văn bản cục bộ cho phép gửi văn bản trực tiếp cho Gemini, tránh
+    // hoàn toàn việc upload tệp lớn lên Gemini Files API (tiết kiệm 5-15s và quota mạng).
     let preExtractedPdfText: string | null = null;
     if (resolvedMime === "application/pdf") {
-      const pdfBudget = Math.min(1_200, Math.max(500, remainingAiBudgetMs - 8_000));
+      const pdfBudget = Math.min(2_500, Math.max(500, remainingAiBudgetMs - 8_000));
       if (pdfBudget >= 800) {
         try {
-          const { extractPdfText, isUsableContractPdfText } = await import("@/lib/ai/pdf-text");
+          const {
+            extractPdfText,
+            isUsableContractPdfText,
+            PDF_TEXT_MAX_CHARACTERS,
+            PDF_TEXT_MAX_PAGES,
+          } = await import("@/lib/ai/pdf-text");
           pdfTextExtractionAttempted = true;
           const pdfResult = await measureAiStage(
             traceId,
             "pdf_text_extract",
             () =>
               extractPdfText(buffer, pdfBudget, {
-                maxPages: 10,
-                maxCharacters: 12_000,
+                maxPages: PDF_TEXT_MAX_PAGES,
+                maxCharacters: PDF_TEXT_MAX_CHARACTERS,
               }),
             { sizeBytes: buffer.length },
           );
           pdfTextCharacters = pdfResult?.text.length ?? null;
-          if (pdfResult && isUsableContractPdfText(pdfResult.text, { isTruncated: pdfResult.isTruncated })) {
+          const pageCharCounts = pdfResult?.pageCharCounts;
+          const minPageChars =
+            pageCharCounts && pageCharCounts.length > 0 ? Math.min(...pageCharCounts) : undefined;
+          const firstPageChars = pageCharCounts?.[0];
+          if (
+            pdfResult &&
+            isUsableContractPdfText(pdfResult.text, {
+              isTruncated: pdfResult.isTruncated,
+              pageCharCounts,
+            })
+          ) {
             preExtractedPdfText = pdfResult.text;
             preExtractedPdfTextLength = pdfResult.text.length;
             aiLog.info("Đã đọc trước lớp văn bản PDF, bỏ qua Gemini Files API", {
               traceId,
               textCharacters: pdfResult.text.length,
               pageCount: pdfResult.pageCount,
+              inspectedPages: pageCharCounts?.length,
+              firstPageChars,
+              minPageChars,
+              sizeBytes: buffer.length,
+            });
+          } else if (pdfResult) {
+            aiLog.info("Lớp văn bản PDF không đủ điều kiện an toàn, chuyển sang đọc tài liệu gốc", {
+              traceId,
+              textCharacters: pdfResult.text.length,
+              pageCount: pdfResult.pageCount,
+              inspectedPages: pageCharCounts?.length,
+              firstPageChars,
+              minPageChars,
+              isTruncated: Boolean(pdfResult.isTruncated),
               sizeBytes: buffer.length,
             });
           }
@@ -861,6 +894,9 @@ export async function extractContractAction(
           pdfTextAttempted: pdfTextExtractionAttempted,
           remainingBudgetMs: remainingExtractBudgetMs,
           traceId,
+          onTelemetry: (telemetry) => {
+            telemetryRef.current = telemetry;
+          },
         }),
       { sizeBytes: buffer.length, mimeType: resolvedMime },
     );
@@ -1021,6 +1057,7 @@ export async function extractContractAction(
         void cleanup();
       }
     }
+    const extractionTelemetry = telemetryRef.current;
     aiLog.info("Trích xuất hợp đồng kết thúc", {
       traceId,
       outcome: actionStatus,
@@ -1035,6 +1072,14 @@ export async function extractContractAction(
       usedPdfText: preExtractedPdfTextLength !== null,
       pdfTextCharacters: pdfTextCharacters ?? undefined,
       usedFilesApi: Boolean(geminiFileUri),
+      inputMode: extractionTelemetry?.inputMode,
+      modelUsed: extractionTelemetry?.modelUsed,
+      attemptCount: extractionTelemetry?.attemptCount,
+      httpStatuses: extractionTelemetry?.httpStatuses,
+      finishReason: extractionTelemetry?.finishReason,
+      inputTokens: extractionTelemetry?.inputTokens,
+      outputTokens: extractionTelemetry?.outputTokens,
+      thoughtTokens: extractionTelemetry?.thoughtTokens,
     });
   }
 }

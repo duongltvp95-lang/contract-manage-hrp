@@ -14,12 +14,19 @@ import { clientLog } from "@/lib/ai/log-client";
 import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
 import {
   ALLOWED_MIME_TYPES,
+  computeModelAttemptTimeoutMs,
   detectAppendixMetadata,
   extractContractFromBuffer,
   getGeminiModels,
   MAX_AI_FILE_SIZE_BYTES,
+  type AiExtractionTelemetry,
 } from "@/lib/ai/gemini";
-import { extractPdfText, isUsableContractPdfText } from "@/lib/ai/pdf-text";
+import {
+  extractPdfText,
+  isUsableContractPdfText,
+  PDF_TEXT_MAX_CHARACTERS,
+  PDF_TEXT_MAX_PAGES,
+} from "@/lib/ai/pdf-text";
 import { hasAppendixKeyword } from "@schemas/file";
 import {
   hasMatchingMainContractFile,
@@ -409,21 +416,24 @@ describe("G2 v2 — extractContractFromBuffer với 3 nhánh", () => {
   });
 });
 
-describe("G2 v2 — Cấu hình model & fallback", () => {
+describe("G2 v2 — Cấu hình model, timeout & fallback", () => {
   const ORIGINAL_MODEL = process.env.GEMINI_MODEL;
+  const ORIGINAL_MODELS = process.env.GEMINI_MODELS;
 
   afterEach(() => {
     if (ORIGINAL_MODEL === undefined) delete process.env.GEMINI_MODEL;
     else process.env.GEMINI_MODEL = ORIGINAL_MODEL;
+    if (ORIGINAL_MODELS === undefined) delete process.env.GEMINI_MODELS;
+    else process.env.GEMINI_MODELS = ORIGINAL_MODELS;
   });
 
-  it("mặc định ưu tiên gemini-3.5-flash-lite ổn định và fallback gemini-3.8-flash cố định (GA)", () => {
+  it("mặc định ưu tiên gemini-3.1-flash-lite và fallback gemini-3.5-flash-lite (GA)", () => {
     delete process.env.GEMINI_MODEL;
+    delete process.env.GEMINI_MODELS;
     const models = getGeminiModels();
-    expect(models[0]).toBe("gemini-3.5-flash-lite");
-    expect(models).toContain("gemini-3.8-flash");
-    expect(models).toHaveLength(2);
-    // Không chứa alias tự đổi mục tiêu, model preview hay model đã shutdown/deprecated/restricted
+    expect(models).toEqual(["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]);
+    // Không chứa alias tự đổi mục tiêu, model preview hay model có tỷ lệ lỗi cao/restricted
+    expect(models).not.toContain("gemini-3.8-flash");
     expect(models).not.toContain("gemini-flash-latest");
     expect(models).not.toContain("gemini-3-flash-preview");
     expect(models).not.toContain("gemini-1.5-flash");
@@ -432,12 +442,43 @@ describe("G2 v2 — Cấu hình model & fallback", () => {
   });
 
   it("cấu hình GEMINI_MODEL ưu tiên model cấu hình mà không bị trùng lặp", () => {
-    process.env.GEMINI_MODEL = "gemini-3.8-flash";
+    delete process.env.GEMINI_MODELS;
+    process.env.GEMINI_MODEL = "gemini-3.5-flash-lite";
     const models = getGeminiModels();
-    expect(models[0]).toBe("gemini-3.8-flash");
-    // Không bị xuất hiện 2 lần
-    expect(models.filter((m) => m === "gemini-3.8-flash")).toHaveLength(1);
-    expect(models).toContain("gemini-3.5-flash-lite");
+    expect(models[0]).toBe("gemini-3.5-flash-lite");
+    expect(models.filter((m) => m === "gemini-3.5-flash-lite")).toHaveLength(1);
+    expect(models).toContain("gemini-3.1-flash-lite");
+  });
+
+  it("cấu hình GEMINI_MODELS hỗ trợ danh sách phân tách dấu phẩy và khử trùng lặp", () => {
+    process.env.GEMINI_MODELS = " gemini-3.5-flash-lite , gemini-3.1-flash-lite , gemini-3.5-flash-lite ";
+    const models = getGeminiModels();
+    expect(models).toEqual(["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]);
+  });
+
+  it("tách trần timeout theo chế độ đầu vào (text thuần nhanh vs binary/scan)", () => {
+    // Text thuần: giới hạn 9s ở lượt đầu để chuyển dự phòng sớm nếu treo
+    const textPrimary = computeModelAttemptTimeoutMs({
+      remainingTimeMs: 32_000,
+      remainingModelsCount: 2,
+      isTextOnly: true,
+    });
+    expect(textPrimary).toBe(9_000);
+
+    // Binary/Vision: cho phép tới 18s ở lượt đầu nhưng vẫn chừa >= 10s cho model dự phòng
+    const binaryPrimary = computeModelAttemptTimeoutMs({
+      remainingTimeMs: 32_000,
+      remainingModelsCount: 2,
+      isTextOnly: false,
+    });
+    expect(binaryPrimary).toBe(18_000);
+
+    const binaryTighter = computeModelAttemptTimeoutMs({
+      remainingTimeMs: 22_000,
+      remainingModelsCount: 2,
+      isTextOnly: false,
+    });
+    expect(binaryTighter).toBe(12_000);
   });
 });
 
@@ -836,18 +877,216 @@ describe("G2 v2 — Khóa lưu hợp đồng khi tải lên Phụ lục chưa c�
     it("extractContractFromBuffer không gọi lại extractPdfText khi pdfTextAttempted = true", async () => {
       const pdfTextModule = await import("@/lib/ai/pdf-text");
       const extractSpy = vi.spyOn(pdfTextModule, "extractPdfText");
+      const originalKey = process.env.GEMINI_API_KEY;
+      delete process.env.GEMINI_API_KEY;
 
-      // Gọi với pdfTextAttempted: true (mô phỏng actions.ts đã parse trước đó)
-      await extractContractFromBuffer({
-        buffer: Buffer.from("dummy-pdf-content"),
-        mimeType: "application/pdf",
-        filename: "scan.pdf",
-        pdfTextAttempted: true,
-      });
+      try {
+        // Gọi với pdfTextAttempted: true (mô phỏng actions.ts đã parse trước đó)
+        await extractContractFromBuffer({
+          buffer: Buffer.from("dummy-pdf-content"),
+          mimeType: "application/pdf",
+          filename: "scan.pdf",
+          pdfTextAttempted: true,
+        });
 
-      // extractPdfText cục bộ trong gemini.ts KHÔNG được gọi lại
-      expect(extractSpy).not.toHaveBeenCalled();
-      extractSpy.mockRestore();
+        // extractPdfText cục bộ trong gemini.ts KHÔNG được gọi lại
+        expect(extractSpy).not.toHaveBeenCalled();
+      } finally {
+        if (originalKey === undefined) delete process.env.GEMINI_API_KEY;
+        else process.env.GEMINI_API_KEY = originalKey;
+        extractSpy.mockRestore();
+      }
+    });
+
+    it("mở rộng ngưỡng đọc PDF có chữ lên 30 trang / 50.000 ký tự nhưng vẫn giữ nguyên bảo vệ cắt ngắn", () => {
+      expect(PDF_TEXT_MAX_PAGES).toBe(30);
+      expect(PDF_TEXT_MAX_CHARACTERS).toBe(50_000);
+
+      // Hợp đồng 12 trang (~24.000 ký tự, vượt ngưỡng cũ 10 trang / 12.000 ký tự nhưng dưới 30 trang / 50.000 ký tự)
+      const multiPageClause =
+        "Điều khoản chi tiết về quyền và nghĩa vụ của Bên A (CÔNG TY TNHH HRP VIỆT NAM) và Bên B (CÔNG TY CỔ PHẦN ĐỐI TÁC SAO MAI), tiến độ thanh toán và hiệu lực thực hiện hợp đồng dịch vụ. ";
+      const longDigitalContract =
+        "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nĐộc lập - Tự do - Hạnh phúc\nHỢP ĐỒNG DỊCH VỤ SỐ: 2026/HĐDV-HRP\n" +
+        multiPageClause.repeat(130);
+
+      expect(longDigitalContract.length).toBeGreaterThan(12_000);
+      expect(longDigitalContract.length).toBeLessThan(50_000);
+      expect(
+        isUsableContractPdfText(longDigitalContract, {
+          isTruncated: false,
+          pageCharCounts: Array.from({ length: 12 }, () => 2_000),
+        }),
+      ).toBe(true);
+
+      // Khi vượt 30 trang hoặc 50.000 ký tự (isTruncated = true) → bắt buộc trả false để gửi file gốc
+      expect(
+        isUsableContractPdfText(longDigitalContract, {
+          isTruncated: true,
+          pageCharCounts: Array.from({ length: 30 }, () => 1_700),
+        }),
+      ).toBe(false);
+    });
+
+    it("từ chối PDF lai (trộn trang có chữ và trang scan rỗng/watermark) qua pageCharCounts", async () => {
+      const legalText = `
+        CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM
+        Độc lập - Tự do - Hạnh phúc
+        HỢP ĐỒNG DỊCH VỤ TƯ VẤN SỐ: 100/2026/HĐDV
+        Căn cứ Bộ luật Dân sự số 91/2015/QH13;
+        Bên A: CÔNG TY TNHH HRP VIỆT NAM
+        Bên B: CÔNG TY CỔ PHẦN CÔNG NGHỆ ABC
+        Điều 1: Phạm vi công việc và thanh toán.
+      `;
+
+      // Trang 1 là bìa scan (0 ký tự) còn các trang sau có chữ → phải trả false để không mất tiêu đề/số hiệu trang 1
+      expect(
+        isUsableContractPdfText(legalText, {
+          isTruncated: false,
+          pageCharCounts: [0, 2_500, 2_400],
+        }),
+      ).toBe(false);
+
+      // Trang cuối là trang chữ ký đóng dấu scan hoặc chỉ có watermark (< 30 ký tự) → phải trả false để không mất ngày ký tay
+      expect(
+        isUsableContractPdfText(legalText, {
+          isTruncated: false,
+          pageCharCounts: [1_800, 2_200, 23],
+        }),
+      ).toBe(false);
+
+      // PDF thật 2 trang (tự động tính chính xác /Length và bảng xref):
+      // trang 1 có text layer hợp lệ (82 ký tự), trang 2 là trang scan rỗng (0 ký tự)
+      const p1Text =
+        "HOP DONG DICH VU SO 88/2026/HDDV BEN A CONG TY TNHH HRP VIET NAM DIEU 1 THANH TOAN";
+      const streamBody = `BT\n/F1 8 Tf\n36 712 Td\n(${p1Text}) Tj\nET`;
+      const pdfObjects = [
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        "2 0 obj\n<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>\nendobj\n",
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n",
+        "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        `5 0 obj\n<< /Length ${Buffer.byteLength(streamBody)} >>\nstream\n${streamBody}\nendstream\nendobj\n`,
+        "6 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n",
+      ];
+      let pdfRaw = "%PDF-1.4\n";
+      const offsets: number[] = [];
+      for (const obj of pdfObjects) {
+        offsets.push(Buffer.byteLength(pdfRaw));
+        pdfRaw += obj;
+      }
+      const xrefOffset = Buffer.byteLength(pdfRaw);
+      pdfRaw += `xref\n0 ${pdfObjects.length + 1}\n0000000000 65535 f \n`;
+      for (const off of offsets) {
+        pdfRaw += `${String(off).padStart(10, "0")} 00000 n \n`;
+      }
+      pdfRaw += `trailer\n<< /Size ${pdfObjects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+
+      const parsedHybrid = await extractPdfText(Buffer.from(pdfRaw));
+      expect(parsedHybrid).not.toBeNull();
+      expect(parsedHybrid?.pageCount).toBe(2);
+      expect(parsedHybrid?.pageCharCounts).toEqual([p1Text.length, 0]);
+      expect(
+        isUsableContractPdfText("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\n" + legalText, {
+          isTruncated: parsedHybrid?.isTruncated,
+          pageCharCounts: parsedHybrid?.pageCharCounts,
+        }),
+      ).toBe(false);
+    });
+  });
+});
+
+describe("Step 1 Telemetry & Fallback 503 (gemini-3.1-flash-lite → gemini-3.5-flash-lite)", () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  const ORIGINAL_KEY = process.env.GEMINI_API_KEY;
+  const ORIGINAL_MODEL = process.env.GEMINI_MODEL;
+  const ORIGINAL_MODELS = process.env.GEMINI_MODELS;
+
+  beforeEach(() => {
+    process.env.GEMINI_API_KEY = "test-key";
+    delete process.env.GEMINI_MODEL;
+    delete process.env.GEMINI_MODELS;
+    fetchSpy = vi.spyOn(global, "fetch");
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    if (ORIGINAL_KEY === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = ORIGINAL_KEY;
+    if (ORIGINAL_MODEL === undefined) delete process.env.GEMINI_MODEL;
+    else process.env.GEMINI_MODEL = ORIGINAL_MODEL;
+    if (ORIGINAL_MODELS === undefined) delete process.env.GEMINI_MODELS;
+    else process.env.GEMINI_MODELS = ORIGINAL_MODELS;
+  });
+
+  it("chuyển sang gemini-3.5-flash-lite khi gemini-3.1-flash-lite trả 503 và ghi nhận đầy đủ telemetry", async () => {
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: { message: "This model is currently experiencing high demand.", status: "UNAVAILABLE" },
+          }),
+          { status: 503 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                finishReason: "STOP",
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        firstPageTitle: "HỢP ĐỒNG DỊCH VỤ",
+                        documentType: "contract",
+                        contractNumber: "503-FB/2026",
+                        signedDate: "2026-04-01",
+                        expiryDate: "2027-04-01",
+                        durationText: "1 năm",
+                        companyName: "CÔNG TY TNHH HRP VIỆT NAM",
+                        partnerName: "CÔNG TY TNHH ĐỐI TÁC XYZ",
+                        partnerTaxCode: "0108889999",
+                        summary: "Hợp đồng cung cấp dịch vụ nhân sự.",
+                      }),
+                    },
+                  ],
+                },
+              },
+            ],
+            usageMetadata: {
+              promptTokenCount: 1420,
+              candidatesTokenCount: 215,
+              thoughtsTokenCount: 0,
+            },
+          }),
+          { status: 200 },
+        ),
+      );
+
+    let capturedTelemetry: AiExtractionTelemetry | null = null;
+    const result = await extractContractFromBuffer({
+      buffer: Buffer.from("pdf-bytes"),
+      mimeType: "application/pdf",
+      filename: "hd_503.pdf",
+      pdfText: "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM\nHỢP ĐỒNG DỊCH VỤ SỐ 503-FB/2026...",
+      onTelemetry: (t) => {
+        capturedTelemetry = t;
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect((fetchSpy.mock.calls[0] as [string])[0]).toContain("models/gemini-3.1-flash-lite:generateContent");
+    expect((fetchSpy.mock.calls[1] as [string])[0]).toContain("models/gemini-3.5-flash-lite:generateContent");
+    expect(capturedTelemetry).toEqual({
+      inputMode: "pdf-text",
+      modelUsed: "gemini-3.5-flash-lite",
+      attemptCount: 2,
+      httpStatuses: [503, 200],
+      finishReason: "STOP",
+      inputTokens: 1420,
+      outputTokens: 215,
+      thoughtTokens: 0,
     });
   });
 });

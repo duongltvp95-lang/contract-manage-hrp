@@ -547,6 +547,8 @@ export function ContractForm({
 
     const clientStartedAt = Date.now();
     const traceId = crypto.randomUUID();
+    let presignMs: number | undefined;
+    let clientR2UploadMs: number | undefined;
     try {
       const formData = new FormData();
       formData.append("traceId", traceId);
@@ -556,6 +558,7 @@ export function ContractForm({
       if (fileItem.file.size > AI_DIRECT_ACTION_MAX_BYTES) {
         toast.loading(`Đang chuẩn bị tệp "${fileItem.file.name}"...`, { id: "ai-extract" });
 
+        const presignStartedAt = Date.now();
         const presignRes = await fetch("/api/ai/upload-url", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -580,6 +583,8 @@ export function ContractForm({
           objectKey: string;
           mimeType?: string;
         };
+        presignMs = Date.now() - presignStartedAt;
+        formData.append("clientPresignMs", String(presignMs));
 
         const targetMime = serverMime || fileItem.file.type || "application/pdf";
 
@@ -590,7 +595,8 @@ export function ContractForm({
             toast.loading(`Đang tải lên "${fileItem.file.name}": ${p.percent}%...`, { id: "ai-extract" });
           },
         });
-        formData.append("clientR2UploadMs", String(Date.now() - uploadStartedAt));
+        clientR2UploadMs = Date.now() - uploadStartedAt;
+        formData.append("clientR2UploadMs", String(clientR2UploadMs));
 
         formData.append("objectKey", objectKey);
         formData.append("filename", fileItem.file.name);
@@ -599,17 +605,23 @@ export function ContractForm({
         formData.append("file", fileItem.file);
       }
 
+      const source = formData.has("objectKey") ? "r2" : "server-action";
       toast.loading(`AI đang đọc nội dung "${fileItem.file.name}"...`, { id: "ai-extract" });
+      const serverActionStartedAt = Date.now();
       const result = await extractContractAction(formData);
-      clientLog.info("Hoàn tất yêu cầu trích xuất AI", {
-        traceId,
-        outcome: result.ok ? "success" : "error",
-        elapsedMs: Date.now() - clientStartedAt,
-        sizeBytes: fileItem.file.size,
-        source: formData.has("objectKey") ? "r2" : "server-action",
-      });
+      const serverActionMs = Date.now() - serverActionStartedAt;
 
       if (!result.ok) {
+        clientLog.info("Hoàn tất yêu cầu trích xuất AI", {
+          traceId,
+          outcome: "error",
+          presignMs,
+          clientR2UploadMs,
+          serverActionMs,
+          elapsedMs: Date.now() - clientStartedAt,
+          sizeBytes: fileItem.file.size,
+          source,
+        });
         extractionHadErrorRef.current = true;
         setHasExtractionError(true);
         if (result.code === "rate_limited" || result.code === "rate_limit_unavailable") {
@@ -674,6 +686,20 @@ export function ContractForm({
 
           extractionHadErrorRef.current = false;
           setHasExtractionError(false);
+          const totalToFormFilledMs = Date.now() - clientStartedAt;
+          clientLog.info("Hoàn tất yêu cầu trích xuất AI", {
+            traceId,
+            outcome: "success",
+            presignMs,
+            clientR2UploadMs,
+            serverActionMs,
+            totalToFormFilledMs,
+            elapsedMs: totalToFormFilledMs,
+            documentType: data.documentType,
+            autoAttachAppendix: true,
+            sizeBytes: fileItem.file.size,
+            source,
+          });
           // Hợp đồng gốc ĐÃ CÓ TRÊN HỆ THỐNG:
           // AI phân tích và tự động gán phụ lục vào hợp đồng gốc này
           toast.dismiss("ai-extract");
@@ -906,12 +932,29 @@ export function ContractForm({
         setHasExtractionError(false);
       }
 
+      const totalToFormFilledMs = Date.now() - clientStartedAt;
+      clientLog.info("Hoàn tất yêu cầu trích xuất AI", {
+        traceId,
+        outcome: "success",
+        presignMs,
+        clientR2UploadMs,
+        serverActionMs,
+        totalToFormFilledMs,
+        elapsedMs: totalToFormFilledMs,
+        filledFieldCount: filledFields.length,
+        documentType: data.documentType,
+        sizeBytes: fileItem.file.size,
+        source,
+      });
+
       return data;
     } catch (err) {
       extractionHadErrorRef.current = true;
       setHasExtractionError(true);
       clientLog.error("executeExtraction thất bại", {
         traceId,
+        presignMs,
+        clientR2UploadMs,
         elapsedMs: Date.now() - clientStartedAt,
         sizeBytes: fileItem.file.size,
         errorMessage: err instanceof Error ? err.message : String(err),

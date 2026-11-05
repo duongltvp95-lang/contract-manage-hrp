@@ -22,12 +22,18 @@ export type PdfTextResult = {
   text: string;
   pageCount: number;
   isTruncated?: boolean;
+  /** Độ dài văn bản (sau trim) trên từng trang đã đọc (1..pagesRead). */
+  pageCharCounts?: number[];
 };
 
 const MIN_TEXT_LENGTH = 50; // < 50 ký tự coi như scan
 const TIMEOUT_MS = 8_000;
-const DEFAULT_MAX_PAGES = 20;
-const DEFAULT_MAX_CHARACTERS = 24_000;
+export const PDF_TEXT_MAX_PAGES = 30;
+export const PDF_TEXT_MAX_CHARACTERS = 50_000;
+const DEFAULT_MAX_PAGES = PDF_TEXT_MAX_PAGES;
+const DEFAULT_MAX_CHARACTERS = PDF_TEXT_MAX_CHARACTERS;
+const MIN_FIRST_PAGE_CHARS = 80;
+const MIN_ANY_PAGE_CHARS = 30;
 
 export type PdfTextLimits = {
   maxPages?: number;
@@ -112,6 +118,7 @@ export async function extractPdfText(
       }
 
       const pageTexts: string[] = [];
+      const pageCharCounts: number[] = [];
       let outputCharacters = 0;
       let textTruncated = false;
       const pagesToRead = Math.min(pdf.numPages, maxPages);
@@ -157,6 +164,7 @@ export async function extractPdfText(
         }
 
         const pageText = itemTexts.join(" ").trim();
+        pageCharCounts.push(pageText.length);
         if (pageText) {
           const pageSeparator = pageTexts.length > 0 ? "\n\n" : "";
           const remaining = maxCharacters - outputCharacters - pageSeparator.length;
@@ -187,7 +195,7 @@ export async function extractPdfText(
         return null;
       }
 
-      return { text: fullText, pageCount: pdf.numPages, isTruncated };
+      return { text: fullText, pageCount: pdf.numPages, isTruncated, pageCharCounts };
     };
 
     return await Promise.race([parseProcess(), timeoutPromise]);
@@ -203,23 +211,38 @@ export async function extractPdfText(
 
 export interface UsableTextOptions {
   isTruncated?: boolean;
+  pageCharCounts?: number[];
 }
 
 /**
  * Kiểm tra xem lớp văn bản trích xuất từ PDF có đủ chất lượng và nội dung pháp lý
  * để thay thế việc gửi hình ảnh/file gốc lên Gemini không.
- * Nếu text bị cắt ngắn (isTruncated), quá ngắn (< 250 ký tự), OCR nhiễu/rác, hoặc
- * thiếu các cấu trúc pháp lý cơ bản (tiêu đề, các bên, điều khoản), trả về false
- * để hệ thống gửi tệp gốc cho Gemini nhận diện thị giác/file đầy đủ.
+ * Nếu text bị cắt ngắn (isTruncated), có trang scan trộn lẫn (pageCharCounts có trang rỗng),
+ * quá ngắn (< 250 ký tự), OCR nhiễu/rác, hoặc thiếu các cấu trúc pháp lý cơ bản
+ * (tiêu đề, các bên, điều khoản), trả về false để hệ thống gửi tệp gốc cho Gemini
+ * nhận diện thị giác/file đầy đủ.
  */
 export function isUsableContractPdfText(
   text: string | null | undefined,
   options?: UsableTextOptions,
 ): boolean {
   if (options?.isTruncated) {
-    // Tài liệu vượt quá 10 trang hoặc 12.000 ký tự: gửi file gốc lên Gemini để
-    // xử lý toàn bộ các trang (tránh mất trang phụ lục/chữ ký sau trang 10).
+    // Tài liệu vượt quá ngưỡng trang/ký tự an toàn (30 trang / 50.000 ký tự):
+    // gửi file gốc lên Gemini để xử lý toàn bộ các trang, tránh mất điều khoản/chữ ký cuối.
     return false;
+  }
+  if (options?.pageCharCounts && options.pageCharCounts.length > 0) {
+    // Bảo vệ PDF lai (trộn trang Word + trang scan):
+    // - Trang 1 phải đủ văn bản để nhận diện tiêu đề (Hợp đồng vs Phụ lục) & số hiệu.
+    // - Mọi trang trong phạm vi đọc phải có lớp chữ tối thiểu; nếu bất kỳ trang nào
+    //   gần như rỗng (< 30 ký tự, vd trang bìa/trang ký đóng dấu scan hoặc watermark),
+    //   chuyển sang gửi toàn bộ PDF gốc để Gemini đọc thị giác đầy đủ.
+    if (options.pageCharCounts[0] < MIN_FIRST_PAGE_CHARS) {
+      return false;
+    }
+    if (options.pageCharCounts.some((count) => count < MIN_ANY_PAGE_CHARS)) {
+      return false;
+    }
   }
   if (!text) return false;
   const trimmed = text.trim();

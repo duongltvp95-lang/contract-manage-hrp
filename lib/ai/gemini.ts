@@ -7,11 +7,27 @@ import { calculateExpiryDateFromDuration, normalizeDurationText } from "@/lib/ai
 import { aiLog } from "@/lib/ai/log";
 
 export function getGeminiModels(): string[] {
-  const envModel = process.env.GEMINI_MODEL?.trim();
   const defaults = [
+    "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
-    "gemini-3.8-flash",
   ];
+
+  const envModelsRaw = process.env.GEMINI_MODELS?.trim();
+  if (envModelsRaw) {
+    const parsed = Array.from(
+      new Set(
+        envModelsRaw
+          .split(",")
+          .map((m) => m.trim())
+          .filter(Boolean),
+      ),
+    );
+    if (parsed.length > 0) {
+      return parsed;
+    }
+  }
+
+  const envModel = process.env.GEMINI_MODEL?.trim();
   if (envModel) {
     return [envModel, ...defaults.filter((m) => m !== envModel)];
   }
@@ -19,6 +35,50 @@ export function getGeminiModels(): string[] {
 }
 
 const MAX_MODEL_ATTEMPTS = 2;
+
+export type AiInputMode = "pdf-text" | "files-api" | "inline-base64";
+
+export type AiExtractionTelemetry = {
+  inputMode: AiInputMode;
+  modelUsed?: string;
+  attemptCount: number;
+  httpStatuses: number[];
+  finishReason?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  thoughtTokens?: number;
+};
+
+export function computeModelAttemptTimeoutMs({
+  remainingTimeMs,
+  remainingModelsCount,
+  isTextOnly,
+}: {
+  remainingTimeMs: number;
+  remainingModelsCount: number;
+  isTextOnly: boolean;
+}): number {
+  const safeAvailableMs = Math.max(4_000, remainingTimeMs - 1_500);
+  if (isTextOnly) {
+    const textCapMs = remainingModelsCount > 1 ? 9_000 : 10_000;
+    if (remainingModelsCount > 1 && remainingTimeMs >= 13_000) {
+      return Math.min(textCapMs, Math.max(4_500, remainingTimeMs - 7_500));
+    }
+    return Math.min(textCapMs, safeAvailableMs);
+  }
+
+  const binaryCapMs = 18_000;
+  if (remainingModelsCount > 1) {
+    if (remainingTimeMs >= 18_000) {
+      // Chừa tối thiểu ~10s (8s cho model dự phòng + 2s biên an toàn)
+      return Math.min(binaryCapMs, Math.max(8_000, remainingTimeMs - 10_000));
+    }
+    if (remainingTimeMs >= 12_000) {
+      return Math.max(5_000, Math.floor((remainingTimeMs - 2_000) / remainingModelsCount));
+    }
+  }
+  return Math.min(binaryCapMs, safeAvailableMs);
+}
 
 export const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
@@ -30,104 +90,84 @@ export const ALLOWED_MIME_TYPES = new Set([
 export { MAX_AI_FILE_SIZE_BYTES, MAX_AI_FILE_SIZE_MB };
 
 const EXTRACTION_SYSTEM_PROMPT = `Bạn là trợ lý AI chuyên gia phân tích hợp đồng kinh tế và pháp lý tại Việt Nam.
-Hãy đọc kỹ tài liệu đính kèm (có thể là văn bản Hợp đồng chính hoặc Phụ lục hợp đồng) và trích xuất các thông tin sau thành JSON cấu trúc chuẩn:
+Hãy đọc kỹ tài liệu (Hợp đồng chính hoặc Phụ lục hợp đồng) và trích xuất JSON chuẩn theo quy tắc bắt buộc sau:
 
-QUY ƯỚC BẮT BUỘC VỀ PHÂN LOẠI (CỰC KỲ QUAN TRỌNG):
-QUY ƯỚC CỦA HỆ THỐNG: MỌI PHỤ LỤC HỢP ĐỒNG ĐỀU SẼ CÓ TIÊU ĐỀ "PHỤ LỤC HỢP ĐỒNG" (HOẶC "PHỤ LỤC") Ở TRANG ĐẦU TIÊN (TRANG 1).
+1. PHÂN LOẠI TÀI LIỆU (documentType & firstPageTitle):
+- Nhìn dòng tiêu đề chính ở nửa trên TRANG ĐẦU TIÊN (trang 1):
+  + Nếu có "PHỤ LỤC HỢP ĐỒNG", "PHỤ LỤC", "PHỤ LỤC SỐ...", "APPENDIX", "ADDENDUM", "VĂN BẢN SỬA ĐỔI BỔ SUNG", "THỎA THUẬN GIA HẠN", "THỎA THUẬN SỬA ĐỔI":
+    * documentType = "appendix" (tuyệt đối không chọn "contract").
+    * firstPageTitle = tiêu đề chính xác ở trang 1 (vd: "PHỤ LỤC HỢP ĐỒNG SỐ 01").
+    * baseContractNumber = số hợp đồng gốc nêu ở phần căn cứ (vd: "Căn cứ Hợp đồng số 2024.03.01/HRVN - DONGYANG..." -> "2024.03.01/HRVN - DONGYANG"). Đây là số HỢP ĐỒNG GỐC, không phải số phụ lục.
+    * appendixNumber = số thứ tự phụ lục nếu có (vd: "01", "02", không có thì "").
+    * contractNumber = số riêng của phụ lục (vd: "PL-01"), nếu không có để "" hoặc "PL-" + appendixNumber.
+    * summary = bắt đầu bằng "Phụ lục hợp đồng...".
+  + Chỉ khi tiêu đề trang 1 là Hợp đồng chính ("HỢP ĐỒNG...", "CONTRACT", "AGREEMENT") và KHÔNG có chữ "PHỤ LỤC" ở trang 1:
+    * documentType = "contract", baseContractNumber = "", appendixNumber = "".
 
-1. PHÂN LOẠI TÀI LIỆU (documentType):
-- BƯỚC 1: HÃY NHÌN VÀO DÒNG TIÊU ĐỀ Ở NỬA TRÊN CỦA TRANG ĐẦU TIÊN (TRANG 1):
-  + Nếu trang 1 có dòng chữ tiêu đề: "PHỤ LỤC HỢP ĐỒNG", "PHỤ LỤC", "PHỤ LỤC HỢP ĐỒNG SỐ...", "PHỤ LỤC SỐ...", "APPENDIX", "ADDENDUM", "VĂN BẢN SỬA ĐỔI BỔ SUNG", "THỎA THUẬN GIA HẠN", "THỎA THUẬN SỬA ĐỔI":
-    -> ĐÂY CHẮC CHẮN 100% LÀ PHỤ LỤC HỢP ĐỒNG!
-    -> "documentType": BẮT BUỘC CHỌN "appendix". TUYỆT ĐỐI KHÔNG ĐƯỢC CHỌN "contract"!
-    -> "firstPageTitle": Ghi chính xác tiêu đề ở trang 1 (ví dụ: "PHỤ LỤC HỢP ĐỒNG SỐ 01" hoặc "PHỤ LỤC HỢP ĐỒNG").
-    -> "baseContractNumber": BẮT BUỘC trích xuất chính xác Số hợp đồng gốc được nhắc đến trong phần căn cứ (ví dụ: "Căn cứ Hợp đồng số 2024.03.01/HRVN - DONGYANG..." -> điền "2024.03.01/HRVN - DONGYANG", hoặc "Căn cứ Hợp đồng dịch vụ số 24022024/HRVN - STAR ENGINEERS..." -> điền "24022024/HRVN - STAR ENGINEERS"). Dù trong phần căn cứ có ghi "Căn cứ Hợp đồng...", đó là HỢP ĐỒNG GỐC, KHÔNG PHẢI số của phụ lục này!
-    -> "appendixNumber": Số thứ tự của phụ lục nếu có (ví dụ: "01", "02", "1", "PL-01", nếu không có để trống "").
-    -> "contractNumber": Số của phụ lục nếu có số riêng (ví dụ "PL-01"); nếu không có số riêng thì để trống "" hoặc điền "PL-" + appendixNumber.
-    -> "summary": BẮT ĐẦU bằng cụm từ: "Phụ lục hợp đồng..." (Ví dụ: "Phụ lục hợp đồng về việc gia hạn thời hạn...").
+2. NGÀY KÝ, NGÀY HẾT HẠN & THỜI HẠN:
+- signedDate, expiryDate: định dạng "YYYY-MM-DD" (không có thì "").
+- expiryDate: nếu không ghi ngày cụ thể nhưng có ngày ký/bắt đầu + thời hạn (vd ký 24/02/2024, thời hạn 1 năm -> "2025-02-24"; 6 tháng -> "2024-08-24"), BẮT BUỘC tự cộng để điền. Chỉ để "" khi vô thời hạn hoặc thiếu cả hai.
+- durationText: chỉ ghi số tháng/năm (vd: "6 tháng", "1 năm", "2 năm", "Không xác định thời hạn", hoặc ""). Không ghi khoảng ngày "Từ ... đến ..."; nếu chỉ có ngày bắt đầu-kết thúc thì quy đổi ra số tháng/năm (12 tháng -> "1 năm", 24 tháng -> "2 năm", 36 tháng -> "3 năm", "01 năm" -> "1 năm").
 
-  + CHỈ KHI TRANG ĐẦU TIÊN CÓ TIÊU ĐỀ LÀ "HỢP ĐỒNG", "HỢP ĐỒNG KINH TẾ", "HỢP ĐỒNG DỊCH VỤ", "HỢP ĐỒNG NGUYÊN TẮC", "HỢP ĐỒNG MUA BÁN", "CONTRACT", "AGREEMENT" VÀ HOÀN TOÀN KHÔNG CÓ CHỮ "PHỤ LỤC" Ở TRANG 1:
-    -> Mới được đặt documentType = "contract", firstPageTitle = "HỢP ĐỒNG...", baseContractNumber = "", appendixNumber = "".
-
-CÁC TRƯỜNG THÔNG TIN KHÁC:
-- signedDate: Ngày ký tài liệu theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2026-03-15", để trống "" nếu không tìm thấy)
-- expiryDate: Ngày hết hạn theo định dạng chuẩn "YYYY-MM-DD" (ví dụ: "2027-03-15").
-  QUY TẮC BẮT BUỘC VỀ NGÀY HẾT HẠN:
-  + Nếu tài liệu ghi rõ ngày hết hạn cụ thể, hãy điền ngày đó.
-  + Nếu tài liệu KHÔNG ghi ngày hết hạn cụ thể nhưng có ngày ký/bắt đầu và thời hạn (ví dụ: ngày ký 24/02/2024, thời hạn 1 năm), bạn PHẢI tự tính toán ngày hết hạn tương ứng để điền vào đây (ví dụ: 2024-02-24 + 1 năm -> "2025-02-24", hoặc 6 tháng -> "2024-08-24"). TUYỆT ĐỐI không để trống nếu đã có ngày ký và thời hạn!
-  + Chỉ để trống "" nếu tài liệu không có cả ngày hết hạn lẫn thời hạn, hoặc ghi "Không xác định thời hạn".
-- durationText: Thời hạn hiệu lực ghi dạng khoảng thời gian như số tháng hoặc số năm (ví dụ: "6 tháng", "1 năm", "2 năm", "3 năm", "Không xác định thời hạn", để trống "" nếu không có).
-  QUY TẮC BẮT BUỘC VỀ THỜI HẠN:
-  + TUYỆT ĐỐI KHÔNG ghi dạng khoảng ngày "Từ ngày ... đến ngày ..." hay ngày tháng cụ thể vào trường này.
-  + Nếu tài liệu chỉ ghi khoảng ngày bắt đầu và kết thúc (ví dụ: từ ngày 20/12/2025 đến ngày 20/12/2026), bạn PHẢI tự tính toán và quy đổi ra số tháng hoặc số năm tương ứng (ví dụ: tròn 12 tháng -> "1 năm", 24 tháng -> "2 năm", 6 tháng -> "6 tháng").
-  + Chuẩn hóa cách ghi: 12 tháng -> "1 năm", 24 tháng -> "2 năm", 36 tháng -> "3 năm", "01 năm" -> "1 năm", "02 năm" -> "2 năm".
-- companyName: Tên công ty nội bộ của chúng tôi (dù tài liệu ghi là Bên A hay Bên B).
-  QUY TẮC QUAN TRỌNG: Chúng tôi có 2 công ty nội bộ trên hệ thống:
-  1) "CÔNG TY TNHH HRP VIỆT NAM" (quy ước viết tắt là HRP)
-  2) "CÔNG TY TNHH HR PARTNER VIỆT NAM" (quy ước viết tắt là HR VN)
-  Bất kể tài liệu ghi công ty của chúng tôi là Bên A hay Bên B, hãy điền tên công ty của chúng tôi vào "companyName". TUYỆT ĐỐI KHÔNG ĐIỀN VÀO "partnerName"!
-- partnerName: Tên công ty/pháp nhân ĐỐI TÁC BÊN NGOÀI (bên còn lại giao dịch với công ty của chúng tôi, dù là Bên A hay Bên B). TUYỆT ĐỐI KHÔNG điền HRP, HRP Việt Nam, HR VN hay HR Partner Việt Nam vào đây.
-- partnerTaxCode: Mã số thuế của ĐỐI TÁC BÊN NGOÀI nếu có (chuỗi số, ví dụ: "0101234567", để trống "" nếu không có)
-- partnerAddress: Địa chỉ trụ sở của ĐỐI TÁC BÊN NGOÀI nếu có (để trống "" nếu không có)
-- summary: Tóm tắt ngắn gọn nội dung và phạm vi của văn bản trong 1-2 câu tiếng Việt.
-
-Chỉ trả về JSON hợp lệ khớp với cấu trúc trên.`;
+3. CHỦ THỂ HỢP ĐỒNG:
+- Hệ thống có 2 công ty nội bộ: "CÔNG TY TNHH HRP VIỆT NAM" (HRP) và "CÔNG TY TNHH HR PARTNER VIỆT NAM" (HR VN). Dù đứng Bên A hay Bên B, luôn điền công ty nội bộ vào companyName, TUYỆT ĐỐI không điền vào partnerName.
+- partnerName, partnerTaxCode, partnerAddress: thông tin pháp nhân ĐỐI TÁC BÊN NGOÀI giao dịch với công ty nội bộ (thiếu trường nào để "").`;
 
 const CONTRACT_RESPONSE_SCHEMA = {
   type: "OBJECT",
   properties: {
     firstPageTitle: {
       type: "STRING",
-      description: "Dòng tiêu đề chính của văn bản ở TRANG ĐẦU TIÊN (ví dụ: 'PHỤ LỤC HỢP ĐỒNG', 'PHỤ LỤC HỢP ĐỒNG SỐ 01', 'HỢP ĐỒNG DỊCH VỤ')",
+      description: "Tiêu đề chính ở trang 1",
     },
     documentType: {
       type: "STRING",
       enum: ["contract", "appendix"],
-      description: "Phân loại tài liệu: BẮT BUỘC chọn 'appendix' nếu TRANG ĐẦU TIÊN có tiêu đề 'PHỤ LỤC HỢP ĐỒNG' hoặc chứa chữ 'PHỤ LỤC'. Chỉ chọn 'contract' nếu tiêu đề trang đầu tiên là Hợp đồng chính.",
+      description: "'appendix' nếu trang 1 là Phụ lục/thỏa thuận sửa đổi gia hạn; 'contract' nếu là Hợp đồng chính",
     },
     baseContractNumber: {
       type: "STRING",
-      description: "Số hợp đồng gốc mà phụ lục tham chiếu tới, để trống '' nếu là hợp đồng chính",
+      description: "Số hợp đồng gốc được phụ lục tham chiếu ('' nếu là hợp đồng chính)",
     },
     appendixNumber: {
       type: "STRING",
-      description: "Số thứ tự phụ lục nếu có (vd '01', '02'), để trống '' nếu không có",
+      description: "Số thứ tự phụ lục (vd '01', '' nếu không có)",
     },
     contractNumber: {
       type: "STRING",
-      description: "Số hợp đồng hoặc số phụ lục, để trống '' nếu không có",
+      description: "Số hợp đồng hoặc số phụ lục ('' nếu không có)",
     },
     signedDate: {
       type: "STRING",
-      description: "Ngày ký hợp đồng YYYY-MM-DD, để trống '' nếu không tìm thấy",
+      description: "Ngày ký YYYY-MM-DD ('' nếu không có)",
     },
     expiryDate: {
       type: "STRING",
-      description: "Ngày hết hạn hợp đồng YYYY-MM-DD, để trống '' nếu không có",
+      description: "Ngày hết hạn YYYY-MM-DD ('' nếu không có)",
     },
     durationText: {
       type: "STRING",
-      description: "Thời hạn hiệu lực ghi dạng số tháng hoặc số năm (vd '1 năm', '6 tháng')",
+      description: "Thời hạn dạng số tháng/năm (vd '1 năm', '6 tháng')",
     },
     companyName: {
       type: "STRING",
-      description: "Tên công ty nội bộ: 'CÔNG TY TNHH HRP VIỆT NAM' hoặc 'CÔNG TY TNHH HR PARTNER VIỆT NAM'",
+      description: "Tên công ty nội bộ (HRP Việt Nam hoặc HR Partner Việt Nam)",
     },
     partnerName: {
       type: "STRING",
-      description: "Tên công ty đối tác bên ngoài",
+      description: "Tên pháp nhân đối tác bên ngoài",
     },
     partnerTaxCode: {
       type: "STRING",
-      description: "Mã số thuế của đối tác bên ngoài",
+      description: "Mã số thuế đối tác bên ngoài",
     },
     partnerAddress: {
       type: "STRING",
-      description: "Địa chỉ của đối tác bên ngoài",
+      description: "Địa chỉ trụ sở đối tác bên ngoài",
     },
     summary: {
       type: "STRING",
-      description: "Tóm tắt ngắn gọn nội dung và phạm vi tài liệu trong 1-2 câu",
+      description: "Tóm tắt nội dung chính trong 1-2 câu tiếng Việt",
     },
   },
   required: [
@@ -382,6 +422,7 @@ export async function extractContractFromBuffer({
   pdfTextAttempted,
   remainingBudgetMs = 32_000,
   traceId,
+  onTelemetry,
 }: {
   buffer: Buffer;
   mimeType: string;
@@ -398,6 +439,8 @@ export async function extractContractFromBuffer({
   remainingBudgetMs?: number;
   /** Correlates stage logs for one extraction without logging contract content. */
   traceId?: string;
+  /** Callback nhận thông số đo lường model/token/attempt (không chứa nội dung hợp đồng). */
+  onTelemetry?: (telemetry: AiExtractionTelemetry) => void;
 }): Promise<ServiceResult<ExtractedContract>> {
   const extractStartTime = Date.now();
   const extractDeadline = extractStartTime + remainingBudgetMs;
@@ -442,14 +485,25 @@ export async function extractContractFromBuffer({
       // Giới hạn parse cục bộ để tiết kiệm ngân sách
       const remainingBeforePdf = extractDeadline - Date.now() - 6_000;
       if (remainingBeforePdf >= 2_000) {
-        const { extractPdfText, isUsableContractPdfText } = await import("@/lib/ai/pdf-text");
-        const pdfTimeout = Math.min(1_500, remainingBeforePdf);
+        const {
+          extractPdfText,
+          isUsableContractPdfText,
+          PDF_TEXT_MAX_CHARACTERS,
+          PDF_TEXT_MAX_PAGES,
+        } = await import("@/lib/ai/pdf-text");
+        const pdfTimeout = Math.min(2_500, remainingBeforePdf);
         const pdfResult = await extractPdfText(
           buffer,
           pdfTimeout,
-          { maxPages: 10, maxCharacters: 12_000 },
+          { maxPages: PDF_TEXT_MAX_PAGES, maxCharacters: PDF_TEXT_MAX_CHARACTERS },
         );
-        if (pdfResult && isUsableContractPdfText(pdfResult.text, { isTruncated: pdfResult.isTruncated })) {
+        if (
+          pdfResult &&
+          isUsableContractPdfText(pdfResult.text, {
+            isTruncated: pdfResult.isTruncated,
+            pageCharCounts: pdfResult.pageCharCounts,
+          })
+        ) {
           extractedPdfText = pdfResult.text;
           pdfTextForModel = pdfResult.text;
           aiLog.info("Đọc lớp văn bản PDF hoàn tất", {
@@ -466,6 +520,8 @@ export async function extractContractFromBuffer({
             traceId,
             elapsedMs: Date.now() - pdfStartTime,
             sizeBytes: buffer.length,
+            pageCount: pdfResult?.pageCount,
+            isTruncated: Boolean(pdfResult?.isTruncated),
             usedFilesApi: false,
           });
         }
@@ -510,231 +566,277 @@ export async function extractContractFromBuffer({
     base64Data = buffer.toString("base64");
   }
 
+  const inputMode: AiInputMode = pdfTextForModel
+    ? "pdf-text"
+    : useFilesApi
+      ? "files-api"
+      : "inline-base64";
+  const telemetry: AiExtractionTelemetry = {
+    inputMode,
+    attemptCount: 0,
+    httpStatuses: [],
+  };
+
   let lastError = "Không thể kết nối tới dịch vụ AI Google Gemini.";
 
   // Thử tối đa các models trong danh sách nếu ngân sách thời gian thực tế vẫn còn đủ
   const models = getGeminiModels().slice(0, MAX_MODEL_ATTEMPTS);
 
-  for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
-    const model = models[modelIndex];
-    const remainingTime = extractDeadline - Date.now();
+  try {
+    for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
+      const model = models[modelIndex];
+      const remainingTime = extractDeadline - Date.now();
 
-    // Nếu thời gian còn lại dưới 5 giây, dừng ngay để không vượt quá giới hạn 60s của Vercel
-    if (remainingTime < 5_000) {
-      aiLog.warn("Hết ngân sách thời gian trích xuất AI, dừng fallback", {
-        traceId,
-        model,
-        elapsedSoFar: Date.now() - extractStartTime,
-        remainingBudgetMs,
-      });
-      lastError = "Quá thời gian thực thi cho phép. Vui lòng bấm trích xuất lại hoặc sử dụng tệp tài liệu ngắn hơn.";
-      break;
-    }
-
-    const remainingModelsCount = models.length - modelIndex;
-    const modelTimeoutMs = Math.min(
-      12_000,
-      Math.max(4_000, Math.floor((remainingTime - 4_000) / Math.max(1, remainingModelsCount))),
-    );
-    const startTime = Date.now();
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-
-    const filenameHint = filename ? `Tên tệp đính kèm: "${filename}"\n\n` : "";
-
-    // Build parts dựa trên luồng đã chọn.
-    const parts: Array<Record<string, unknown>> = [];
-
-    if (useFilesApi) {
-      // Files API: chỉ cần fileData + prompt. Body vài KB.
-      parts.push({
-        fileData: {
-          mimeType: resolvedMime,
-          fileUri: geminiFileUri,
-        },
-      });
-      parts.push({ text: `${filenameHint}${EXTRACTION_SYSTEM_PROMPT}` });
-    } else if (pdfTextForModel) {
-      // PDF có text layer: gửi văn bản thuần kèm system prompt đầy đủ.
-      parts.push({
-        text: `${filenameHint}Đây là nội dung văn bản được trích xuất từ tài liệu PDF:\n\n${pdfTextForModel}\n\n---\nYêu cầu trích xuất thông tin từ nội dung trên:`,
-      });
-      parts.push({ text: EXTRACTION_SYSTEM_PROMPT });
-    } else {
-      // Fallback: gửi base64 (ảnh hoặc PDF scan).
-      parts.push({
-        inlineData: {
-          mimeType: resolvedMime,
-          data: base64Data!,
-        },
-      });
-      parts.push({ text: `${filenameHint}${EXTRACTION_SYSTEM_PROMPT}` });
-    }
-
-    const requestBody = {
-      contents: [{ parts }],
-      generationConfig: {
-        // Kết quả JSON chỉ có metadata ngắn; giới hạn token tránh model sinh
-        // phần giải thích dài ngoài nhu cầu và giảm thời gian trả kết quả.
-        maxOutputTokens: 2_048,
-        responseMimeType: "application/json",
-        responseSchema: CONTRACT_RESPONSE_SCHEMA,
-      },
-    };
-
-    try {
-      aiLog.info("Đang trích xuất với model", {
-        traceId,
-        model,
-        useFilesApi,
-        modelTimeoutMs,
-        elapsedMs: Date.now() - startTime,
-      });
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(modelTimeoutMs),
-      });
-
-      if (response.ok) {
-        const result = (await response.json()) as {
-          candidates?: Array<{
-            content?: {
-              parts?: Array<{ text?: string }>;
-            };
-          }>;
-        };
-
-        const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!rawText) {
-          aiLog.warn("Model trả về nội dung rỗng", {
-            traceId,
-            model,
-            elapsedMs: Date.now() - startTime,
-          });
-          continue;
-        }
-
-        try {
-          const cleanedText = cleanJsonText(rawText);
-          const parsedJson = (JSON.parse(cleanedText) ?? {}) as Record<string, unknown>;
-
-          const signedIso = normalizeDateToIso(String(parsedJson.signedDate ?? ""));
-          let expiryIso = normalizeDateToIso(String(parsedJson.expiryDate ?? ""));
-          const normalizedDuration = normalizeDurationText({
-            durationText: String(parsedJson.durationText ?? "").trim(),
-            signedDate: signedIso,
-            expiryDate: expiryIso,
-          });
-
-          // Tự động tính ngày hết hạn nếu chưa có nhưng đã có ngày ký và thời hạn
-          if (!expiryIso && signedIso && normalizedDuration) {
-            expiryIso = calculateExpiryDateFromDuration(signedIso, normalizedDuration);
-          }
-
-          const docTypeRaw = String(parsedJson.documentType ?? "contract").toLowerCase();
-          const docTypeCandidate =
-            docTypeRaw.includes("appendix") || docTypeRaw.includes("phụ lục")
-              ? ("appendix" as const)
-              : ("contract" as const);
-
-          // Tinh chỉnh và chuẩn hóa phân loại Hợp đồng / Phụ lục qua bộ lọc đa lớp (AI + Heuristic + Filename + Text)
-          const classification = detectAppendixMetadata({
-            filename,
-            pdfText: extractedPdfText || pdfTextForModel,
-            rawExtracted: {
-              firstPageTitle: String(parsedJson.firstPageTitle ?? "").trim(),
-              documentType: docTypeCandidate,
-              contractNumber: String(parsedJson.contractNumber ?? "").trim(),
-              baseContractNumber: String(parsedJson.baseContractNumber ?? "").trim(),
-              appendixNumber: String(parsedJson.appendixNumber ?? "").trim(),
-              summary: String(parsedJson.summary ?? "").trim(),
-            },
-          });
-
-          const extracted: ExtractedContract = {
-            firstPageTitle: classification.firstPageTitle,
-            documentType: classification.documentType,
-            baseContractNumber: classification.baseContractNumber,
-            appendixNumber: classification.appendixNumber,
-            contractNumber: classification.contractNumber,
-            signedDate: signedIso,
-            expiryDate: expiryIso,
-            durationText: normalizedDuration,
-            partnerName: String(parsedJson.partnerName ?? "").trim(),
-            partnerTaxCode: String(parsedJson.partnerTaxCode ?? "").trim(),
-            partnerAddress: String(parsedJson.partnerAddress ?? "").trim(),
-            companyName: String(parsedJson.companyName ?? "").trim(),
-            summary: String(parsedJson.summary ?? "").trim(),
-          };
-
-          const validated = ExtractedContractSchema.safeParse(extracted);
-          if (!validated.success) {
-            throw new Error("Dữ liệu trích xuất không khớp schema hợp đồng");
-          }
-
-          aiLog.info("Trích xuất thành công", {
-            traceId,
-            model,
-            elapsedMs: Date.now() - startTime,
-            useFilesApi,
-          });
-          return ok(validated.data);
-        } catch (parseErr) {
-          aiLog.error("Parse JSON thất bại", {
-            traceId,
-            model,
-            rawTextLength: rawText.length,
-            errorMessage: String(parseErr),
-          });
-          continue;
-        }
-      }
-
-      const errorPayload = (await response.json().catch(() => null)) as {
-        error?: { message?: string; status?: string };
-      } | null;
-
-      lastError = errorPayload?.error?.message ?? `Lỗi HTTP ${response.status} từ Gemini API`;
-
-      // If the model is 503 (high demand) or 404 (model unavailable) or 429, continue to next fallback model
-      if (response.status === 404 || response.status === 429 || response.status >= 500) {
-        aiLog.warn("Model gặp lỗi HTTP, chuyển fallback", {
+      // Nếu thời gian còn lại dưới 5 giây, dừng ngay để không vượt quá giới hạn 60s của Vercel
+      if (remainingTime < 5_000) {
+        aiLog.warn("Hết ngân sách thời gian trích xuất AI, dừng fallback", {
           traceId,
           model,
-          statusCode: response.status,
+          elapsedSoFar: Date.now() - extractStartTime,
+          remainingBudgetMs,
+        });
+        lastError = "Quá thời gian thực thi cho phép. Vui lòng bấm trích xuất lại hoặc sử dụng tệp tài liệu ngắn hơn.";
+        break;
+      }
+
+      const remainingModelsCount = models.length - modelIndex;
+      const modelTimeoutMs = computeModelAttemptTimeoutMs({
+        remainingTimeMs: remainingTime,
+        remainingModelsCount,
+        isTextOnly: Boolean(pdfTextForModel),
+      });
+      const startTime = Date.now();
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+      const filenameHint = filename ? `Tên tệp đính kèm: "${filename}"\n\n` : "";
+
+      // Build parts dựa trên luồng đã chọn.
+      const parts: Array<Record<string, unknown>> = [];
+
+      if (useFilesApi) {
+        // Files API: chỉ cần fileData + prompt. Body vài KB.
+        parts.push({
+          fileData: {
+            mimeType: resolvedMime,
+            fileUri: geminiFileUri,
+          },
+        });
+        parts.push({ text: `${filenameHint}${EXTRACTION_SYSTEM_PROMPT}` });
+      } else if (pdfTextForModel) {
+        // PDF có text layer: gửi văn bản thuần kèm system prompt đầy đủ.
+        parts.push({
+          text: `${filenameHint}Đây là nội dung văn bản được trích xuất từ tài liệu PDF:\n\n${pdfTextForModel}\n\n---\nYêu cầu trích xuất thông tin từ nội dung trên:`,
+        });
+        parts.push({ text: EXTRACTION_SYSTEM_PROMPT });
+      } else {
+        // Fallback: gửi base64 (ảnh hoặc PDF scan).
+        parts.push({
+          inlineData: {
+            mimeType: resolvedMime,
+            data: base64Data!,
+          },
+        });
+        parts.push({ text: `${filenameHint}${EXTRACTION_SYSTEM_PROMPT}` });
+      }
+
+      const requestBody = {
+        contents: [{ parts }],
+        generationConfig: {
+          // Giữ mức 2.048 token để không bao giờ bị cắt JSON khi tên/địa chỉ song ngữ dài.
+          maxOutputTokens: 2_048,
+          responseMimeType: "application/json",
+          responseSchema: CONTRACT_RESPONSE_SCHEMA,
+        },
+      };
+
+      telemetry.attemptCount += 1;
+      telemetry.modelUsed = model;
+
+      try {
+        aiLog.info("Đang trích xuất với model", {
+          traceId,
+          model,
+          attempt: telemetry.attemptCount,
+          inputMode,
+          useFilesApi,
+          modelTimeoutMs,
+          elapsedMs: Date.now() - startTime,
+        });
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
+          body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(modelTimeoutMs),
+        });
+        telemetry.httpStatuses.push(response.status);
+
+        if (response.ok) {
+          const result = (await response.json()) as {
+            candidates?: Array<{
+              finishReason?: string;
+              content?: {
+                parts?: Array<{ text?: string }>;
+              };
+            }>;
+            usageMetadata?: {
+              promptTokenCount?: number;
+              candidatesTokenCount?: number;
+              thoughtsTokenCount?: number;
+            };
+          };
+
+          const finishReason = result.candidates?.[0]?.finishReason;
+          telemetry.finishReason = finishReason;
+          telemetry.inputTokens = result.usageMetadata?.promptTokenCount;
+          telemetry.outputTokens = result.usageMetadata?.candidatesTokenCount;
+          telemetry.thoughtTokens = result.usageMetadata?.thoughtsTokenCount;
+
+          const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (!rawText) {
+            aiLog.warn("Model trả về nội dung rỗng", {
+              traceId,
+              model,
+              attempt: telemetry.attemptCount,
+              finishReason,
+              elapsedMs: Date.now() - startTime,
+            });
+            continue;
+          }
+
+          try {
+            const cleanedText = cleanJsonText(rawText);
+            const parsedJson = (JSON.parse(cleanedText) ?? {}) as Record<string, unknown>;
+
+            const signedIso = normalizeDateToIso(String(parsedJson.signedDate ?? ""));
+            let expiryIso = normalizeDateToIso(String(parsedJson.expiryDate ?? ""));
+            const normalizedDuration = normalizeDurationText({
+              durationText: String(parsedJson.durationText ?? "").trim(),
+              signedDate: signedIso,
+              expiryDate: expiryIso,
+            });
+
+            // Tự động tính ngày hết hạn nếu chưa có nhưng đã có ngày ký và thời hạn
+            if (!expiryIso && signedIso && normalizedDuration) {
+              expiryIso = calculateExpiryDateFromDuration(signedIso, normalizedDuration);
+            }
+
+            const docTypeRaw = String(parsedJson.documentType ?? "contract").toLowerCase();
+            const docTypeCandidate =
+              docTypeRaw.includes("appendix") || docTypeRaw.includes("phụ lục")
+                ? ("appendix" as const)
+                : ("contract" as const);
+
+            // Tinh chỉnh và chuẩn hóa phân loại Hợp đồng / Phụ lục qua bộ lọc đa lớp (AI + Heuristic + Filename + Text)
+            const classification = detectAppendixMetadata({
+              filename,
+              pdfText: extractedPdfText || pdfTextForModel,
+              rawExtracted: {
+                firstPageTitle: String(parsedJson.firstPageTitle ?? "").trim(),
+                documentType: docTypeCandidate,
+                contractNumber: String(parsedJson.contractNumber ?? "").trim(),
+                baseContractNumber: String(parsedJson.baseContractNumber ?? "").trim(),
+                appendixNumber: String(parsedJson.appendixNumber ?? "").trim(),
+                summary: String(parsedJson.summary ?? "").trim(),
+              },
+            });
+
+            const extracted: ExtractedContract = {
+              firstPageTitle: classification.firstPageTitle,
+              documentType: classification.documentType,
+              baseContractNumber: classification.baseContractNumber,
+              appendixNumber: classification.appendixNumber,
+              contractNumber: classification.contractNumber,
+              signedDate: signedIso,
+              expiryDate: expiryIso,
+              durationText: normalizedDuration,
+              partnerName: String(parsedJson.partnerName ?? "").trim(),
+              partnerTaxCode: String(parsedJson.partnerTaxCode ?? "").trim(),
+              partnerAddress: String(parsedJson.partnerAddress ?? "").trim(),
+              companyName: String(parsedJson.companyName ?? "").trim(),
+              summary: String(parsedJson.summary ?? "").trim(),
+            };
+
+            const validated = ExtractedContractSchema.safeParse(extracted);
+            if (!validated.success) {
+              throw new Error("Dữ liệu trích xuất không khớp schema hợp đồng");
+            }
+
+            aiLog.info("Trích xuất thành công", {
+              traceId,
+              model,
+              attempt: telemetry.attemptCount,
+              inputMode,
+              elapsedMs: Date.now() - startTime,
+              useFilesApi,
+              finishReason,
+              inputTokens: telemetry.inputTokens,
+              outputTokens: telemetry.outputTokens,
+              thoughtTokens: telemetry.thoughtTokens,
+            });
+            return ok(validated.data);
+          } catch (parseErr) {
+            aiLog.error("Parse JSON thất bại", {
+              traceId,
+              model,
+              attempt: telemetry.attemptCount,
+              finishReason,
+              rawTextLength: rawText.length,
+              errorMessage: String(parseErr),
+            });
+            continue;
+          }
+        }
+
+        const errorPayload = (await response.json().catch(() => null)) as {
+          error?: { message?: string; status?: string };
+        } | null;
+
+        lastError = errorPayload?.error?.message ?? `Lỗi HTTP ${response.status} từ Gemini API`;
+
+        // If the model is 503 (high demand) or 404 (model unavailable) or 429, continue to next fallback model
+        if (response.status === 404 || response.status === 429 || response.status >= 500) {
+          aiLog.warn("Model gặp lỗi HTTP, chuyển fallback", {
+            traceId,
+            model,
+            attempt: telemetry.attemptCount,
+            statusCode: response.status,
+            lastError,
+            elapsedMs: Date.now() - startTime,
+          });
+          continue;
+        }
+
+        // Other client error (e.g. 400 or 401)
+        return err("validation", `AI lỗi (${response.status}): ${lastError}`);
+      } catch (networkError) {
+        telemetry.httpStatuses.push(0);
+        const isTimeout =
+          networkError instanceof Error &&
+          (networkError.name === "TimeoutError" || networkError.message.includes("timeout"));
+        lastError = isTimeout
+          ? `Quá thời gian chờ phản hồi (${Math.round(modelTimeoutMs / 1000)}s) từ model ${model}`
+          : networkError instanceof Error
+            ? networkError.message
+            : "Lỗi kết nối mạng";
+        aiLog.warn("Model gặp lỗi mạng, chuyển fallback", {
+          traceId,
+          model,
+          attempt: telemetry.attemptCount,
           lastError,
           elapsedMs: Date.now() - startTime,
         });
-        continue;
       }
-
-      // Other client error (e.g. 400 or 401)
-      return err("validation", `AI lỗi (${response.status}): ${lastError}`);
-    } catch (networkError) {
-      const isTimeout =
-        networkError instanceof Error &&
-        (networkError.name === "TimeoutError" || networkError.message.includes("timeout"));
-      lastError = isTimeout
-        ? `Quá thời gian chờ phản hồi (${Math.round(modelTimeoutMs / 1000)}s) từ model ${model}`
-        : networkError instanceof Error
-          ? networkError.message
-          : "Lỗi kết nối mạng";
-      aiLog.warn("Model gặp lỗi mạng, chuyển fallback", {
-        traceId,
-        model,
-        lastError,
-        elapsedMs: Date.now() - startTime,
-      });
     }
+
+    const friendlyError = lastError.toLowerCase().includes("high demand")
+      ? "Hệ thống Google Gemini hiện đang quá tải truy vấn tạm thời. Bạn vui lòng bấm nút trích xuất lại sau vài giây."
+      : lastError;
+
+    return err("validation", `Trích xuất AI thất bại: ${friendlyError}`);
+  } finally {
+    onTelemetry?.(telemetry);
   }
-
-  const friendlyError = lastError.toLowerCase().includes("high demand")
-    ? "Hệ thống Google Gemini hiện đang quá tải truy vấn tạm thời. Bạn vui lòng bấm nút trích xuất lại sau vài giây."
-    : lastError;
-
-  return err("validation", `Trích xuất AI thất bại: ${friendlyError}`);
 }
