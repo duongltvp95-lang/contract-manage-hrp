@@ -10,6 +10,7 @@ import { deletePartner, deletePartners, updatePartner } from "@/lib/services/par
 import { deleteContract, deleteContracts, listContracts, unarchiveContract } from "@/lib/services/contracts";
 import { countNoFileContracts } from "@/lib/services/dashboard";
 import { deleteContractFile } from "@/lib/services/files";
+import { getOrganization } from "@/lib/services/organizations";
 import { deleteUser, updateUser } from "@/lib/services/users";
 import { DEFAULT_QUERY } from "@/lib/contracts-query";
 
@@ -91,5 +92,19 @@ describe("review service regressions", () => {
     expect((await countNoFileContracts(org)).ok).toBe(false);
     expect(q.select).toHaveBeenCalledWith("id", { count: "exact", head: true });
     expect(q.eq).toHaveBeenCalledWith("has_files", false);
+  });
+  it("returns organization MST 2500754513 in OrganizationSummary", async () => {
+    const q = query({ id: org, name: "HR Partner", created_at: "2026-10-03T00:00:00.000Z" });
+    mocks.createClient.mockResolvedValue({ from: () => q });
+    const result = await getOrganization(org);
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        id: org,
+        name: "HR Partner",
+        taxCode: "2500754513",
+        createdAt: "2026-10-03T00:00:00.000Z",
+      },
+    });
   });
 });

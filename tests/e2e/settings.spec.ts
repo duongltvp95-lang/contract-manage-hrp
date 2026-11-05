@@ -102,6 +102,10 @@ test.describe("settings — user management", () => {
     await login(page);
     await gotoAndSettle(page, "/settings");
 
+    await expect(page.getByTestId("organization-tax-code")).toHaveText("2500754513");
+    await expect(page.locator("body")).toContainText("Mã số thuế (MST):");
+    await expect(page.locator("body")).not.toContainText("Mã tổ chức:");
+
     const section = page.getByTestId("user-management-section");
     await expect(section).toBeVisible();
     await expect(section).toContainText("Quản lý người dùng");
@@ -150,6 +154,7 @@ test.describe("settings — user management", () => {
 
     // The page renders — this is the settings page, not a redirect.
     await expect(page.getByRole("heading", { name: "Cài đặt", level: 1 })).toBeVisible();
+    await expect(page.getByTestId("organization-tax-code")).toHaveText("2500754513");
 
     // …without the administrator block: not hidden with CSS, absent from the
     // server-rendered HTML.
