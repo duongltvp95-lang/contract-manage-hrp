@@ -67,6 +67,15 @@ test.describe("authentication", () => {
     expect((await response.json()).code).toBe("unauthenticated");
   });
 
+  test("the former 2FA page redirects to settings without an OTP or enrollment link", async ({ page }) => {
+    await login(page);
+    await gotoAndSettle(page, "/auth/mfa");
+    await expect(page).toHaveURL(/\/settings$/);
+    await expect(page.getByRole("heading", { name: "Cài đặt", level: 1 })).toBeVisible();
+    await expect(page.locator("#mfa-code")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Bảo mật 2FA", exact: true })).toHaveCount(0);
+  });
+
   test.afterAll(async () => {
     await sweep(adminClient());
     expect(TEST_PREFIX).toBe("E2ETEST-");

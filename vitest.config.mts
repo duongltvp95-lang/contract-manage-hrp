@@ -10,8 +10,8 @@ const root = fileURLToPath(new URL("./", import.meta.url));
  *   unit        — pure logic only. No network, no secrets. This is what CI runs
  *                 on every push.
  *   integration — talks to the real Supabase project and to a real Next server.
- *                 Skipped (with a clear message) when `.env.local` is absent, so
- *                 a fork without credentials still gets a green unit run.
+ *                 Requires dedicated .env.test.local settings and a backend
+ *                 marker. Missing credentials fail setup; forks skip this CI job.
  *
  * The aliases mirror `tsconfig.json` so a test imports exactly what the app
  * imports (`@/lib/...`, `@schemas/...`).

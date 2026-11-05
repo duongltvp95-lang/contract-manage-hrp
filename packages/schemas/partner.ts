@@ -106,7 +106,8 @@ export const partnerStatusField = z.enum(PARTNER_STATUSES).optional();
  */
 export const partnerCompanyIdsField = z
   .array(z.string().uuid())
-  .min(1, "Chọn ít nhất một công ty");
+  .min(1, "Chọn ít nhất một công ty")
+  .max(100, "Chọn tối đa 100 công ty");
 
 /**
  * Plan: one required field, two optional fields, plus status + companies.
@@ -139,6 +140,7 @@ export const UpdatePartnerSchema = z.object({
   companyIds: z
     .array(z.string().uuid())
     .min(1, "Chọn ít nhất một công ty")
+  .max(100, "Chọn tối đa 100 công ty")
     .optional(),
 });
 

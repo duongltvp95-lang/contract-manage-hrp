@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
   Select,
@@ -57,6 +58,7 @@ export function UploadContractFileDialog({
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [kind, setKind] = useState<FileKind>(defaultKind);
+  const [baseContractNumber, setBaseContractNumber] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +74,7 @@ export function UploadContractFileDialog({
     setError(null);
     setIsUploading(false);
     setUploadAttempt(null);
+    setBaseContractNumber("");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -103,6 +106,10 @@ export function UploadContractFileDialog({
       setError("Vui lòng chọn tệp để tải lên.");
       return;
     }
+    if (kind === "appendix" && !baseContractNumber.trim()) {
+      setError("Vui lòng nhập số hợp đồng gốc của phụ lục để đối chiếu.");
+      return;
+    }
 
     setIsUploading(true);
     setProgress(5);
@@ -123,6 +130,7 @@ export function UploadContractFileDialog({
           mimeType,
           fileSize: selectedFile.size,
           kind,
+          baseContractNumber: kind === "appendix" ? baseContractNumber.trim() : undefined,
         });
         if (priorComplete.ok) {
           toast.success(`Đã tải lên tệp "${selectedFile.name}" thành công`);
@@ -141,6 +149,7 @@ export function UploadContractFileDialog({
         mimeType,
         fileSize: selectedFile.size,
         kind,
+        baseContractNumber: kind === "appendix" ? baseContractNumber.trim() : undefined,
         fileId: uploadAttempt?.fileId,
         uploadReservation: uploadAttempt?.uploadReservation,
       });
@@ -161,6 +170,7 @@ export function UploadContractFileDialog({
         mimeType,
         fileSize: selectedFile.size,
         kind,
+        baseContractNumber: kind === "appendix" ? baseContractNumber.trim() : undefined,
       });
 
       if (!completeRes.ok) {
@@ -238,6 +248,27 @@ export function UploadContractFileDialog({
               </SelectContent>
             </Select>
           </div>
+
+          {kind === "appendix" && (
+            <div className="space-y-2">
+              <Label htmlFor="appendix-base-contract-number">Số hợp đồng gốc</Label>
+              <Input
+                id="appendix-base-contract-number"
+                value={baseContractNumber}
+                maxLength={100}
+                disabled={isUploading}
+                onChange={(event) => {
+                  setBaseContractNumber(event.target.value);
+                  setUploadAttempt(null);
+                  setError(null);
+                }}
+                placeholder="Nhập số hợp đồng ghi trên phụ lục"
+              />
+              <p className="text-xs text-muted-foreground">
+                Số này phải khớp với hồ sơ hợp đồng đang nhận phụ lục.
+              </p>
+            </div>
+          )}
 
           {/* Vùng chọn tệp */}
           <div className="space-y-2">

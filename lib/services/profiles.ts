@@ -4,7 +4,6 @@ import { UpdateProfileSchema } from "@schemas/profile";
 
 import { createClient } from "@/lib/supabase/server";
 
-import { recordCurrentUserAudit } from "./audit-logs";
 import { dbError, err, ok, type ServiceResult } from "./types";
 
 /**
@@ -86,19 +85,6 @@ export async function updateProfile(
     background_color: string | null;
     sidebar_color: string | null;
   };
-
-  const changed: string[] = [];
-  if ("fullName" in raw) changed.push("fullName");
-  if ("accentColor" in raw) changed.push("accentColor");
-  if ("backgroundColor" in raw) changed.push("backgroundColor");
-  if ("sidebarColor" in raw) changed.push("sidebarColor");
-
-  await recordCurrentUserAudit({
-    action: "update_profile",
-    targetKind: "profile",
-    targetId: userId,
-    metadata: { changed },
-  });
 
   return ok({
     id: row.id,

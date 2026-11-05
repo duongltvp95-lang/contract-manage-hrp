@@ -1051,18 +1051,15 @@ export async function checkDuplicateContractAction(input: {
   const access = await authorized();
   if (!access.ok) return access.result;
 
-  const duplicate = await findDuplicateContract({
-    contractNumber: input.contractNumber,
-    signedDate: input.signedDate,
-    expiryDate: input.expiryDate,
-    organizationId: access.user.organizationId,
-  });
-
-  return {
-    ok: true,
-    data: {
-      isDuplicate: Boolean(duplicate),
-      contractId: duplicate?.id ?? null,
-    },
-  };
+  try {
+    const duplicate = await findDuplicateContract({
+      contractNumber: input.contractNumber,
+      signedDate: input.signedDate,
+      expiryDate: input.expiryDate,
+      organizationId: access.user.organizationId,
+    });
+    return { ok: true, data: { isDuplicate: Boolean(duplicate), contractId: duplicate?.id ?? null } };
+  } catch {
+    return { ok: false, code: "db_error", message: "Không thể kiểm tra hợp đồng trùng. Vui lòng thử lại." };
+  }
 }

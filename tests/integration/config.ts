@@ -1,3 +1,5 @@
+import "../setup/env";
+
 /**
  * Shared configuration for the integration suite.
  *

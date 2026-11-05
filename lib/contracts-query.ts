@@ -1,4 +1,4 @@
-import { addDays, format } from "date-fns";
+import { addCalendarDays, businessDate } from "@/lib/business-date";
 
 /**
  * Contract list query state — plan sections 50-53.
@@ -165,7 +165,7 @@ export function hasActiveFilters(query: ContractsQuery): boolean {
 
 export type DateRange = { gte?: string; lte?: string; lt?: string };
 
-const isoDay = (date: Date) => format(date, "yyyy-MM-dd");
+const isoDay = businessDate;
 
 /**
  * Preset ranges — plan sections 52, 69, 70:
@@ -183,9 +183,9 @@ export function resolveExpiryPreset(
     case "expired":
       return { lt: isoDay(today) };
     case "expiring30":
-      return { gte: isoDay(today), lte: isoDay(addDays(today, 30)) };
+      return { gte: isoDay(today), lte: addCalendarDays(isoDay(today), 30) };
     case "expiring90":
-      return { gte: isoDay(today), lte: isoDay(addDays(today, 90)) };
+      return { gte: isoDay(today), lte: addCalendarDays(isoDay(today), 90) };
     default:
       return {};
   }

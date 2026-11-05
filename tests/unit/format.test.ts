@@ -56,7 +56,7 @@ describe("formatDateTime", () => {
 });
 
 describe("daysUntil", () => {
-  const today = new Date(2026, 9, 3); // 3 October 2026, local midnight
+  const today = new Date("2026-10-03T00:00:00+07:00");
 
   it("counts whole calendar days", () => {
     expect(daysUntil("2026-10-03", today)).toBe(0);
@@ -68,7 +68,7 @@ describe("daysUntil", () => {
   it("is not affected by the time of day the page was rendered", () => {
     // A late-evening render must still say "tomorrow is 1 day away"; a plain
     // millisecond division would say 0 for most of the day.
-    const lateEvening = new Date(2026, 9, 3, 23, 59, 0);
+    const lateEvening = new Date("2026-10-03T23:59:00+07:00");
     expect(daysUntil("2026-10-04", lateEvening)).toBe(1);
   });
 
@@ -80,7 +80,7 @@ describe("daysUntil", () => {
 });
 
 describe("formatExpiryHint", () => {
-  const today = new Date(2026, 9, 3);
+  const today = new Date("2026-10-03T00:00:00+07:00");
 
   it("phrases each case in Vietnamese", () => {
     expect(formatExpiryHint("2026-10-03", today)).toBe("Hết hạn hôm nay");

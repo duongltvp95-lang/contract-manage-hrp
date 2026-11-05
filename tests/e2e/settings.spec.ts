@@ -8,6 +8,7 @@ import {
   hasLiveBackend,
   login,
   runId,
+  seedRegularUser,
   sweep,
 } from "./helpers";
 
@@ -205,12 +206,16 @@ test.describe("settings — edit user (round 3, part 1)", () => {
     await expectAdminSeesEditAndDeleteControls(page);
   });
 
-  test("a non-admin does not see Edit or Delete buttons in Settings", async () => {
-    // The settings block is only rendered for admins (server-side), so the
-    // buttons have nothing to attach to. We rely on the round-2 suite for
-    // the "non-admin does not see the section" assertion; this case is
-    // here to keep the suite self-describing.
-    test.skip(true, "covered by the round-2 'does not see the section' case");
+  test("a non-admin does not see Edit or Delete buttons in Settings", async ({ page }) => {
+    const user = await seedRegularUser(adminClient());
+    try {
+      await login(page, user.email, user.password);
+      await gotoAndSettle(page, "/settings");
+      await expect(page.getByRole("heading", { name: "Cài đặt", level: 1 })).toBeVisible();
+      await expect(page.getByTestId("user-management-section")).toHaveCount(0);
+      await expect(page.getByTestId("user-edit-button")).toHaveCount(0);
+      await expect(page.getByTestId("user-delete-button")).toHaveCount(0);
+    } finally { await user.cleanup(); }
   });
 
   test("creates a throwaway user and edits their role", async ({ page }) => {
@@ -269,12 +274,18 @@ test.describe("settings — edit user (round 3, part 1)", () => {
     ).toBeVisible();
   });
 
-  test("a non-admin is redirected away from /admin/logs", async () => {
-    // The proxy / page redirect chain refuses non-admins. We exercise it by
-    // creating a non-admin user and signing in as them. Skipped in this
-    // serial describe to keep the cleanup story simple; the assertion lives
-    // in admin-logs.spec.ts.
-    test.skip(true, "covered by admin-logs.spec.ts");
+  test("a non-admin is redirected away from /admin/logs", async ({ page }) => {
+    const user = await seedRegularUser(adminClient());
+    try {
+      await login(page, user.email, user.password);
+      await gotoAndSettle(page, "/admin/logs");
+      await expect(page).toHaveURL(/\/dashboard$/);
+      for (const format of ["txt", "xlsx"]) {
+        const response = await page.request.get(`/api/admin/logs/export?format=${format}`);
+        expect(response.status()).toBe(403);
+        expect(response.headers()["content-disposition"]).toBeUndefined();
+      }
+    } finally { await user.cleanup(); }
   });
 });
 

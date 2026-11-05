@@ -28,6 +28,11 @@ const STALE_CLAIM_MS = 5 * 60_000;
 
 type CleanupCandidate = { id: string; object_key: string; attempts: number; created_at: string };
 type ClaimResult = { status?: string; object_key?: string };
+export type CleanupRunResult = {
+  processed: number; succeeded: number; failed: number;
+  error?: "configuration" | "database" | "budget";
+  exhausted?: number;
+};
 
 function requestSignal(deadline: number, reserveMs = RESPONSE_RESERVE_MS): AbortSignal | null {
   const timeoutMs = Math.min(DB_TIMEOUT_MS, deadline - Date.now() - reserveMs);
@@ -81,7 +86,7 @@ export async function processR2CleanupQueue(options?: {
   limit?: number;
   maxAttempts?: number;
   totalBudgetMs?: number;
-}): Promise<{ processed: number; succeeded: number; failed: number }> {
+}): Promise<CleanupRunResult> {
   const limit = clampInteger(options?.limit, 20, 1, MAX_BATCH_SIZE);
   const maxAttempts = clampInteger(options?.maxAttempts, 5, 1, 20);
   const totalBudgetMs = clampInteger(options?.totalBudgetMs, DEFAULT_RUN_BUDGET_MS, 5_000, 52_000);
@@ -92,11 +97,21 @@ export async function processR2CleanupQueue(options?: {
     admin = createAdminClient();
   } catch (error) {
     console.error("[storage-cleanup:process] Không thể khởi tạo admin client", error);
-    return { processed: 0, succeeded: 0, failed: 0 };
+    return { processed: 0, succeeded: 0, failed: 1, error: "configuration" };
   }
 
+  const preparationSignal = requestSignal(deadline, MIN_JOB_BUDGET_MS);
+  if (!preparationSignal) return { processed: 0, succeeded: 0, failed: 1, error: "budget" };
+
+  const preparation = await admin.rpc("prepare_r2_cleanup", { p_limit: limit, p_max_attempts: maxAttempts })
+    .abortSignal(preparationSignal);
+  if (preparation.error) {
+    console.error("[storage-cleanup:prepare]", preparation.error);
+    return { processed: 0, succeeded: 0, failed: 1, error: "database" };
+  }
+  const exhausted = Number(preparation.data?.exhausted ?? 0);
   const candidatesSignal = requestSignal(deadline, MIN_JOB_BUDGET_MS);
-  if (!candidatesSignal) return { processed: 0, succeeded: 0, failed: 0 };
+  if (!candidatesSignal) return { processed: 0, succeeded: 0, failed: 1, error: "budget" };
 
   const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
   const [retryResult, staleResult] = await Promise.all([
@@ -121,7 +136,7 @@ export async function processR2CleanupQueue(options?: {
 
   if (retryResult.error || staleResult.error) {
     console.error("[storage-cleanup:process] Không thể đọc cleanup queue", retryResult.error ?? staleResult.error);
-    return { processed: 0, succeeded: 0, failed: 1 };
+    return { processed: 0, succeeded: 0, failed: 1, error: "database" };
   }
 
   const jobs = new Map<string, CleanupCandidate>();
@@ -210,5 +225,6 @@ export async function processR2CleanupQueue(options?: {
     }
   }
 
-  return { processed, succeeded, failed };
+  if (exhausted > 0) console.error("[storage-cleanup:exhausted]", { exhausted });
+  return { processed, succeeded, failed, ...(exhausted > 0 ? { exhausted } : {}) };
 }

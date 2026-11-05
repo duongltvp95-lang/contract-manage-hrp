@@ -4,6 +4,7 @@ import {
   ORG_A,
   TEST_PREFIX,
   adminClient,
+  bucketName,
   clickSafe,
   gotoAndSettle,
   hasLiveBackend,
@@ -105,12 +106,14 @@ test.describe("admin privileged (round 19)", () => {
     const partnerId = await seedPartner(admin, `${TEST_PREFIX}Đối tác xoá HD ${stamp}`);
     const contractNumber = `${TEST_PREFIX}HD xoá ${stamp}`;
     const contractId = await seedContract(admin, contractNumber, partnerId);
-    // A file row (the R2 object delete is idempotent, so a fake key is enough).
+    // Use a valid reserved key shape even when the fixture has no storage object.
+    const fileId = crypto.randomUUID();
     await admin.from("contract_files").insert({
+      id: fileId,
       organization_id: ORG_A,
       contract_id: contractId,
-      bucket: "contracts",
-      object_key: `contracts/${ORG_A}/${contractId}/fake.pdf`,
+      bucket: bucketName(),
+      object_key: `contracts/${ORG_A}/${contractId}/${fileId}/fake.pdf`,
       original_filename: "fake.pdf",
       mime_type: "application/pdf",
       file_size: 10,

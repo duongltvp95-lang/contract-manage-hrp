@@ -169,18 +169,29 @@ dependency and no vendored copy in `public/`.
 
 ## Tests
 
-Three suites, deliberately separated by what they need (plan sections 96, 100):
+Four suites cover different boundaries:
 
-| Command | What it covers | Needs |
-| --- | --- | --- |
-| `pnpm test` | Unit: shared Zod schemas, list-query parsing, expiry presets, date and byte formatting, signed-URL refresh policy, object-key rules, TTL clamping, rate-limit policy | nothing |
-| `pnpm test:integration` | RLS isolation, the file API's authorization (including plan section 101), and the rate limit returning a real 429 — against **live Supabase** and a real Next server | `.env.local` |
-| `pnpm test:e2e` | The plan section 100 matrix in a real browser: login/logout, create/edit/archive, PDF+JPG+PNG upload, multi-file, progress, retry, search, filters, pagination, PDF navigation and zoom, image preview, document switching, signed-URL refresh, cross-org DB and R2 | `.env.local` |
+- `pnpm test`: unit tests without backend credentials.
+- `pnpm test:db`: all migrations and SQL/RLS, audit, upload intent and concurrency
+  regressions on an automatically created PostgreSQL 17 Docker container. Docker
+  must be running. The container has no network or exposed port and is removed afterward.
+- `pnpm test:integration`: real route handlers, Supabase and R2 on a **dedicated test backend**.
+- `pnpm test:e2e`: browser workflows on the same dedicated backend with a separate local server.
 
-`pnpm test:all` runs all three.
+For the live suites, copy `.env.test.example` to `.env.test.local`, fill dedicated
+`TEST_*` credentials, enroll the test admin in TOTP and install
+`tests/setup/test-environment.sql` **on the test project only**. Test credentials
+and TOTP secrets must never be committed. Missing settings or a missing backend
+marker fail setup before test writes. The suites never load app `.env.local`
+credentials and never reuse an existing server. Configure the test bucket CORS
+for the chosen loopback origin, including GET, HEAD and PUT.
 
-Only the unit suite runs in CI on every push; the other two need credentials and
-are wired to GitHub secrets (they skip themselves when the secrets are absent).
+`pnpm test:all` runs unit, integration and E2E sequentially; `test:db` is a separate
+Docker gate. CI also runs lint, typecheck, build and a High/Critical dependency
+audit gate. Internal CI runs require the corresponding `TEST_*` GitHub secrets;
+only fork PRs explicitly skip live jobs. E2E waits for integration to finish.
+See [release notes and migration preflight](docs/FIXES-2026-10-31.md) and
+[MFA setup](docs/SETUP-2FA.md).
 
 Two things the suites had to work around, both documented where they live:
 

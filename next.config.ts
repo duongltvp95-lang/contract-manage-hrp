@@ -47,7 +47,11 @@ if (process.env.NEXT_PUBLIC_APP_URL) {
 }
 
 const nextConfig: NextConfig = {
+  // Server Action arguments can contain passwords and OTPs; keep them out of dev logs.
+  logging: { serverFunctions: false },
   cacheComponents: true,
+  // Keep the existing prefetch behavior while upgrading this application.
+  partialPrefetching: false,
 
   experimental: {
     serverActions: {

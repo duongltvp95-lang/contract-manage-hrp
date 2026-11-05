@@ -375,7 +375,6 @@ export async function companiesForPartners(
   return result;
 }
 
-
 /**
  * Rolls back a partner row the caller just created but whose junction insert
  * failed. The session client has no DELETE grant on `partners`, so this uses the
@@ -413,9 +412,11 @@ async function deletePartnerRollback(
 export async function listPartners({
   organizationId,
   contracts,
+  status,
 }: PartnerContext & {
   /** Round 28 — filter by the computed contract count; absent = all. */
   contracts?: "has" | "none";
+  status?: PartnerStatus;
 }): Promise<ServiceResult<PartnerWithCount[]>> {
   const supabase = await createClient();
 
@@ -466,6 +467,8 @@ export async function listPartners({
       companies: (companyMap.get(row.id) ?? []).sort(),
     }));
   }
+
+  if (status) withCounts = withCounts.filter((row) => row.status === status);
 
   // Round 28 — the count-based filter runs AFTER the counts are computed
   // (JS filter; the list has no pagination).
@@ -795,22 +798,6 @@ export async function createPartner(
       return dbError("createPartner", junctionError);
     }
 
-    // Fire-and-forget: a failed write must never block the create.
-    await recordCurrentUserAudit(
-      {
-        action: "create_partner",
-        targetKind: "partner",
-        targetId: savedPartner.id,
-        metadata: {
-          name: savedPartner.name,
-          taxCode: savedPartner.tax_code ?? null,
-          status,
-          companies: companyNames,
-        },
-      },
-      options,
-    );
-
     return ok({ ...savedPartner, companies: companyNames });
   } catch (errCatch) {
     if (created) {
@@ -908,23 +895,6 @@ export async function findOrCreatePartnerForAi(
       }
 
       const row = rpcData[0] as { id: string; name: string; is_new: boolean };
-      if (row.is_new) {
-        await recordCurrentUserAudit(
-          {
-            action: "create_partner",
-            targetKind: "partner",
-            targetId: row.id,
-            metadata: {
-              name: row.name,
-              taxCode: cleanTax || null,
-              source: "ai_auto_create",
-              companies: input.companyIds,
-            },
-          },
-          options,
-        );
-      }
-
       return ok({
         id: row.id,
         name: row.name,
@@ -999,131 +969,23 @@ export async function updatePartner(
     return err("validation", "Không có thay đổi nào để lưu");
   }
 
-  // Resolve the company names once, used for the junction write, the round 29
-  // tax-code overlap check and the audit metadata.
-  let companyNames: string[] | null = null;
-  let orgCompanyIds = new Set<string>();
-  let orgCompanies: Company[] = [];
-
-  if (hasCompanies) {
-    const companies = await listCompanies({ organizationId });
-    if (!companies.ok) return companies;
-
-    orgCompanies = companies.data;
-    orgCompanyIds = new Set(orgCompanies.map((company) => company.id));
-
-    const companyIds = parsed.data.companyIds ?? [];
-    const invalidCompany = companyIds.find((id) => !orgCompanyIds.has(id));
-    if (invalidCompany) {
-      return err("validation", "Công ty được chọn không thuộc tổ chức của bạn");
-    }
-    companyNames = orgCompanies
-      .filter((company) => companyIds.includes(company.id))
-      .map((company) => company.name);
-  }
-
-  // Round 29 — the tax-code conflict is company-aware: the same code under a
-  // completely different company is allowed; without companyIds in the payload
-  // (companies untouched) the old strict behaviour stays.
-  if ("tax_code" in patch && patch.tax_code) {
-    const conflict = await findBlockingTaxCodeConflict(
-      patch.tax_code,
-      organizationId,
-      companyNames,
-      id,
-    );
-    if (conflict) {
-      return err(
-        "validation",
-        "Mã số thuế đã được dùng cho đối tác khác trong tổ chức",
-        [{ path: "taxCode", message: `Đã thuộc về "${conflict.name}"` }],
-      );
-    }
-  }
-
   const supabase = await createClient();
-
-  let updated: PartnerRow | null = null;
-
-  if (Object.keys(patch).length > 0) {
-    const { data, error } = await supabase
-      .from("partners")
-      .update(patch)
-      .eq("id", id)
-      .eq("organization_id", organizationId)
-      .select(PARTNER_COLUMNS)
-      .maybeSingle();
-
-    if (error) {
-      return dbError("updatePartner", error);
-    }
-
-    if (!data) {
-      // RLS filtered it, or it is gone. Same answer either way.
-      return err("not_found", "Không tìm thấy đối tác");
-    }
-
-    updated = data as PartnerRow;
-  }
-
-  if (hasCompanies) {
-    const { error: deleteError } = await supabase
-      .from("partner_companies")
-      .delete()
-      .eq("partner_id", id);
-
-    if (deleteError) {
-      return dbError("updatePartner", deleteError);
-    }
-
-    const companyIds = parsed.data.companyIds ?? [];
-    if (companyIds.length > 0) {
-      const { error: insertError } = await supabase
-        .from("partner_companies")
-        .insert(companyIds.map((companyId) => ({ partner_id: id, company_id: companyId })));
-
-      if (insertError) {
-        return dbError("updatePartner", insertError);
-      }
-    }
-  } else {
-    companyNames = await companiesForPartnerInternal(id);
-  }
-
-  if (!updated) {
-    // Only the companies changed; read the partner row for the return value.
-    const { data } = await supabase
-      .from("partners")
-      .select(PARTNER_COLUMNS)
-      .eq("id", id)
-      .eq("organization_id", organizationId)
-      .maybeSingle();
-
-    if (!data) {
-      return err("not_found", "Không tìm thấy đối tác");
-    }
-    updated = data as PartnerRow;
-  }
-
-  const finalNames = (companyNames ?? []).sort();
-
-  const changed = Object.keys(patch).map((key) =>
-    key === "tax_code" ? "taxCode" : key,
-  );
-  if (hasCompanies) changed.push("companies");
-
-  await recordCurrentUserAudit({
-    action: "update_partner",
-    targetKind: "partner",
-    targetId: updated.id,
-    metadata: {
-      name: updated.name,
-      changed,
-      ...(hasCompanies ? { companies: finalNames } : {}),
-    },
+  const { data, error } = await supabase.rpc("update_partner_atomic", {
+    p_id: id, p_organization_id: organizationId, p_patch: patch,
+    p_company_ids: hasCompanies ? [...new Set(parsed.data.companyIds)] : null,
   });
+  if (error) {
+    if (error.code === "23505") {
+      return err("validation", "Mã số thuế đã được dùng cho đối tác khác trong cùng công ty", [
+        { path: "taxCode", message: "Mã số thuế bị trùng trong công ty được chọn" },
+      ]);
+    }
+    return dbError("updatePartner", error);
+  }
+  if (!data) return err("not_found", "Không tìm thấy đối tác");
+  const updated = data as PartnerDetail;
 
-  return ok({ ...updated, companies: finalNames });
+  return ok(updated);
 }
 
 /**
@@ -1156,13 +1018,6 @@ export async function setPartnerStatus(
 
   const updated = data as PartnerRow;
   const companies = await companiesForPartnerInternal(id);
-
-  await recordCurrentUserAudit({
-    action: "set_partner_status",
-    targetKind: "partner",
-    targetId: updated.id,
-    metadata: { to: status, name: updated.name },
-  });
 
   return ok({ ...updated, companies });
 }
@@ -1371,7 +1226,7 @@ export async function importPartners(
     try {
       if (match) {
         // MERGE — overwrite the matched partner.
-        const { patch, changed, companiesToAdd } = buildMergePatch(match, incoming);
+        const { patch, companiesToAdd } = buildMergePatch(match, incoming);
 
         if (Object.keys(patch).length > 0) {
           const { error: updateError } = await supabase
@@ -1409,15 +1264,6 @@ export async function importPartners(
               continue;
             }
           }
-        }
-
-        if (changed.length > 0) {
-          await recordCurrentUserAudit({
-            action: "update_partner",
-            targetKind: "partner",
-            targetId: match.id,
-            metadata: { name: patch.name ?? match.name, changed },
-          });
         }
 
         // Keep the in-memory directory in sync so a later row in the SAME file

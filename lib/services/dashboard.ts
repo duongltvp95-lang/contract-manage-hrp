@@ -1,6 +1,6 @@
 import "server-only";
 
-import { addDays, format } from "date-fns";
+import { addCalendarDays, businessDate } from "@/lib/business-date";
 
 import { resolveExpiryPreset } from "@/lib/contracts-query";
 import { createClient } from "@/lib/supabase/server";
@@ -49,7 +49,7 @@ export const DASHBOARD_LIST_LIMIT = 5;
 
 /** Local "today" as `YYYY-MM-DD`, the format the `date` columns use. */
 export function todayIso(today: Date = new Date()): string {
-  return format(today, "yyyy-MM-dd");
+  return businessDate(today);
 }
 
 function expiryWindow(preset: "expiring90" | "expired", today: Date) {
@@ -226,7 +226,7 @@ export function expiringWindowBounds(today: Date = new Date()): {
 } {
   return {
     from: todayIso(today),
-    to: format(addDays(today, 90), "yyyy-MM-dd"),
+    to: addCalendarDays(businessDate(today), 90),
   };
 }
 
@@ -272,42 +272,11 @@ export async function countNoFileContracts(
   organizationId: string,
 ): Promise<ServiceResult<number>> {
   const supabase = await createClient();
-
-  const [totalResult, contractIdsResult] = await Promise.all([
-    // 1. Tổng hợp đồng active (không archived) của org
-    supabase
-      .from("contracts")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", organizationId)
-      .is("archived_at", null),
-
-    // 2. Lấy contract_id của tất cả hợp đồng thuộc org này (để dùng lọc contract_files)
-    supabase
-      .from("contracts")
-      .select("id")
-      .eq("organization_id", organizationId)
-      .is("archived_at", null),
-  ]);
-
-  if (totalResult.error) return dbError("countNoFileContracts", totalResult.error);
-  if (contractIdsResult.error) return dbError("countNoFileContracts", contractIdsResult.error);
-
-  const total = totalResult.count ?? 0;
-  const allIds = (contractIdsResult.data ?? []).map((r: { id: string }) => r.id);
-
-  if (allIds.length === 0) return ok(0);
-
-  // 3. Lấy distinct contract_id đã có file trong tập allIds
-  const { data: filesData, error: filesError } = await supabase
-    .from("contract_files")
-    .select("contract_id")
-    .in("contract_id", allIds);
-
-  if (filesError) return dbError("countNoFileContracts", filesError);
-
-  const distinctWithFiles = new Set(
-    (filesData ?? []).map((r: { contract_id: string }) => r.contract_id),
-  ).size;
-
-  return ok(Math.max(0, total - distinctWithFiles));
+  const { count, error } = await supabase
+    .from("contract_listing")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .eq("has_files", false);
+  return error ? dbError("countNoFileContracts", error) : ok(count ?? 0);
 }

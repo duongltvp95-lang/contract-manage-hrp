@@ -213,6 +213,7 @@ suite("audit — business actions (round 8)", () => {
     });
     const partnerId = (created.body.data as { id: string }).id;
 
+    const previousAuditIds = new Set((await auditRows(admin, "update_partner")).map((row) => row.id));
     const updated = await probe(orgA, "update_partner", {
       id: partnerId,
       input: { name: `${TEST_PREFIX}Sửa đối tác ${stamp} (mới)`, taxCode: "0511111112" },
@@ -220,7 +221,7 @@ suite("audit — business actions (round 8)", () => {
     expect(updated.body.ok).toBe(true);
 
     const rows = (await auditRows(admin, "update_partner")).filter(
-      (r) => r.target_id === partnerId,
+      (r) => r.target_id === partnerId && !previousAuditIds.has(r.id),
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].metadata).toMatchObject({ changed: ["name", "taxCode"] });
@@ -278,10 +279,16 @@ suite("audit — business actions (round 8)", () => {
     });
     const contractId = (created.body.data as { id: string }).id;
 
-    const fileId = crypto.randomUUID();
     const filename = `${TEST_PREFIX}audit-file.pdf`;
-    const objectKey = `contracts/${ORG_A}/${contractId}/${fileId}/${filename}`;
     const body = Buffer.from(`%PDF-1.4\n% ${stamp}\n%%EOF\n`, "latin1");
+    const issued = await fetch(`${BASE_URL}/api/files/upload-url`, {
+      method: "POST", headers: { Cookie: orgA.cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ contractId, filename, mimeType: "application/pdf", fileSize: body.length }),
+    });
+    expect(issued.status).toBe(200);
+    const { fileId, objectKey, uploadReservation } = await issued.json() as {
+      fileId: string; objectKey: string; uploadReservation: string;
+    };
 
     await r2Client().send(
       new PutObjectCommand({
@@ -296,6 +303,7 @@ suite("audit — business actions (round 8)", () => {
       contractId,
       fileId,
       objectKey,
+      uploadReservation,
       filename,
       mimeType: "application/pdf",
       fileSize: body.length,

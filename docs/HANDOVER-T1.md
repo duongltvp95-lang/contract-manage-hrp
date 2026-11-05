@@ -1,5 +1,8 @@
 # BÀN GIAO VỊ TRÍ T1 — DỰ ÁN CONTRACT MANAGER
 
+> Cập nhật chính sách ngày 02/11/2026: ứng dụng không sử dụng 2FA theo yêu cầu người dùng.
+> Xem [biên bản bỏ 2FA](NO-2FA-2026-11-02.md). Các số liệu và trạng thái nhánh bên dưới là snapshot 15/10.
+
 > Tài liệu dành cho **T1 mới** tiếp quản. Đọc hết trước khi ra quyết định hay giao việc.
 >
 > **Lần cập nhật: 2026-10-15** — đã đối chiếu lại toàn bộ với codebase + dữ liệu thật sau Round 39.
@@ -14,7 +17,7 @@
 - **Git**: `main` = Round 39 đã merge và deploy, `origin/main` đồng bộ `0 0`, working tree **sạch hoàn toàn**.
 - **Trạng thái**: Wave 1 + **round 2 → 39 đều đã merge & deploy**. **KHÔNG còn task nào dở.**
 - **Kiểm thử**: **343 Unit tests (28 test files - 100% pass)**, 27 Integration test files, 18 E2E spec files, 30 migrations đã áp dụng.
-- **An ninh & Bảo vệ**: CSP headers, Rate limit đăng nhập 5 lần khóa 15p + thử tối đa 1 tài khoản khác, 2FA Owner, Audit log 18 hành động (gồm export partners), CI auto-deploy guard.
+- **An ninh & Bảo vệ**: CSP headers, Rate limit đăng nhập 5 lần khóa 15p + thử tối đa 1 tài khoản khác, Audit log 18 hành động (gồm export partners), CI auto-deploy guard.
 - **Việc đầu tiên khi tiếp quản**: đọc §1–§4, rồi chờ Owner giao round tiếp theo.
 - **Quy tắc bắt buộc**: `.cursor/rules/agent-working-rules.mdc` (10 điều) — đọc trước khi code.
 
@@ -110,7 +113,7 @@ b67eea5  fix(auth): khoa cung nut dang nhap sau 5 lan sai kem countdown 15 phut 
 
 - `git rev-list --left-right --count origin/main...main` → `0  0`
 - Working tree **sạch hoàn toàn**.
-- Hướng dẫn 2FA chi tiết: `docs/SETUP-2FA.md` (công cụ kiểm tra `scripts/verify-2fa-status.mjs`).
+- Ứng dụng không dùng 2FA theo chính sách hiện hành: [NO-2FA-2026-11-02.md](NO-2FA-2026-11-02.md).
 
 ### ✅ Các mục "dở dang" trong handover cũ — ĐÃ ĐÓNG
 

@@ -154,7 +154,7 @@ test.describe("document viewer", () => {
     await expect(page.locator('[data-testid="document-selector"]')).toContainText("viewer.png");
     await expect(page.locator('[data-testid="document-selector"]')).toContainText("viewer.pdf");
 
-    await page.getByRole("button", { name: /viewer\.png/ }).click();
+    await options.filter({ hasText: "viewer.png" }).click();
 
     await expect(page.locator('[data-testid="image-viewer-image"]')).toBeVisible({
       timeout: 30_000,
@@ -162,7 +162,7 @@ test.describe("document viewer", () => {
     await expect(page.locator('[data-testid="pdf-toolbar"]')).toHaveCount(0);
 
     // And back to the PDF.
-    await page.getByRole("button", { name: /viewer\.pdf/ }).click();
+    await options.filter({ hasText: "viewer.pdf" }).click();
     await expect(page.locator('[data-testid="pdf-toolbar"]')).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('[data-testid="image-viewer-image"]')).toHaveCount(0);
   });
@@ -171,7 +171,7 @@ test.describe("document viewer", () => {
     await login(page);
     await gotoAndSettle(page, `/contracts/${contract.id}`);
 
-    await page.getByRole("button", { name: /viewer\.png/ }).click();
+    await page.locator('[data-testid^="document-option-"]').filter({ hasText: "viewer.png" }).click();
     await expect(page.locator('[data-testid="image-viewer-image"]')).toBeVisible({
       timeout: 30_000,
     });

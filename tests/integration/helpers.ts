@@ -7,7 +7,7 @@ import {
 } from "@aws-sdk/client-s3";
 
 import { ADMIN_EMAIL, ADMIN_PASSWORD, SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, SUPABASE_URL } from "../setup/env";
-import { ORG_A, ORG_B, TEST_PREFIX } from "./config";
+import { BASE_URL, ORG_A, ORG_B, TEST_PREFIX } from "./config";
 
 /**
  * Fixtures for the integration suite — W1-WEB-039/040.
@@ -56,6 +56,12 @@ export type TestSession = {
   cookie: string;
   client: SupabaseClient;
 };
+
+export async function runStorageCleanup(session: TestSession): Promise<void> {
+  const response = await fetch(`${BASE_URL}/api/cron/storage-cleanup?limit=200`, { headers: { cookie: session.cookie } });
+  const result = await response.json();
+  if (!response.ok || result.success !== true) throw new Error("Isolated cleanup worker failed: " + JSON.stringify(result));
+}
 
 function makeCookieSession() {
   const jar = new Map<string, string>();

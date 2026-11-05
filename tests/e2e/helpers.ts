@@ -9,6 +9,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { addCalendarDays, businessDate } from "../../lib/business-date";
 
 /**
  * Shared fixtures for the end-to-end suite — W1-WEB-039..043.
@@ -42,28 +43,11 @@ export const HR_VN_COMPANY_ID = "00000000-0000-4000-8000-000000000002";
  *
  * No fallback values, deliberately: an earlier revision defaulted the password
  * to the live admin credential, which committed a working production password
- * to the repository. A test that cannot run without a secret must skip, not
- * carry the secret in source.
+ * to the repository. Missing dedicated test credentials fail setup; secrets
+ * must never have a source-code fallback.
  */
-export const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL ?? "";
-export const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD ?? "";
-
-/**
- * True when this suite can actually reach Supabase and R2.
- *
- * Every spec calls `test.skip(!hasLiveBackend, …)` at file scope, so a checkout
- * without credentials (a fork, or CI on a repository with no secrets) reports
- * the suite as skipped rather than failing it. That is also why the CI workflow
- * needs no `if:` on its jobs — and why it must not have one, since `secrets` is
- * not an allowed context in a job-level condition.
- */
-export const hasLiveBackend = Boolean(
-  process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY &&
-    process.env.SUPABASE_SERVICE_ROLE_KEY &&
-    ADMIN_EMAIL &&
-    ADMIN_PASSWORD,
-);
+export { ADMIN_EMAIL, ADMIN_PASSWORD, hasLiveBackend } from "../setup/env";
+import { ADMIN_EMAIL, ADMIN_PASSWORD } from "../setup/env";
 
 /** Where generated PDF/PNG/JPG fixtures are written for the file inputs. */
 export const ARTIFACT_DIR = join(tmpdir(), "contract-manager-e2e");
@@ -207,12 +191,8 @@ export function writeArtifact(name: string, contents: Buffer): string {
 // Date helpers
 // ---------------------------------------------------------------------------
 
-const pad = (value: number) => String(value).padStart(2, "0");
-
 export function isoDate(offsetDays = 0): string {
-  const date = new Date();
-  date.setDate(date.getDate() + offsetDays);
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return addCalendarDays(businessDate(), offsetDays);
 }
 
 /** `2026-10-03` -> `03/10/2026`, the format the UI renders. */
@@ -273,6 +253,7 @@ export async function login(
     page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 60_000 }),
     page.getByRole("button", { name: /đăng nhập/i }).click(),
   ]);
+  await expect(page).toHaveURL(/\/dashboard$/);
 }
 
 /**
@@ -377,17 +358,10 @@ export async function pickDate(page: Page, iso: string): Promise<void> {
   await dayButton.click();
 }
 
-/**
- * Matches the presigned R2 requests, for tests that need to slow one down or
- * make it fail.
- *
- * A regex rather than a glob on purpose: the literal host is
- * `<account>.r2.cloudflarestorage.com`, and the obvious glob
- * `**‌/r2.cloudflarestorage.com/**` never matches it — the character before `r2`
- * is a dot, not a slash. Getting that wrong makes an interception test pass
- * without intercepting anything.
- */
-export const R2_REQUEST = /r2\.cloudflarestorage\.com/;
+/** Match the configured isolated S3 endpoint so failure/progress tests intercept actual PUTs. */
+export const R2_REQUEST = new RegExp(
+  "^" + (process.env.R2_ENDPOINT ?? "").replace(/\/$/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "/",
+);
 
 /** Waits for the contract detail page and returns its id. */
 export async function waitForContractDetail(page: Page): Promise<string> {
@@ -453,6 +427,30 @@ export async function selectCompany(
   await option.click();
 }
 
+/** Save follows the current UX: confirm date warnings, reset, then open the toast action. */
+export async function submitContract(page: Page): Promise<void> {
+  const confirm = page.getByRole("button", { name: "Xác nhận lưu", exact: true });
+  const open = page.getByRole("button", { name: "Xem hợp đồng", exact: true });
+  await page.getByTestId("contract-form-submit").click();
+  await expect(confirm.or(open).first()).toBeVisible({ timeout: 120_000 });
+  if (await confirm.isVisible()) await confirm.click();
+}
+
+export async function openSavedContract(page: Page): Promise<void> {
+  const open = page.getByRole("button", { name: "Xem hợp đồng", exact: true });
+  await expect(open).toBeVisible({ timeout: 120_000 });
+  await expect(page.locator('input[name="contractNumber"]')).toHaveValue("");
+  await expect(page.getByTestId("partner-combobox")).toContainText("Chọn đối tác");
+  await open.click();
+  await page.waitForURL(/\/contracts\/[0-9a-f-]{36}$/, { timeout: 30_000 });
+  await waitForHydration(page);
+}
+
+export async function saveContractAndOpenDetail(page: Page): Promise<void> {
+  await submitContract(page);
+  await openSavedContract(page);
+}
+
 // ---------------------------------------------------------------------------
 // Data helpers
 // ---------------------------------------------------------------------------
@@ -462,6 +460,31 @@ export type SeededContract = {
   contractNumber: string;
   cleanup: () => Promise<void>;
 };
+
+/** A disposable ordinary account for browser authorization tests in the isolated backend. */
+export async function seedRegularUser(admin: SupabaseClient) {
+  const email = `e2e.regular.${crypto.randomUUID()}@hrpartner.test`;
+  const password = `${crypto.randomUUID()}!aA9`;
+  const { data, error } = await admin.auth.admin.createUser({
+    email, password, email_confirm: true,
+    user_metadata: { full_name: `${TEST_PREFIX}Regular user` },
+  });
+  if (error || !data.user) throw new Error("Cannot create isolated ordinary account");
+  const id = data.user.id;
+  return {
+    id, email, password,
+    async cleanup() {
+      // Only this disposable actor's test events; no production environment can load this helper.
+      const outbox = await admin.from("audit_event_outbox").delete().eq("actor_id", id);
+      const audit = await admin.from("audit_logs").delete().eq("actor_id", id);
+      const profile = await admin.from("profiles").delete().eq("id", id);
+      const auth = await admin.auth.admin.deleteUser(id);
+      if (outbox.error || audit.error || profile.error || auth.error) {
+        throw new Error("Cannot remove disposable ordinary account");
+      }
+    },
+  };
+}
 
 /**
  * Deletes a contract, its file rows AND their objects.

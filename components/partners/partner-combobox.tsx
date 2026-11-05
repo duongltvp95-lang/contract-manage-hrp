@@ -103,8 +103,8 @@ export function PartnerCombobox({
 
   const selected =
     partners.find((partner) => partner.id === value) ??
-    picked ??
-    selectedPartner ??
+    (picked?.id === value ? picked : null) ??
+    (selectedPartner?.id === value ? selectedPartner : null) ??
     null;
 
   const needle = term.trim();

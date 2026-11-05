@@ -97,7 +97,8 @@ suite("round 21 — partner region + abbreviation", () => {
       .from("audit_logs")
       .select("metadata")
       .eq("action", "update_partner")
-      .eq("target_id", partnerId);
+      .eq("target_id", partnerId)
+      .contains("metadata", { changed: ["region", "abbreviation"] });
     const changed = (auditRows?.[0]?.metadata as { changed?: string[] } | undefined)
       ?.changed;
     expect(changed).toContain("region");

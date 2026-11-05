@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { config as loadEnv } from "dotenv";
+import "./tests/setup/env";
 
 /**
  * Playwright — W1-WEB-039..043, the plan's test matrix (section 100) driven
@@ -10,18 +10,18 @@ import { config as loadEnv } from "dotenv";
  * it on both the upload PUT and the PDF fetch. Running the suite on another port
  * would need that origin added to the bucket policy first.
  *
- * Locally `reuseExistingServer` means an already-running `pnpm dev` on 3000 is
- * reused; in CI nothing is listening and Playwright starts its own server with a
- * separate build directory, so it never collides with a real `next dev`.
+ * Always start a dedicated server with the test credentials and a separate
+ * build directory. An occupied port is an error, even during local runs.
  */
 
-loadEnv({ path: ".env.local" });
 
 const PORT = Number(process.env.E2E_PORT ?? 3000);
 const BASE_URL = process.env.E2E_BASE_URL ?? `http://localhost:${PORT}`;
 
 export default defineConfig({
+  globalSetup: "./tests/e2e/global-setup.ts",
   testDir: "./tests/e2e",
+  outputDir: "test-results/playwright",
   // Every spec shares one database and one admin account, and several of them
   // assert on counts; running them in parallel would make those flaky.
   fullyParallel: false,
@@ -40,12 +40,10 @@ export default defineConfig({
     timezoneId: "Asia/Ho_Chi_Minh",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: process.env.E2E_BASE_URL
-    ? undefined
-    : {
+  webServer: {
         command: `node node_modules/next/dist/bin/next dev --port ${PORT}`,
         url: `${BASE_URL}/login`,
-        reuseExistingServer: !process.env.CI,
+        reuseExistingServer: false,
         timeout: 240_000,
         stdout: "pipe",
         stderr: "pipe",

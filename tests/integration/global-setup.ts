@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import { BASE_URL, TEST_PORT } from "./config";
+import { assertTestBackendMarker } from "../setup/assert-backend";
 
 /**
  * Boots one Next.js server for the integration suite.
@@ -13,8 +14,7 @@ import { BASE_URL, TEST_PORT } from "./config";
  * that is where authorization actually happens — and a route handler needs a
  * Next request context, so calling the services in-process is not an option.
  *
- * If a server is already listening on the test port it is reused, which makes
- * local iteration fast and avoids fighting over the port.
+ * Refuse an occupied port: the suite must own the server and its credentials.
  */
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -60,23 +60,12 @@ async function serverIsUp(): Promise<boolean> {
 /**
  * Builds the environment for the child server.
  *
- * Two inherited values have to be neutralised, and both were found the hard way
- * (the server answered 401 to a valid session while an identical manual server
- * answered 200):
- *
- *   1. `NODE_ENV=test`, which Vitest sets. A Next dev server running outside
- *      `development` rejects a session that the same cookie satisfies on a
- *      normal `pnpm dev` server. It is a dev server, so it is told so.
- *   2. Empty `NEXT_PUBLIC_*` entries. An entry that is present but empty
- *      shadows `.env.local`: Next only fills in variables it considers unset,
- *      so `hasEnvVars` would be false and every request would 401.
+ * The setup module maps dedicated TEST_* settings before spawning. Preserve
+ * explicit empty optional credentials so Next cannot reload application keys
+ * from .env.local. Override Vitest's NODE_ENV=test for the Next dev server.
  */
 function childEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
-
-  for (const [key, value] of Object.entries(env)) {
-    if (value === "") delete env[key];
-  }
 
   return {
     ...env,
@@ -118,14 +107,12 @@ function removeProbeRoutes(): void {
 }
 
 export default async function setup() {
-  installProbeRoutes();
+  await assertTestBackendMarker();
 
   if (await serverIsUp()) {
-    console.log(`[integration] reusing the server already listening on ${BASE_URL}`);
-    return async () => {
-      removeProbeRoutes();
-    };
+    throw new Error("Test port is already in use. Set TEST_PORT to an unused port; existing app servers are never reused.");
   }
+  installProbeRoutes();
 
   const nextBin = `${repoRoot}node_modules/next/dist/bin/next`;
   const env = childEnvironment();

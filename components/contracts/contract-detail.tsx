@@ -1,9 +1,10 @@
 "use client";
 
+import { businessDate } from "@/lib/business-date";
+
 import { AlertCircle, ArrowLeft, CalendarPlus, MoreHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { format } from "date-fns";
 
 import { ContractActionsMenu } from "@/components/contracts/archive-contract-dialog";
 import { DeleteContractButton } from "@/components/contracts/delete-contract-button";
@@ -78,7 +79,7 @@ export function ContractDetail({
 }) {
   const router = useRouter();
   const archived = Boolean(contract.archived_at);
-  const todayStr = format(new Date(), "yyyy-MM-dd");
+  const todayStr = businessDate();
   const isExpired = Boolean(contract.expiry_date && contract.expiry_date < todayStr);
 
   const fields: [string, string][] = [

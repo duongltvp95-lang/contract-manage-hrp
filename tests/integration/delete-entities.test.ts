@@ -12,6 +12,7 @@ import {
   destroySecondTenant,
   hasR2,
   r2Client,
+  runStorageCleanup,
   signInAs,
   sweepTestRows,
   type TestSession,
@@ -125,10 +126,17 @@ suite("delete contract/partner (round 19)", () => {
     const contractId = (created.data as { id: string }).id;
 
     // One real object in R2.
-    const fileId = crypto.randomUUID();
-    const filename = `${TEST_PREFIX}xoá.pdf`;
-    const objectKey = `contracts/${ORG_B}/${contractId}/${fileId}/${filename}`;
+    const filename = `${TEST_PREFIX}xoa.pdf`;
     const body = Buffer.from(`%PDF-1.4\n% ${stamp}\n%%EOF\n`, "latin1");
+    const issued = await fetch(`${BASE_URL}/api/files/upload-url`, {
+      method: "POST",
+      headers: { cookie: privileged.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ contractId, filename, mimeType: "application/pdf", fileSize: body.length }),
+    });
+    expect(issued.status).toBe(200);
+    const { fileId, objectKey, uploadReservation } = await issued.json() as {
+      fileId: string; objectKey: string; uploadReservation: string;
+    };
     await r2Client().send(
       new PutObjectCommand({
         Bucket: bucketName(),
@@ -141,6 +149,7 @@ suite("delete contract/partner (round 19)", () => {
       contractId,
       fileId,
       objectKey,
+      uploadReservation,
       filename,
       mimeType: "application/pdf",
       fileSize: body.length,
@@ -150,6 +159,7 @@ suite("delete contract/partner (round 19)", () => {
 
     const deleted = await probe(privileged, "delete_contract", { id: contractId });
     expect(deleted.ok).toBe(true);
+    await runStorageCleanup(privileged);
 
     // R2 object, file row and contract row are all gone.
     expect(await objectExists(objectKey)).toBe(false);

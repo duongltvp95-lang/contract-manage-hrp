@@ -11,6 +11,7 @@ import {
   destroySecondTenant,
   hasR2,
   r2Client,
+  runStorageCleanup,
   signInAs,
   sweepTestRows,
   type TestSession,
@@ -164,9 +165,10 @@ suite("bulk delete (round 24)", () => {
         }),
       );
       await admin.from("contract_files").insert({
+        id: fileId,
         organization_id: ORG_B,
         contract_id: contractId,
-        bucket: "contracts",
+        bucket: bucketName(),
         object_key: objectKey,
         original_filename: filename,
         mime_type: "application/pdf",
@@ -180,7 +182,7 @@ suite("bulk delete (round 24)", () => {
     expect(deleted.ok).toBe(true);
     const results = (deleted.data as { results: { id: string; ok: boolean }[] }).results;
     expect(results).toHaveLength(2);
-    expect(results.every((r) => r.ok)).toBe(true);
+    expect(results.every((r) => r.ok), JSON.stringify(results)).toBe(true);
 
     const { data: rows } = await admin
       .from("contracts")
@@ -188,7 +190,11 @@ suite("bulk delete (round 24)", () => {
       .in("id", ids);
     expect(rows).toHaveLength(0);
 
-    // R2 objects are gone too.
+    // The deletion commits its durable intents before the worker touches storage.
+    const { data: queued } = await admin.from("r2_cleanup_queue").select("id").in("object_key", objectKeys);
+    expect(queued).toHaveLength(2);
+    await runStorageCleanup(privileged);
+    // R2 objects are gone after retry worker completion.
     for (const key of objectKeys) {
       expect(await objectExists(key)).toBe(false);
     }

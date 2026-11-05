@@ -427,16 +427,6 @@ export function ContractForm({
     };
   }, [isEdit, resetFormState]);
 
-  // Nếu quay lại trang tạo mới mà hợp đồng trước đó đã được lưu thành công thì tự động làm sạch form
-  useEffect(() => {
-    if (!isEdit && savedContractId) {
-      const timer = setTimeout(() => {
-        resetFormState();
-      }, 0);
-      return () => clearTimeout(timer);
-    }
-  }, [isEdit, savedContractId, resetFormState]);
-
   const filesRef = useRef(files);
   useEffect(() => {
     filesRef.current = files;
@@ -1193,6 +1183,14 @@ export function ContractForm({
       }
 
       await submitEdit(values);
+      return;
+    }
+
+    // With a resolver, field-level validation rules do not enforce these create-only
+    // requirements. Surface them before opening a date confirmation or writing data.
+    if (!values.partnerId || !values.companyId) {
+      if (!values.partnerId) form.setError("partnerId", { type: "required", message: "Vui lòng chọn đối tác" });
+      if (!values.companyId) form.setError("companyId", { type: "required", message: "Vui lòng chọn công ty" });
       return;
     }
 

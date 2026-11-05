@@ -463,11 +463,13 @@ suite("user update — administrators only (feature round 3, part 1)", () => {
     expect((restoreAdminB.body as { isActive: boolean }).isActive).toBe(true);
   });
 
-  // Skipped: the service returns the Zod "Thông tin cập nhật không hợp lệ"
-  // message before reaching the empty-patch branch. The 422 status is right;
-  // the wording mismatch is a product decision that lives outside this 3c
-  // fix. Tracked separately.
-  it.skip("update with an empty payload is refused", () => {});
+  it("update with an empty payload is refused", async () => {
+    const target = await createUser("user");
+    const result = await probeActions("update", { userId: target.id }, orgA.cookie);
+    expect(result.status).toBe(422);
+    const { data } = await admin.from("profiles").select("role,is_active").eq("id", target.id).single();
+    expect(data).toMatchObject({ role: "user", is_active: true });
+  });
 
   it("an audit row is written for a successful update", async () => {
     const target = await createUser("user");

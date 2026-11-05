@@ -26,6 +26,38 @@ describe("Duplicate Contract Detection", () => {
   const orgId = "11111111-1111-1111-1111-111111111111";
   const userId = "user-123";
 
+  it("does not insert when the duplicate lookup is unavailable", async () => {
+    const chain = {
+      select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), is: vi.fn().mockReturnThis(),
+      ilike: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), limit: vi.fn().mockReturnThis(),
+      insert: vi.fn(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { code: "XX000" } }),
+    };
+    vi.mocked(createClient).mockResolvedValue({ from: () => chain } as unknown as Awaited<ReturnType<typeof createClient>>);
+    const result = await createContract({
+      contractNumber: "DB-CHECK-FAIL", signedDate: "2026-01-01", expiryDate: "2027-01-01",
+      partnerId: "00000000-0000-4000-8000-000000000010", companyId: "00000000-0000-4000-8000-000000000001",
+    }, { userId, organizationId: orgId });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("db_error");
+    expect(chain.insert).not.toHaveBeenCalled();
+  });
+
+  it("maps a concurrent unique-index conflict to a user-facing validation error", async () => {
+    const chain = {
+      select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), is: vi.fn().mockReturnThis(),
+      ilike: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), limit: vi.fn().mockReturnThis(),
+      insert: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      single: vi.fn().mockResolvedValue({ data: null, error: { code: "23505", message: "contracts_active_identity_unique" } }),
+    };
+    vi.mocked(createClient).mockResolvedValue({ from: () => chain } as unknown as Awaited<ReturnType<typeof createClient>>);
+    const result = await createContract({
+      contractNumber: "CONCURRENT", signedDate: "2026-01-01", expiryDate: "2027-01-01",
+      partnerId: "00000000-0000-4000-8000-000000000010", companyId: "00000000-0000-4000-8000-000000000001",
+    }, { userId, organizationId: orgId });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("validation");
+  });
+
   it("findDuplicateContract returns null when contractNumber is empty", async () => {
     const result = await findDuplicateContract({
       contractNumber: "",
