@@ -230,6 +230,27 @@ export function expiringWindowBounds(today: Date = new Date()): {
   };
 }
 
+const UNDATED_CONTRACTS_OR_FILTER =
+  "signed_date.is.null,expiry_date.is.null,duration_text.ilike.%không xác định%,duration_text.ilike.%vô thời hạn%,duration_text.ilike.%không giới hạn%";
+
+/**
+ * Đếm nhanh số hợp đồng không xác định thời hạn bằng `head: true` (không join đối tác/công ty,
+ * không sắp xếp và không truyền dòng dữ liệu qua mạng), dùng cho thẻ số liệu Tổng quan và badge tab Hợp đồng.
+ */
+export async function countUndatedContracts(
+  organizationId: string,
+): Promise<ServiceResult<number>> {
+  const supabase = await createClient();
+  const { count, error } = await supabase
+    .from("contracts")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", organizationId)
+    .is("archived_at", null)
+    .or(UNDATED_CONTRACTS_OR_FILTER);
+
+  return error ? dbError("countUndatedContracts", error) : ok(count ?? 0);
+}
+
 /**
  * Contracts with no signed date, no expiry date, or indefinite duration (round 48).
  * Ordered by newest created first so contracts needing date check appear on top.
@@ -245,7 +266,7 @@ export async function getUndatedContracts(
     .select(DASHBOARD_CONTRACT_COLUMNS, { count: "exact" })
     .eq("organization_id", organizationId)
     .is("archived_at", null)
-    .or("signed_date.is.null,expiry_date.is.null,duration_text.ilike.%không xác định%,duration_text.ilike.%vô thời hạn%,duration_text.ilike.%không giới hạn%")
+    .or(UNDATED_CONTRACTS_OR_FILTER)
     .order("created_at", { ascending: false })
     .limit(limit);
 

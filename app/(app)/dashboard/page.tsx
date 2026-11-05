@@ -1,6 +1,6 @@
 import { AlertCircle, AlertTriangle, ArrowUpRight, Clock, FileText } from "lucide-react";
 import Link from "next/link";
-import { Suspense } from "react";
+import { cache, Suspense } from "react";
 
 import { ExpiringContracts } from "@/components/dashboard/expiring-contracts";
 import { MetricCard } from "@/components/dashboard/metric-card";
@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { requireUser } from "@/lib/auth";
 import { formatDateOnly } from "@/lib/format";
 import {
+  countUndatedContracts,
   DASHBOARD_LIST_LIMIT,
   expiringWindowBounds,
   getContractMetrics,
@@ -30,41 +31,25 @@ import {
  * 3. Undated / Indefinite Contracts (needs check in notes)
  */
 
-async function DashboardContent() {
-  const user = await requireUser();
+const getCachedUndatedContracts = cache((organizationId: string) =>
+  getUndatedContracts(organizationId, DASHBOARD_LIST_LIMIT),
+);
 
-  const [metrics, recent, expiring, undated] = await Promise.all([
-    getContractMetrics(user.organizationId),
-    getRecentContracts(user.organizationId, DASHBOARD_LIST_LIMIT),
-    getExpiringContracts(user.organizationId, new Date(), DASHBOARD_LIST_LIMIT),
-    getUndatedContracts(user.organizationId, DASHBOARD_LIST_LIMIT),
+async function DashboardMetricsSection({
+  organizationId,
+}: {
+  organizationId: string;
+}) {
+  const [metrics, undatedCount] = await Promise.all([
+    getContractMetrics(organizationId),
+    countUndatedContracts(organizationId),
   ]);
 
-  const failure =
-    !metrics.ok ? metrics
-    : !recent.ok ? recent
-    : !expiring.ok ? expiring
-    : !undated.ok ? undated
-    : null;
+  const failure = !metrics.ok ? metrics : !undatedCount.ok ? undatedCount : null;
   const window = expiringWindowBounds();
 
   return (
-    <div className="space-y-6 p-6">
-      <header className="flex flex-wrap items-center justify-between gap-4 pb-1">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-bold tracking-tight">Tổng quan</h1>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              Hệ thống ổn định
-            </span>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            Xin chào, <span className="font-medium text-foreground">{user.fullName ?? user.email}</span> · Theo dõi hợp đồng theo thời gian thực
-          </p>
-        </div>
-      </header>
-
+    <>
       {failure && (
         <Alert variant="destructive">
           <AlertTitle>Không đọc được số liệu tổng quan</AlertTitle>
@@ -102,13 +87,105 @@ async function DashboardContent() {
         <MetricCard
           testId="metric-undated"
           title="Không xác định thời hạn"
-          value={undated.ok ? undated.data.total : "—"}
-          badgeText={undated.ok && undated.data.total > 0 ? "Cần kiểm tra" : undefined}
+          value={undatedCount.ok ? undatedCount.data : "—"}
+          badgeText={undatedCount.ok && undatedCount.data > 0 ? "Cần kiểm tra" : undefined}
           hint="Chưa có ngày ký / ngày hết hạn"
           tone="warning"
           icon={<AlertTriangle className="h-5 w-5 text-amber-500" />}
         />
       </div>
+    </>
+  );
+}
+
+async function RecentContractsSection({
+  organizationId,
+}: {
+  organizationId: string;
+}) {
+  const recent = await getRecentContracts(organizationId, DASHBOARD_LIST_LIMIT);
+  return recent.ok ? (
+    <RecentContracts contracts={recent.data} />
+  ) : (
+    <p className="text-sm text-muted-foreground">
+      Không tải được danh sách hợp đồng gần đây.
+    </p>
+  );
+}
+
+async function ExpiringContractsSection({
+  organizationId,
+}: {
+  organizationId: string;
+}) {
+  const expiring = await getExpiringContracts(
+    organizationId,
+    new Date(),
+    DASHBOARD_LIST_LIMIT,
+  );
+  return expiring.ok ? (
+    <ExpiringContracts contracts={expiring.data} />
+  ) : (
+    <p className="text-sm text-muted-foreground">
+      Không tải được danh sách hợp đồng sắp hết hạn.
+    </p>
+  );
+}
+
+async function UndatedContractsBadge({
+  organizationId,
+}: {
+  organizationId: string;
+}) {
+  const undated = await getCachedUndatedContracts(organizationId);
+  if (!undated.ok || undated.data.total <= 0) {
+    return null;
+  }
+  return (
+    <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:text-amber-300 border border-amber-500/30">
+      {undated.data.total} hợp đồng
+    </span>
+  );
+}
+
+async function UndatedContractsSection({
+  organizationId,
+}: {
+  organizationId: string;
+}) {
+  const undated = await getCachedUndatedContracts(organizationId);
+  return undated.ok ? (
+    <UndatedContracts contracts={undated.data.rows} />
+  ) : (
+    <p className="text-sm text-muted-foreground">
+      Không tải được danh sách hợp đồng cần lưu ý ngày.
+    </p>
+  );
+}
+
+async function DashboardContent() {
+  const user = await requireUser();
+
+  return (
+    <div className="space-y-6 p-6">
+      <header className="flex flex-wrap items-center justify-between gap-4 pb-1">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-2xl font-bold tracking-tight">Tổng quan</h1>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Hệ thống ổn định
+            </span>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Xin chào, <span className="font-medium text-foreground">{user.fullName ?? user.email}</span> · Theo dõi hợp đồng theo thời gian thực
+          </p>
+        </div>
+      </header>
+
+      <Suspense fallback={<DashboardMetricsSkeleton />}>
+        <DashboardMetricsSection organizationId={user.organizationId} />
+      </Suspense>
 
       <Card className="rounded-2xl border border-border/80 shadow-sm bg-card overflow-hidden">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 border-b border-border/40">
@@ -120,13 +197,9 @@ async function DashboardContent() {
           </Button>
         </CardHeader>
         <CardContent className="pt-4">
-          {recent.ok ? (
-            <RecentContracts contracts={recent.data} />
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Không tải được danh sách hợp đồng gần đây.
-            </p>
-          )}
+          <Suspense fallback={<DashboardRowsSkeleton />}>
+            <RecentContractsSection organizationId={user.organizationId} />
+          </Suspense>
         </CardContent>
       </Card>
 
@@ -140,13 +213,9 @@ async function DashboardContent() {
           </Button>
         </CardHeader>
         <CardContent className="pt-4">
-          {expiring.ok ? (
-            <ExpiringContracts contracts={expiring.data} />
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Không tải được danh sách hợp đồng sắp hết hạn.
-            </p>
-          )}
+          <Suspense fallback={<DashboardRowsSkeleton />}>
+            <ExpiringContractsSection organizationId={user.organizationId} />
+          </Suspense>
         </CardContent>
       </Card>
 
@@ -157,11 +226,9 @@ async function DashboardContent() {
               <CardTitle className="text-base font-semibold tracking-tight">
                 Hợp đồng không xác định thời hạn
               </CardTitle>
-              {undated.ok && undated.data.total > 0 && (
-                <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-semibold text-amber-800 dark:text-amber-300 border border-amber-500/30">
-                  {undated.data.total} hợp đồng
-                </span>
-              )}
+              <Suspense fallback={null}>
+                <UndatedContractsBadge organizationId={user.organizationId} />
+              </Suspense>
             </div>
             <p className="text-xs text-muted-foreground">
               Các hợp đồng chưa có ngày ký, thiếu ngày hết hạn hoặc là hợp đồng vô thời hạn / không giới hạn
@@ -184,13 +251,9 @@ async function DashboardContent() {
             </AlertDescription>
           </Alert>
 
-          {undated.ok ? (
-            <UndatedContracts contracts={undated.data.rows} />
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Không tải được danh sách hợp đồng cần lưu ý ngày.
-            </p>
-          )}
+          <Suspense fallback={<DashboardRowsSkeleton />}>
+            <UndatedContractsSection organizationId={user.organizationId} />
+          </Suspense>
         </CardContent>
       </Card>
     </div>
@@ -205,6 +268,26 @@ export default function DashboardPage() {
   );
 }
 
+function DashboardMetricsSkeleton() {
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {[0, 1, 2, 3].map((index) => (
+        <Skeleton key={index} className="h-[7.5rem] rounded-xl" />
+      ))}
+    </div>
+  );
+}
+
+function DashboardRowsSkeleton({ rows = DASHBOARD_LIST_LIMIT }: { rows?: number }) {
+  return (
+    <div className="space-y-3 py-1">
+      {Array.from({ length: rows }).map((_, index) => (
+        <Skeleton key={index} className="h-9 w-full rounded-md" />
+      ))}
+    </div>
+  );
+}
+
 /** Plan section 81 — the dashboard's loading state. */
 function DashboardSkeleton() {
   return (
@@ -214,15 +297,11 @@ function DashboardSkeleton() {
         <Skeleton className="h-4 w-64" />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[0, 1, 2, 3].map((index) => (
-          <Skeleton key={index} className="h-[7.5rem]" />
-        ))}
-      </div>
+      <DashboardMetricsSkeleton />
 
-      <Skeleton className="h-56" />
-      <Skeleton className="h-56" />
-      <Skeleton className="h-56" />
+      <Skeleton className="h-56 rounded-2xl" />
+      <Skeleton className="h-56 rounded-2xl" />
+      <Skeleton className="h-56 rounded-2xl" />
     </div>
   );
 }

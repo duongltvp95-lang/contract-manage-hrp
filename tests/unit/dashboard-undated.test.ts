@@ -6,7 +6,62 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: () => mockCreateClient(),
 }));
 
-import { getUndatedContracts } from "@/lib/services/dashboard";
+import { countUndatedContracts, getUndatedContracts } from "@/lib/services/dashboard";
+
+describe("Dashboard - countUndatedContracts (đếm nhanh head: true không join)", () => {
+  const orgId = "org-test-123";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("dùng select head: true, không join partners/companies và không order", async () => {
+    const mockOr = vi.fn().mockResolvedValue({
+      count: 7,
+      error: null,
+    });
+    const mockIs = vi.fn().mockReturnValue({ or: mockOr });
+    const mockEq = vi.fn().mockReturnValue({ is: mockIs });
+    const mockSelect = vi.fn().mockReturnValue({ eq: mockEq });
+    const mockFrom = vi.fn().mockReturnValue({ select: mockSelect });
+
+    mockCreateClient.mockResolvedValue({
+      from: mockFrom,
+    });
+
+    const result = await countUndatedContracts(orgId);
+
+    expect(result).toEqual({ ok: true, data: 7 });
+    expect(mockFrom).toHaveBeenCalledWith("contracts");
+    expect(mockSelect).toHaveBeenCalledWith("id", { count: "exact", head: true });
+    expect(mockEq).toHaveBeenCalledWith("organization_id", orgId);
+    expect(mockIs).toHaveBeenCalledWith("archived_at", null);
+    expect(mockOr).toHaveBeenCalledWith(
+      expect.stringContaining("signed_date.is.null,expiry_date.is.null"),
+    );
+  });
+
+  it("trả về db_error khi truy vấn đếm lỗi", async () => {
+    const mockOr = vi.fn().mockResolvedValue({
+      count: null,
+      error: { message: "timeout", code: "57014" },
+    });
+    const mockIs = vi.fn().mockReturnValue({ or: mockOr });
+    const mockEq = vi.fn().mockReturnValue({ is: mockIs });
+    const mockSelect = vi.fn().mockReturnValue({ eq: mockEq });
+    const mockFrom = vi.fn().mockReturnValue({ select: mockSelect });
+
+    mockCreateClient.mockResolvedValue({
+      from: mockFrom,
+    });
+
+    const result = await countUndatedContracts(orgId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("db_error");
+    }
+  });
+});
 
 describe("Dashboard - getUndatedContracts (Hợp đồng không ngày ký, không ngày hết hạn, không giới hạn)", () => {
   const orgId = "org-test-123";
