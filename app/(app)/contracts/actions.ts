@@ -29,7 +29,7 @@ import {
   deleteContractFile,
   type ContractFileRow,
 } from "@/lib/services/files";
-import { deleteObject, getObjectBuffer, headObject } from "@/lib/r2/objects";
+import { deleteObject, getObjectBufferBounded } from "@/lib/r2/objects";
 import {
   authorized,
   fromService,
@@ -54,6 +54,10 @@ import {
 } from "@/lib/ai/gemini";
 import { deleteGeminiFile, uploadToGeminiFiles } from "@/lib/ai/gemini-files";
 import { aiLog } from "@/lib/ai/log";
+import {
+  isUsableContractPdfText as isUsableSharedPdfText,
+  PDF_TEXT_MAX_CHARACTERS as SHARED_PDF_TEXT_MAX_CHARACTERS,
+} from "@/lib/ai/pdf-text-shared";
 import { consumeRateLimit } from "@/lib/rate-limit";
 import { rateLimitMessage } from "@/lib/rate-limit-policy";
 import {
@@ -530,7 +534,14 @@ export async function extractContractAction(
   const actionDeadline = actionStartTime + TOTAL_ACTION_BUDGET_MS;
   let actionStatus: "success" | "returned_error" = "returned_error";
   let inputSizeBytes: number | null = null;
-  const source = typeof formData.get("objectKey") === "string" ? "r2" : "server-action";
+  const rawClientPdfText = formData.get("clientPdfText");
+  const hasClientPdfText =
+    typeof rawClientPdfText === "string" && rawClientPdfText.trim().length > 0;
+  const source = hasClientPdfText
+    ? "client-pdf-text"
+    : typeof formData.get("objectKey") === "string"
+      ? "r2"
+      : "server-action";
 
   aiLog.info("Bắt đầu trích xuất hợp đồng", { traceId, source });
 
@@ -617,8 +628,50 @@ export async function extractContractAction(
     let buffer: Buffer;
     let filename = "document.pdf";
     let mimeType = "application/pdf";
+    let preExtractedPdfText: string | null = null;
 
-    if (typeof objectKey === "string" && objectKey.length > 0) {
+    if (hasClientPdfText) {
+      if (rawClientPdfText.length > SHARED_PDF_TEXT_MAX_CHARACTERS + 500) {
+        return validationFailure("Nội dung văn bản PDF quá lớn", [
+          {
+            path: "file",
+            message: "Nội dung văn bản gửi từ trình duyệt vượt quá ngưỡng cho phép. Vui lòng thử lại.",
+          },
+        ]);
+      }
+
+      const rawDeclaredSize = Number(formData.get("fileSize"));
+      if (Number.isFinite(rawDeclaredSize) && rawDeclaredSize > MAX_AI_FILE_SIZE_BYTES) {
+        return validationFailure("Dung lượng tệp quá lớn", [
+          {
+            path: "file",
+            message: `Dung lượng tệp vượt quá giới hạn ${MAX_AI_FILE_SIZE_MB} MB cho phép đối với phân tích AI.`,
+          },
+        ]);
+      }
+
+      const trimmedClientText = rawClientPdfText.trim();
+      if (!isUsableSharedPdfText(trimmedClientText, { isTruncated: false })) {
+        return validationFailure("Nội dung văn bản PDF không hợp lệ", [
+          {
+            path: "file",
+            message: "Không thể xác thực lớp văn bản PDF từ trình duyệt. Vui lòng thử trích xuất lại.",
+          },
+        ]);
+      }
+
+      buffer = Buffer.alloc(0);
+      inputSizeBytes =
+        Number.isFinite(rawDeclaredSize) && rawDeclaredSize > 0
+          ? Math.floor(rawDeclaredSize)
+          : Buffer.byteLength(trimmedClientText, "utf8");
+      filename = ((formData.get("filename") as string) || "document.pdf").slice(0, 255);
+      mimeType = (formData.get("mimeType") as string) || "application/pdf";
+      preExtractedPdfText = trimmedClientText;
+      preExtractedPdfTextLength = trimmedClientText.length;
+      pdfTextCharacters = trimmedClientText.length;
+      pdfTextExtractionAttempted = true;
+    } else if (typeof objectKey === "string" && objectKey.length > 0) {
       const expectedPrefix = `ai-temp/${access.user.organizationId}/`;
       if (!objectKey.startsWith(expectedPrefix)) {
         return validationFailure("objectKey không hợp lệ", [
@@ -636,22 +689,20 @@ export async function extractContractAction(
         ]);
       }
 
-      // Kiểm tra Content-Length thực tế bằng HEAD trước khi tải toàn bộ object vào bộ nhớ
-      const headTimeoutMs = Math.min(5_000, Math.max(1_000, actionDeadline - Date.now() - 15_000));
-      const head = await measureAiStage(
+      // Gộp kiểm tra tồn tại/kích thước và tải dữ liệu thành 1 lượt GET có giới hạn byte an toàn
+      const downloadTimeoutMs = Math.min(18_000, Math.max(1_000, actionDeadline - Date.now() - 12_000));
+      const downloaded = await measureAiStage(
         traceId,
-        "r2_head",
-        () => headObject(objectKey, { timeoutMs: headTimeoutMs }),
+        "r2_download",
+        () =>
+          getObjectBufferBounded(objectKey, {
+            maxBytes: MAX_AI_FILE_SIZE_BYTES,
+            timeoutMs: downloadTimeoutMs,
+          }),
       );
-      if (!head.exists || head.contentLength === null) {
-        triggerR2Cleanup(objectKey);
-        return validationFailure("Không tìm thấy tệp", [
-          { path: "objectKey", message: "Không thể đọc tệp từ kho lưu trữ đám mây" },
-        ]);
-      }
+      triggerR2Cleanup(objectKey);
 
-      if (head.contentLength > MAX_AI_FILE_SIZE_BYTES) {
-        triggerR2Cleanup(objectKey);
+      if (downloaded.status === "too_large") {
         return validationFailure("Dung lượng tệp quá lớn", [
           {
             path: "file",
@@ -660,26 +711,7 @@ export async function extractContractAction(
         ]);
       }
 
-      // Kiểm tra lại ngân sách trước khi bắt đầu tải toàn bộ buffer từ R2
-      if (actionDeadline - Date.now() < 12_000) {
-        triggerR2Cleanup(objectKey);
-        return validationFailure("Hệ thống hết thời gian xử lý", [
-          {
-            path: "file",
-            message: "Quá thời gian xử lý cho phép của hệ thống. Vui lòng thử lại với tệp tài liệu ngắn hơn.",
-          },
-        ]);
-      }
-
-      const downloadTimeoutMs = Math.min(18_000, Math.max(1_000, actionDeadline - Date.now() - 12_000));
-      const downloaded = await measureAiStage(
-        traceId,
-        "r2_download",
-        () => getObjectBuffer(objectKey, { timeoutMs: downloadTimeoutMs }),
-      );
-      triggerR2Cleanup(objectKey);
-
-      if (!downloaded) {
+      if (downloaded.status !== "ok") {
         return validationFailure("Không tìm thấy tệp", [
           { path: "objectKey", message: "Không thể đọc tệp từ kho lưu trữ đám mây" },
         ]);
@@ -695,8 +727,8 @@ export async function extractContractAction(
         ]);
       }
 
-      buffer = downloaded;
-      inputSizeBytes = buffer.length;
+      buffer = downloaded.buffer;
+      inputSizeBytes = downloaded.contentLength;
       filename = (formData.get("filename") as string) || "document.pdf";
       mimeType = (formData.get("mimeType") as string) || "application/pdf";
     } else {
@@ -730,13 +762,16 @@ export async function extractContractAction(
       const raw = typeof value === "string" ? Number(value) : Number.NaN;
       return Number.isFinite(raw) && raw >= 0 && raw <= 300_000 ? raw : undefined;
     };
+    const clientPdfParseMs = parseBoundedClientMs(formData.get("clientPdfParseMs"));
     const clientPresignMs = parseBoundedClientMs(formData.get("clientPresignMs"));
     const clientR2UploadMs = parseBoundedClientMs(formData.get("clientR2UploadMs"));
+    const clientPdfAttempted = formData.get("clientPdfAttempted") === "1";
     aiLog.info("Tệp AI đã được nhận", {
       traceId,
       sizeBytes: inputSizeBytes,
       mimeType: resolvedMime,
       source,
+      clientPdfParseMs,
       clientPresignMs,
       clientR2UploadMs,
     });
@@ -746,6 +781,11 @@ export async function extractContractAction(
           path: "file",
           message: `Định dạng tệp (${resolvedMime || "không rõ"}) chưa được hỗ trợ. AI chỉ hỗ trợ PDF hoặc hình ảnh (PNG, JPG, WebP).`,
         },
+      ]);
+    }
+    if (hasClientPdfText && resolvedMime !== "application/pdf") {
+      return validationFailure("Định dạng tệp không hợp lệ", [
+        { path: "file", message: "Lớp văn bản trích xuất trước chỉ áp dụng cho tệp PDF" },
       ]);
     }
 
@@ -761,72 +801,76 @@ export async function extractContractAction(
       ]);
     }
 
-    // Thử trích xuất nhanh lớp văn bản PDF trước.
-    // Với các tệp PDF có text layer (kể cả >= 2 MB, tối đa 30 trang / 50.000 ký tự),
-    // việc trích xuất văn bản cục bộ cho phép gửi văn bản trực tiếp cho Gemini, tránh
-    // hoàn toàn việc upload tệp lớn lên Gemini Files API (tiết kiệm 5-15s và quota mạng).
-    let preExtractedPdfText: string | null = null;
-    if (resolvedMime === "application/pdf") {
-      const pdfBudget = Math.min(2_500, Math.max(500, remainingAiBudgetMs - 8_000));
-      if (pdfBudget >= 800) {
-        try {
-          const {
-            extractPdfText,
-            isUsableContractPdfText,
-            PDF_TEXT_MAX_CHARACTERS,
-            PDF_TEXT_MAX_PAGES,
-          } = await import("@/lib/ai/pdf-text");
-          pdfTextExtractionAttempted = true;
-          const pdfResult = await measureAiStage(
-            traceId,
-            "pdf_text_extract",
-            () =>
-              extractPdfText(buffer, pdfBudget, {
-                maxPages: PDF_TEXT_MAX_PAGES,
-                maxCharacters: PDF_TEXT_MAX_CHARACTERS,
-              }),
-            { sizeBytes: buffer.length },
-          );
-          pdfTextCharacters = pdfResult?.text.length ?? null;
-          const pageCharCounts = pdfResult?.pageCharCounts;
-          const minPageChars =
-            pageCharCounts && pageCharCounts.length > 0 ? Math.min(...pageCharCounts) : undefined;
-          const firstPageChars = pageCharCounts?.[0];
-          if (
-            pdfResult &&
-            isUsableContractPdfText(pdfResult.text, {
-              isTruncated: pdfResult.isTruncated,
-              pageCharCounts,
-            })
-          ) {
-            preExtractedPdfText = pdfResult.text;
-            preExtractedPdfTextLength = pdfResult.text.length;
-            aiLog.info("Đã đọc trước lớp văn bản PDF, bỏ qua Gemini Files API", {
+    // Thử trích xuất nhanh lớp văn bản PDF trên máy chủ nếu trình duyệt chưa trích xuất trước.
+    if (resolvedMime === "application/pdf" && !preExtractedPdfText) {
+      if (clientPdfAttempted) {
+        pdfTextExtractionAttempted = true;
+        aiLog.info("Bỏ qua đọc lớp văn bản PDF trên server vì trình duyệt đã xác định cần đọc tài liệu gốc", {
+          traceId,
+          sizeBytes: buffer.length,
+        });
+      } else {
+        const pdfBudget = Math.min(2_500, Math.max(500, remainingAiBudgetMs - 8_000));
+        if (pdfBudget >= 800) {
+          try {
+            const {
+              extractPdfText,
+              isUsableContractPdfText,
+              PDF_TEXT_MAX_CHARACTERS,
+              PDF_TEXT_MAX_PAGES,
+            } = await import("@/lib/ai/pdf-text");
+            pdfTextExtractionAttempted = true;
+            const pdfResult = await measureAiStage(
               traceId,
-              textCharacters: pdfResult.text.length,
-              pageCount: pdfResult.pageCount,
-              inspectedPages: pageCharCounts?.length,
-              firstPageChars,
-              minPageChars,
-              sizeBytes: buffer.length,
-            });
-          } else if (pdfResult) {
-            aiLog.info("Lớp văn bản PDF không đủ điều kiện an toàn, chuyển sang đọc tài liệu gốc", {
+              "pdf_text_extract",
+              () =>
+                extractPdfText(buffer, pdfBudget, {
+                  maxPages: PDF_TEXT_MAX_PAGES,
+                  maxCharacters: PDF_TEXT_MAX_CHARACTERS,
+                }),
+              { sizeBytes: buffer.length },
+            );
+            pdfTextCharacters = pdfResult?.text.length ?? null;
+            const pageCharCounts = pdfResult?.pageCharCounts;
+            const minPageChars =
+              pageCharCounts && pageCharCounts.length > 0 ? Math.min(...pageCharCounts) : undefined;
+            const firstPageChars = pageCharCounts?.[0];
+            if (
+              pdfResult &&
+              isUsableContractPdfText(pdfResult.text, {
+                isTruncated: pdfResult.isTruncated,
+                pageCharCounts,
+              })
+            ) {
+              preExtractedPdfText = pdfResult.text;
+              preExtractedPdfTextLength = pdfResult.text.length;
+              aiLog.info("Đã đọc trước lớp văn bản PDF, bỏ qua Gemini Files API", {
+                traceId,
+                textCharacters: pdfResult.text.length,
+                pageCount: pdfResult.pageCount,
+                inspectedPages: pageCharCounts?.length,
+                firstPageChars,
+                minPageChars,
+                sizeBytes: buffer.length,
+              });
+            } else if (pdfResult) {
+              aiLog.info("Lớp văn bản PDF không đủ điều kiện an toàn, chuyển sang đọc tài liệu gốc", {
+                traceId,
+                textCharacters: pdfResult.text.length,
+                pageCount: pdfResult.pageCount,
+                inspectedPages: pageCharCounts?.length,
+                firstPageChars,
+                minPageChars,
+                isTruncated: Boolean(pdfResult.isTruncated),
+                sizeBytes: buffer.length,
+              });
+            }
+          } catch (pdfErr) {
+            aiLog.warn("Đọc trước lớp văn bản PDF không thành công, tiếp tục quy trình chuẩn", {
               traceId,
-              textCharacters: pdfResult.text.length,
-              pageCount: pdfResult.pageCount,
-              inspectedPages: pageCharCounts?.length,
-              firstPageChars,
-              minPageChars,
-              isTruncated: Boolean(pdfResult.isTruncated),
-              sizeBytes: buffer.length,
+              errorName: pdfErr instanceof Error ? pdfErr.name : "UnknownError",
             });
           }
-        } catch (pdfErr) {
-          aiLog.warn("Đọc trước lớp văn bản PDF không thành công, tiếp tục quy trình chuẩn", {
-            traceId,
-            errorName: pdfErr instanceof Error ? pdfErr.name : "UnknownError",
-          });
         }
       }
     }
@@ -1082,6 +1126,28 @@ export async function extractContractAction(
       thoughtTokens: extractionTelemetry?.thoughtTokens,
     });
   }
+}
+
+/**
+ * Dọn tệp R2 tạm (ai-temp/<orgId>/...) khi phiên tải trước theo lô (prefetch) bị người dùng dừng giữa chừng.
+ */
+export async function cleanupAiTempObjectAction(
+  objectKey: string,
+): Promise<ActionResult<{ deleted: boolean }>> {
+  const access = await authorized({ timeoutMs: 5_000 });
+  if (!access.ok) return access.result;
+
+  if (
+    typeof objectKey !== "string" ||
+    !objectKey.startsWith(`ai-temp/${access.user.organizationId}/`)
+  ) {
+    return validationFailure("objectKey không hợp lệ", [
+      { path: "objectKey", message: "Tệp không thuộc tổ chức của bạn" },
+    ]);
+  }
+
+  await deleteObject(objectKey, { timeoutMs: 5_000 }).catch(() => {});
+  return { ok: true, data: { deleted: true } };
 }
 
 /**

@@ -27,7 +27,12 @@ import {
   PDF_TEXT_MAX_CHARACTERS,
   PDF_TEXT_MAX_PAGES,
 } from "@/lib/ai/pdf-text";
-import { hasAppendixKeyword } from "@schemas/file";
+import {
+  AI_DIRECT_ACTION_MAX_BYTES,
+  AI_GEMINI_FILES_API_MIN_BYTES,
+  hasAppendixKeyword,
+} from "@schemas/file";
+import { extractClientUsablePdfText } from "@/lib/ai/pdf-text-client";
 import {
   hasMatchingMainContractFile,
   isAppendixFile,
@@ -492,8 +497,10 @@ describe("G2 v2 — Cấu hình MIME & Kích thước", () => {
     expect(ALLOWED_MIME_TYPES.has("text/plain")).toBe(false);
   });
 
-  it("MAX_AI_FILE_SIZE_BYTES là 50 MB", () => {
+  it("MAX_AI_FILE_SIZE_BYTES là 50 MB, trực tiếp Server Action 2 MB, và ngưỡng inlineData Server→Gemini là 8 MB", () => {
     expect(MAX_AI_FILE_SIZE_BYTES).toBe(50 * 1024 * 1024);
+    expect(AI_DIRECT_ACTION_MAX_BYTES).toBe(2 * 1024 * 1024);
+    expect(AI_GEMINI_FILES_API_MIN_BYTES).toBe(8 * 1024 * 1024);
   });
 });
 
@@ -1088,6 +1095,109 @@ describe("Step 1 Telemetry & Fallback 503 (gemini-3.1-flash-lite → gemini-3.5-
       outputTokens: 215,
       thoughtTokens: 0,
     });
+  });
+});
+
+describe("Step 2 — Đọc chữ PDF trên trình duyệt (extractClientUsablePdfText)", () => {
+  function buildTestPdf(pageLinesList: string[][]): Uint8Array {
+    const pageCount = pageLinesList.length;
+    const objects: string[] = [];
+    // 1: Catalog, 2: Pages, 3: Font
+    objects.push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    const pageObjNums = pageLinesList.map((_, idx) => 4 + idx * 2);
+    objects.push(
+      `2 0 obj\n<< /Type /Pages /Kids [${pageObjNums.map((n) => `${n} 0 R`).join(" ")}] /Count ${pageCount} >>\nendobj\n`,
+    );
+    objects.push("3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
+
+    pageLinesList.forEach((lines, idx) => {
+      const pageNum = 4 + idx * 2;
+      const contentNum = pageNum + 1;
+      if (lines.length === 0) {
+        objects.push(
+          `${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n`,
+        );
+        objects.push(`${contentNum} 0 obj\n<< /Length 0 >>\nstream\n\nendstream\nendobj\n`);
+      } else {
+        const streamCmds = [
+          "BT",
+          "/F1 8 Tf",
+          ...lines.map((line, lineIdx) => `${lineIdx === 0 ? "36 740 Td" : "0 -14 Td"} (${line}) Tj`),
+          "ET",
+        ].join("\n");
+        objects.push(
+          `${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentNum} 0 R >>\nendobj\n`,
+        );
+        objects.push(
+          `${contentNum} 0 obj\n<< /Length ${Buffer.byteLength(streamCmds)} >>\nstream\n${streamCmds}\nendstream\nendobj\n`,
+        );
+      }
+    });
+
+    let raw = "%PDF-1.4\n";
+    const offsets: number[] = [];
+    for (const obj of objects) {
+      offsets.push(Buffer.byteLength(raw));
+      raw += obj;
+    }
+    const xrefOffset = Buffer.byteLength(raw);
+    raw += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+    for (const off of offsets) {
+      raw += `${String(off).padStart(10, "0")} 00000 n \n`;
+    }
+    raw += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+    return new Uint8Array(Buffer.from(raw));
+  }
+
+  it("trả về status = usable cho PDF có lớp văn bản hợp đồng đầy đủ", async () => {
+    const pdfBytes = buildTestPdf([
+      [
+        "CONG HOA XA HOI CHU NGHIA VIET NAM - Doc lap - Tu do - Hanh phuc",
+        "HOP DONG DICH VU (SERVICE CONTRACT) SO 2026/HDDV-HRP GIUA HAI BEN KY KET",
+        "Ben A: CONG TY TNHH HRP VIET NAM - Dai dien theo phap luat cua cong ty",
+        "Ben B: CONG TY CO PHAN DOI TAC CONG NGHE SAO MAI VIET NAM",
+        "Dieu 1 (Article 1): Pham vi cong viec, gia tri thanh toan va hieu luc thuc hien.",
+      ],
+    ]);
+
+    const outcome = await extractClientUsablePdfText(pdfBytes);
+    expect(outcome.status).toBe("usable");
+    if (outcome.status === "usable") {
+      expect(outcome.pageCount).toBe(1);
+      expect(outcome.text).toContain("SO 2026/HDDV-HRP");
+    }
+  });
+
+  it("dừng sớm tức thì (empty_or_hybrid_page) cho PDF scan hoặc PDF lai có trang rỗng", async () => {
+    const scannedPdf = buildTestPdf([[], []]);
+    const scanOutcome = await extractClientUsablePdfText(scannedPdf);
+    expect(scanOutcome.status).toBe("unusable");
+    if (scanOutcome.status === "unusable") {
+      expect(scanOutcome.reason).toBe("empty_or_hybrid_page");
+    }
+
+    const hybridPdf = buildTestPdf([
+      [
+        "CONG HOA XA HOI CHU NGHIA VIET NAM - Doc lap - Tu do - Hanh phuc",
+        "HOP DONG DICH VU SO 2026/HDDV-HRP BEN A CONG TY TNHH HRP VIET NAM DIEU 1 THANH TOAN",
+      ],
+      [], // Trang 2 là trang scan chữ ký rỗng
+    ]);
+    const hybridOutcome = await extractClientUsablePdfText(hybridPdf);
+    expect(hybridOutcome.status).toBe("unusable");
+    if (hybridOutcome.status === "unusable") {
+      expect(hybridOutcome.reason).toBe("empty_or_hybrid_page");
+    }
+  });
+
+  it("dừng sớm (too_many_pages) khi tài liệu vượt quá 30 trang", async () => {
+    const pdf31Pages = buildTestPdf(Array.from({ length: 31 }, () => ["HOP DONG TRANG NGAN"]));
+    const outcome = await extractClientUsablePdfText(pdf31Pages);
+    expect(outcome.status).toBe("unusable");
+    if (outcome.status === "unusable") {
+      expect(outcome.reason).toBe("too_many_pages");
+      expect(outcome.pageCount).toBe(31);
+    }
   });
 });
 

@@ -56,11 +56,15 @@ export const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 export const MAX_AI_FILE_SIZE_MB = 50;
 export const MAX_AI_FILE_SIZE_BYTES = MAX_AI_FILE_SIZE_MB * 1024 * 1024;
 
-/** Files at or below this limit can be sent to a Server Action without R2 staging. */
+/** Files at or below this limit can be sent to a Server Action without R2 staging (safe under Vercel 4.5 MB limit). */
 export const AI_DIRECT_ACTION_MAX_BYTES = 2 * 1024 * 1024;
 
-/** Larger files use Gemini Files API instead of base64 inlineData. */
-export const AI_GEMINI_FILES_API_MIN_BYTES = AI_DIRECT_ACTION_MAX_BYTES;
+/**
+ * Server-to-Gemini threshold: binary files below 8 MB (~11.2 MB base64 JSON, well under
+ * Gemini's 20 MB generateContent inline limit) are sent directly via inlineData to avoid
+ * 2 extra Files API upload round-trips + cleanup; files >= 8 MB use Gemini Files API.
+ */
+export const AI_GEMINI_FILES_API_MIN_BYTES = 8 * 1024 * 1024;
 
 export const MIME_TYPE_ERROR = `Định dạng tệp không được hỗ trợ. Chỉ chấp nhận: ${ALLOWED_MIME_TYPES.join(", ")}`;
 export const FILE_SIZE_ERROR = `Tệp vượt quá giới hạn ${MAX_UPLOAD_SIZE_MB} MB`;
