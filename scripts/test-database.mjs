@@ -22,9 +22,14 @@ try {
   let ready = false;
   for (let attempt = 0; attempt < 60; attempt++) {
     try {
-      execFileSync("docker", ["exec", container, "pg_isready", "-U", "postgres"], { stdio: "pipe" });
+      const logs = execFileSync("docker", ["logs", container], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      if (!logs.includes("PostgreSQL init process complete; ready for start up.")) {
+        await delay(300);
+        continue;
+      }
+      execFileSync("docker", ["exec", container, "psql", "-X", "-U", "postgres", "-c", "select 1"], { stdio: "pipe" });
       ready = true; break;
-    } catch { await delay(500); }
+    } catch { await delay(300); }
   }
   if (!ready) throw new Error("Isolated PostgreSQL did not start");
   sql(readFileSync(new URL("tests/database/bootstrap.sql", root), "utf8"));
