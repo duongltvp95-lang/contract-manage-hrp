@@ -22,6 +22,7 @@ import {
 } from "@schemas/file";
 
 import {
+  cleanupAiTempObjectAction,
   completeUploadAction,
   createContractAction,
   extractContractAction,
@@ -532,9 +533,146 @@ export function ContractForm({
     }
   }
 
+  type PreparedAiInput =
+    | {
+        kind: "client-pdf-text";
+        pdfText: string;
+        mimeType: string;
+        clientPdfParseMs: number;
+      }
+    | {
+        kind: "r2";
+        objectKey: string;
+        mimeType: string;
+        presignMs: number;
+        clientR2UploadMs: number;
+        clientPdfParseMs?: number;
+        clientPdfAttempted?: boolean;
+      }
+    | {
+        kind: "direct-file";
+        clientPdfParseMs?: number;
+        clientPdfAttempted?: boolean;
+      };
+
+  async function prepareFileForAi(
+    file: File,
+    opts?: { showToast?: boolean },
+  ): Promise<PreparedAiInput> {
+    const showToast = opts?.showToast ?? true;
+    const resolvedMime = resolveUploadMimeType(file);
+    let clientPdfParseMs: number | undefined;
+    let clientPdfAttempted: boolean | undefined;
+
+    // Bước 2: Thử đọc nhanh lớp văn bản PDF ngay trên trình duyệt.
+    // Nếu PDF có lớp chữ hợp lệ (<= 30 trang, <= 50.000 ký tự, không lai trang scan),
+    // chỉ gửi vài chục KB văn bản lên Server Action — bỏ hẳn vòng presign + upload R2.
+    if (resolvedMime === "application/pdf" && file.size <= MAX_AI_FILE_SIZE_BYTES) {
+      if (showToast) {
+        toast.loading(`Đang kiểm tra lớp văn bản "${file.name}"...`, { id: "ai-extract" });
+      }
+      try {
+        const [{ extractClientUsablePdfText }, arrayBuffer] = await Promise.all([
+          import("@/lib/ai/pdf-text-client"),
+          file.arrayBuffer(),
+        ]);
+        const pdfOutcome = await extractClientUsablePdfText(arrayBuffer);
+        clientPdfParseMs = pdfOutcome.elapsedMs;
+        if (pdfOutcome.status === "usable") {
+          return {
+            kind: "client-pdf-text",
+            pdfText: pdfOutcome.text,
+            mimeType: "application/pdf",
+            clientPdfParseMs,
+          };
+        }
+        if (pdfOutcome.status === "unusable") {
+          clientPdfAttempted = true;
+        } else {
+          clientLog.warn("Đọc chữ PDF trên trình duyệt gặp lỗi, chuyển sang tải tệp gốc", {
+            errorName: pdfOutcome.errorName,
+            elapsedMs: pdfOutcome.elapsedMs,
+            sizeBytes: file.size,
+          });
+        }
+      } catch (pdfErr) {
+        clientLog.warn("Không nạp được trình đọc PDF trình duyệt, chuyển sang tải tệp gốc", {
+          errorName: pdfErr instanceof Error ? pdfErr.name : "UnknownError",
+          sizeBytes: file.size,
+        });
+      }
+    }
+
+    // Tệp nhị phân/scan trên ngưỡng payload trực tiếp được tải lên Cloudflare R2.
+    if (file.size > AI_DIRECT_ACTION_MAX_BYTES) {
+      if (showToast) {
+        toast.loading(`Đang chuẩn bị tệp "${file.name}"...`, { id: "ai-extract" });
+      }
+
+      const presignStartedAt = Date.now();
+      const presignRes = await fetch("/api/ai/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name,
+          mimeType: file.type,
+          fileSize: file.size,
+        }),
+      });
+
+      if (!presignRes.ok) {
+        const errPayload = await presignRes.json().catch(() => null);
+        throw new Error(errPayload?.error ?? "Không thể chuẩn bị tải tệp lên máy chủ");
+      }
+
+      const {
+        uploadUrl,
+        objectKey,
+        mimeType: serverMime,
+      } = (await presignRes.json()) as {
+        uploadUrl: string;
+        objectKey: string;
+        mimeType?: string;
+      };
+      const presignMs = Date.now() - presignStartedAt;
+      const targetMime = serverMime || file.type || "application/pdf";
+
+      const uploadStartedAt = Date.now();
+      await putFileWithProgress(uploadUrl, file, {
+        contentType: targetMime,
+        onProgress: showToast
+          ? (p) => {
+              toast.loading(`Đang tải lên "${file.name}": ${p.percent}%...`, { id: "ai-extract" });
+            }
+          : undefined,
+      });
+      const clientR2UploadMs = Date.now() - uploadStartedAt;
+
+      return {
+        kind: "r2",
+        objectKey,
+        mimeType: targetMime,
+        presignMs,
+        clientR2UploadMs,
+        clientPdfParseMs,
+        clientPdfAttempted,
+      };
+    }
+
+    return {
+      kind: "direct-file",
+      clientPdfParseMs,
+      clientPdfAttempted,
+    };
+  }
+
   async function executeExtraction(
     fileItem: PendingFile,
-    options?: { suppressIndividualSuccessToast?: boolean },
+    options?: {
+      suppressIndividualSuccessToast?: boolean;
+      preparedPromise?: Promise<PreparedAiInput>;
+      onServerActionStart?: () => void;
+    },
   ) {
     if (fileItem.file.size > MAX_AI_FILE_SIZE_BYTES) {
       extractionHadErrorRef.current = true;
@@ -547,69 +685,66 @@ export function ContractForm({
 
     const clientStartedAt = Date.now();
     const traceId = crypto.randomUUID();
+    let clientPdfParseMs: number | undefined;
+    let presignMs: number | undefined;
+    let clientR2UploadMs: number | undefined;
     try {
+      const prepared = options?.preparedPromise
+        ? await options.preparedPromise
+        : await prepareFileForAi(fileItem.file, { showToast: true });
+
       const formData = new FormData();
       formData.append("traceId", traceId);
+      clientPdfParseMs = prepared.clientPdfParseMs;
+      if (clientPdfParseMs !== undefined) {
+        formData.append("clientPdfParseMs", String(clientPdfParseMs));
+      }
 
-      // Tệp trên ngưỡng payload trực tiếp được tải lên Cloudflare R2
-      // để giữ request Server Action nhỏ và xử lý tệp lớn theo luồng R2.
-      if (fileItem.file.size > AI_DIRECT_ACTION_MAX_BYTES) {
-        toast.loading(`Đang chuẩn bị tệp "${fileItem.file.name}"...`, { id: "ai-extract" });
-
-        const presignRes = await fetch("/api/ai/upload-url", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filename: fileItem.file.name,
-            mimeType: fileItem.file.type,
-            fileSize: fileItem.file.size,
-          }),
-        });
-
-        if (!presignRes.ok) {
-          const errPayload = await presignRes.json().catch(() => null);
-          throw new Error(errPayload?.error ?? "Không thể chuẩn bị tải tệp lên máy chủ");
-        }
-
-        const {
-          uploadUrl,
-          objectKey,
-          mimeType: serverMime,
-        } = (await presignRes.json()) as {
-          uploadUrl: string;
-          objectKey: string;
-          mimeType?: string;
-        };
-
-        const targetMime = serverMime || fileItem.file.type || "application/pdf";
-
-        const uploadStartedAt = Date.now();
-        await putFileWithProgress(uploadUrl, fileItem.file, {
-          contentType: targetMime,
-          onProgress: (p) => {
-            toast.loading(`Đang tải lên "${fileItem.file.name}": ${p.percent}%...`, { id: "ai-extract" });
-          },
-        });
-        formData.append("clientR2UploadMs", String(Date.now() - uploadStartedAt));
-
-        formData.append("objectKey", objectKey);
+      let source: "client-pdf-text" | "r2" | "server-action";
+      if (prepared.kind === "client-pdf-text") {
+        source = "client-pdf-text";
+        formData.append("clientPdfText", prepared.pdfText);
         formData.append("filename", fileItem.file.name);
-        formData.append("mimeType", targetMime);
+        formData.append("mimeType", prepared.mimeType);
+        formData.append("fileSize", String(fileItem.file.size));
+      } else if (prepared.kind === "r2") {
+        source = "r2";
+        presignMs = prepared.presignMs;
+        clientR2UploadMs = prepared.clientR2UploadMs;
+        formData.append("clientPresignMs", String(presignMs));
+        formData.append("clientR2UploadMs", String(clientR2UploadMs));
+        if (prepared.clientPdfAttempted) {
+          formData.append("clientPdfAttempted", "1");
+        }
+        formData.append("objectKey", prepared.objectKey);
+        formData.append("filename", fileItem.file.name);
+        formData.append("mimeType", prepared.mimeType);
       } else {
+        source = "server-action";
+        if (prepared.clientPdfAttempted) {
+          formData.append("clientPdfAttempted", "1");
+        }
         formData.append("file", fileItem.file);
       }
 
+      options?.onServerActionStart?.();
       toast.loading(`AI đang đọc nội dung "${fileItem.file.name}"...`, { id: "ai-extract" });
+      const serverActionStartedAt = Date.now();
       const result = await extractContractAction(formData);
-      clientLog.info("Hoàn tất yêu cầu trích xuất AI", {
-        traceId,
-        outcome: result.ok ? "success" : "error",
-        elapsedMs: Date.now() - clientStartedAt,
-        sizeBytes: fileItem.file.size,
-        source: formData.has("objectKey") ? "r2" : "server-action",
-      });
+      const serverActionMs = Date.now() - serverActionStartedAt;
 
       if (!result.ok) {
+        clientLog.info("Hoàn tất yêu cầu trích xuất AI", {
+          traceId,
+          outcome: "error",
+          clientPdfParseMs,
+          presignMs,
+          clientR2UploadMs,
+          serverActionMs,
+          elapsedMs: Date.now() - clientStartedAt,
+          sizeBytes: fileItem.file.size,
+          source,
+        });
         extractionHadErrorRef.current = true;
         setHasExtractionError(true);
         if (result.code === "rate_limited" || result.code === "rate_limit_unavailable") {
@@ -674,6 +809,21 @@ export function ContractForm({
 
           extractionHadErrorRef.current = false;
           setHasExtractionError(false);
+          const totalToFormFilledMs = Date.now() - clientStartedAt;
+          clientLog.info("Hoàn tất yêu cầu trích xuất AI", {
+            traceId,
+            outcome: "success",
+            clientPdfParseMs,
+            presignMs,
+            clientR2UploadMs,
+            serverActionMs,
+            totalToFormFilledMs,
+            elapsedMs: totalToFormFilledMs,
+            documentType: data.documentType,
+            autoAttachAppendix: true,
+            sizeBytes: fileItem.file.size,
+            source,
+          });
           // Hợp đồng gốc ĐÃ CÓ TRÊN HỆ THỐNG:
           // AI phân tích và tự động gán phụ lục vào hợp đồng gốc này
           toast.dismiss("ai-extract");
@@ -906,12 +1056,31 @@ export function ContractForm({
         setHasExtractionError(false);
       }
 
+      const totalToFormFilledMs = Date.now() - clientStartedAt;
+      clientLog.info("Hoàn tất yêu cầu trích xuất AI", {
+        traceId,
+        outcome: "success",
+        clientPdfParseMs,
+        presignMs,
+        clientR2UploadMs,
+        serverActionMs,
+        totalToFormFilledMs,
+        elapsedMs: totalToFormFilledMs,
+        filledFieldCount: filledFields.length,
+        documentType: data.documentType,
+        sizeBytes: fileItem.file.size,
+        source,
+      });
+
       return data;
     } catch (err) {
       extractionHadErrorRef.current = true;
       setHasExtractionError(true);
       clientLog.error("executeExtraction thất bại", {
         traceId,
+        clientPdfParseMs,
+        presignMs,
+        clientR2UploadMs,
         elapsedMs: Date.now() - clientStartedAt,
         sizeBytes: fileItem.file.size,
         errorMessage: err instanceof Error ? err.message : String(err),
@@ -981,13 +1150,55 @@ export function ContractForm({
     let stopped = false;
     let stoppedForRateLimit = false;
 
+    type PrefetchEntry = {
+      index: number;
+      consumed: boolean;
+      outcomePromise: Promise<{ ok: true; value: PreparedAiInput } | { ok: false; error: unknown }>;
+    };
+    const prefetchedNextRef: { current: PrefetchEntry | null } = { current: null };
+
+    const startPrefetch = (nextIndex: number) => {
+      if (nextIndex >= sorted.length || cancelAiBatchRef.current || aiRateLimitHitRef.current) {
+        return;
+      }
+      const nextFile = sorted[nextIndex].file;
+      if (nextFile.size > MAX_AI_FILE_SIZE_BYTES) {
+        return;
+      }
+      prefetchedNextRef.current = {
+        index: nextIndex,
+        consumed: false,
+        outcomePromise: prepareFileForAi(nextFile, { showToast: false }).then(
+          (value) => ({ ok: true as const, value }),
+          (error: unknown) => ({ ok: false as const, error }),
+        ),
+      };
+    };
+
     try {
       for (let i = 0; i < sorted.length; i++) {
         const item = sorted[i];
+        let preparedPromise: Promise<PreparedAiInput> | undefined;
+        const currentPrefetch = prefetchedNextRef.current;
+        if (currentPrefetch && currentPrefetch.index === i) {
+          currentPrefetch.consumed = true;
+          prefetchedNextRef.current = null;
+          preparedPromise = currentPrefetch.outcomePromise.then((res) => {
+            if (res.ok) return res.value;
+            throw res.error;
+          });
+        }
+
         toast.loading(`AI đang phân tích tệp ${i + 1}/${sorted.length}: "${item.file.name}"...`, {
           id: "ai-extract",
         });
-        const res = await executeExtraction(item, { suppressIndividualSuccessToast: true });
+        const res = await executeExtraction(item, {
+          suppressIndividualSuccessToast: true,
+          preparedPromise,
+          onServerActionStart: () => {
+            startPrefetch(i + 1);
+          },
+        });
         processedCount++;
         if (res?.documentType === "appendix") {
           appendixCount++;
@@ -1005,6 +1216,16 @@ export function ContractForm({
         }
       }
     } finally {
+      // Nếu có tệp tiếp theo đã tải tạm lên R2 trong nền nhưng batch dừng sớm trước khi dùng, xoá ngay tệp tạm R2
+      const unconsumed = prefetchedNextRef.current;
+      if (unconsumed && !unconsumed.consumed) {
+        prefetchedNextRef.current = null;
+        void unconsumed.outcomePromise.then((res) => {
+          if (res.ok && res.value.kind === "r2") {
+            void cleanupAiTempObjectAction(res.value.objectKey).catch(() => {});
+          }
+        });
+      }
       setIsExtractingAi(false);
       setIsAiBatchRunning(false);
       toast.dismiss("ai-extract");
