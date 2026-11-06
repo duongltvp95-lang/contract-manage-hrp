@@ -72,7 +72,12 @@ async function createPrivilegedAdmin(
   }
   await admin
     .from("profiles")
-    .update({ organization_id: organizationId, role: "admin", is_active: true })
+    .update({
+      organization_id: organizationId,
+      role: "admin",
+      is_active: true,
+      can_manage_archived: true,
+    })
     .eq("id", data.user.id);
   return signInAs(PRIVILEGED_EMAIL, password);
 }

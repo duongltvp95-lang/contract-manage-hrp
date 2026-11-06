@@ -51,7 +51,7 @@ if (existing) {
 }
 const created = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name: 'HRP test administrator' } });
 if (created.error || !created.data.user) throw new Error('Cannot create isolated test administrator', { cause: created.error });
-const profile = await admin.from('profiles').update({ role: 'admin', is_active: true }).eq('id', created.data.user.id);
+const profile = await admin.from('profiles').update({ role: 'admin', is_active: true, can_manage_archived: true }).eq('id', created.data.user.id);
 if (profile.error) throw new Error('Cannot prepare isolated administrator profile', { cause: profile.error });
 const user = createClient(status.API_URL, status.ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 const signedIn = await user.auth.signInWithPassword({ email, password });

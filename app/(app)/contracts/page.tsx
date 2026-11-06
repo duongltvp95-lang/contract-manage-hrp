@@ -108,9 +108,9 @@ async function ContractsContent({
   const params = await searchParams;
   const query = parseContractsQuery(params);
 
-  // Round 19/20: the archived tab is owner-email-gated (a non-privileged user
-  // who edits the URL is forced back to active); the expired tab is for everyone.
-  const canDelete = canDeleteEntities(me.email);
+  // Round 19/20 + A01: the archived tab is gated by `profiles.can_manage_archived`
+  // (a non-privileged user who edits the URL is forced back to active); the expired tab is for everyone.
+  const canDelete = canDeleteEntities(me);
   const raw = params.scope;
   const requestedScope =
     raw === "expired" || raw === "archived" || raw === "undated" || raw === "expiring" || raw === "no-files"

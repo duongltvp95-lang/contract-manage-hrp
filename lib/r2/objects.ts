@@ -1,8 +1,13 @@
 import "server-only";
 
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
+import {
+  CopyObjectCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+} from "@aws-sdk/client-s3";
 
-import { createR2Client, getR2Bucket } from "./client";
+import { createR2Client, getR2Bucket, getR2Config } from "./client";
 
 /**
  * Object-level R2 operations. Kept beside the presign helpers so no component
@@ -297,6 +302,110 @@ export async function getObjectBufferBounded(
     }
     console.error("[r2:getObjectBufferBounded]", error);
     return { status: "error" };
+  }
+}
+
+export type CopyObjectConditionalResult =
+  | { status: "copied"; etag: string | null }
+  | { status: "source_changed_or_missing" }
+  | { status: "destination_exists" };
+
+function encodeCopySource(bucket: string, key: string): string {
+  const encodedKey = key
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `${encodeURIComponent(bucket)}/${encodedKey}`;
+}
+
+function quoteEtag(etag: string): string {
+  const trimmed = etag.trim().replaceAll('"', "");
+  return `"${trimmed}"`;
+}
+
+function isCloudflareR2Endpoint(): boolean {
+  try {
+    const { endpoint, accountId } = getR2Config();
+    if (accountId === "isolated") return false;
+    const host = new URL(endpoint).hostname.toLowerCase();
+    return host.endsWith(".r2.cloudflarestorage.com");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Copies a verified staging object to its canonical immutable destination key.
+ *
+ * - Binds `CopySourceIfMatch` to the verified `ETag` from `headObject()` so a
+ *   concurrent PUT on the staging key cannot swap the bytes between verification
+ *   and copy.
+ * - On real Cloudflare R2 endpoints, also attaches `cf-copy-destination-if-none-match: *`
+ *   to refuse overwriting an existing destination object.
+ */
+export async function copyObjectConditional(
+  sourceKey: string,
+  destinationKey: string,
+  options: R2RequestOptions & { sourceEtag?: string | null; contentType?: string },
+): Promise<CopyObjectConditionalResult> {
+  const bucket = getR2Bucket();
+  const signal =
+    options.abortSignal ??
+    (options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined);
+
+  const command = new CopyObjectCommand({
+    Bucket: bucket,
+    CopySource: encodeCopySource(bucket, sourceKey),
+    Key: destinationKey,
+    ...(options.sourceEtag ? { CopySourceIfMatch: quoteEtag(options.sourceEtag) } : {}),
+    ...(options.contentType
+      ? { ContentType: options.contentType, MetadataDirective: "COPY" }
+      : {}),
+  });
+
+  if (isCloudflareR2Endpoint()) {
+    command.middlewareStack.add(
+      (next) => async (args) => {
+        const req = args.request as { headers?: Record<string, string> };
+        if (req?.headers) {
+          req.headers["cf-copy-destination-if-none-match"] = "*";
+        }
+        return next(args);
+      },
+      { step: "build", name: "cfCopyDestinationIfNoneMatch" },
+    );
+  }
+
+  try {
+    const result = await createR2Client().send(
+      command,
+      signal ? { abortSignal: signal } : undefined,
+    );
+    const etag = result.CopyObjectResult?.ETag?.replaceAll('"', "") ?? null;
+    return { status: "copied", etag };
+  } catch (error) {
+    const errObj = error as {
+      name?: string;
+      Code?: string;
+      $metadata?: { httpStatusCode?: number };
+    };
+    const status = errObj?.$metadata?.httpStatusCode;
+    const name = errObj?.name ?? errObj?.Code ?? "";
+
+    if (name === "NotFound" || name === "NoSuchKey" || status === 404) {
+      return { status: "source_changed_or_missing" };
+    }
+
+    if (name === "PreconditionFailed" || status === 412) {
+      // Distinguish whether the destination already exists vs the source ETag changed.
+      const existingDest = await headObject(destinationKey, { timeoutMs: 3_000 }).catch(() => null);
+      if (existingDest?.exists) {
+        return { status: "destination_exists" };
+      }
+      return { status: "source_changed_or_missing" };
+    }
+
+    throw error;
   }
 }
 

@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
   const result = await getFileViewUrl(
     parsed.data.fileId,
     guard.user.organizationId,
-    guard.user.email,
+    guard.user,
   );
 
   if (!result.ok) {

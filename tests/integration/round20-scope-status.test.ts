@@ -104,11 +104,29 @@ suite("round 20 — contract scope + partner status", () => {
     expect(activeRows.some((r) => r.id === expiredId)).toBe(false);
     expect(activeRows.some((r) => r.id === archivedId)).toBe(false);
 
-    const archived = await probe(session, "list_contracts", { scope: "archived", pageSize: 50 });
-    expect(archived.ok).toBe(true);
-    const archivedRows = (archived.data as { rows: { id: string }[] }).rows;
-    expect(archivedRows.some((r) => r.id === archivedId)).toBe(true);
-    expect(archivedRows.some((r) => r.id === expiredId)).toBe(false);
+    // A01: non-privileged callers receive zero archived rows via RLS, even if
+    // they request scope=archived directly against the service layer.
+    const archivedForRegular = await probe(session, "list_contracts", { scope: "archived", pageSize: 50 });
+    expect(archivedForRegular.ok).toBe(true);
+    const regularArchivedRows = (archivedForRegular.data as { rows: { id: string }[] }).rows;
+    expect(regularArchivedRows.some((r) => r.id === archivedId)).toBe(false);
+
+    await admin
+      .from("profiles")
+      .update({ can_manage_archived: true })
+      .eq("id", session.userId);
+    try {
+      const archived = await probe(session, "list_contracts", { scope: "archived", pageSize: 50 });
+      expect(archived.ok).toBe(true);
+      const archivedRows = (archived.data as { rows: { id: string }[] }).rows;
+      expect(archivedRows.some((r) => r.id === archivedId)).toBe(true);
+      expect(archivedRows.some((r) => r.id === expiredId)).toBe(false);
+    } finally {
+      await admin
+        .from("profiles")
+        .update({ can_manage_archived: false })
+        .eq("id", session.userId);
+    }
   }, 120_000);
 
   it("scope=expired default-sorts by expiry_date desc", async () => {

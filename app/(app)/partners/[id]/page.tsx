@@ -59,7 +59,7 @@ async function loadPartner(params: PartnerParams): Promise<{
     id,
     organizationId: me.organizationId,
     partner: partner.data,
-    canDelete: canDeleteEntities(me.email),
+    canDelete: canDeleteEntities(me),
   };
 }
 

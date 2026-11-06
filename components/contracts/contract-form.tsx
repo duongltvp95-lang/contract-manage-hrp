@@ -1390,6 +1390,16 @@ export function ContractForm({
   }
 
   async function onSubmit(values: CreateContractInput) {
+    const cleanSigned = values.signedDate?.trim() ?? "";
+    const cleanExpiry = values.expiryDate?.trim() ?? "";
+    if (cleanSigned && cleanExpiry && cleanExpiry < cleanSigned) {
+      form.setError("expiryDate", {
+        type: "validate",
+        message: "Ngày hết hạn không được sớm hơn ngày ký hợp đồng",
+      });
+      return;
+    }
+
     if (isEdit) {
       // Khi chỉnh sửa: kiểm tra cảnh báo ngày trùng hoặc trống
       const editDateWarnings = getContractDateConfirmationWarnings({
