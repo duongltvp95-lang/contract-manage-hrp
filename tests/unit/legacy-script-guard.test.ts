@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -11,7 +11,7 @@ describe("legacy operational script guard (A14)", () => {
     const outcome = resolveLegacyScriptExecution({
       scriptName: "scripts/apply-round38-performance-indexes.mjs",
       statementCount: 6,
-      supersededBy: "supabase/migrations/20261021000000_performance_indexes.sql",
+      supersededBy: "supabase/migrations/20261020000000_optimize_performance_indexes.sql",
       mode: "ddl",
       argv: ["node", "scripts/apply-round38-performance-indexes.mjs"],
     });
@@ -148,6 +148,21 @@ describe("legacy operational script guard (A14)", () => {
         source,
         `${fileName} must not implicitly load .env.local`,
       ).not.toMatch(/dotenv\.config\s*\(/);
+
+      const supersededMatch = source.match(/supersededBy:\s*"([^"]+)"/);
+      expect(
+        supersededMatch,
+        `${fileName} must declare a supersededBy migration path`,
+      ).not.toBeNull();
+      for (const rawRef of (supersededMatch?.[1] ?? "").split(",").map((item) => item.trim())) {
+        const resolvedMigration = rawRef.startsWith("supabase/")
+          ? path.resolve(process.cwd(), rawRef)
+          : path.resolve(process.cwd(), "supabase/migrations", rawRef);
+        expect(
+          existsSync(resolvedMigration),
+          `${fileName} points to missing migration ${rawRef}`,
+        ).toBe(true);
+      }
     }
 
     for (const verifyScript of ["post-verify-round35.mjs", "check-partner-count.ts"]) {

@@ -12,7 +12,8 @@ import { guardLegacyDdlScript } from "./lib/legacy-script-guard.mjs";
 const { service } = guardLegacyDdlScript({
   scriptName: "scripts/apply-round21-region-abbr.mjs",
   statementCount: 8,
-  supersededBy: "supabase/migrations/20261106140200_partners_folded_keys_and_pagination.sql",
+  supersededBy:
+    "supabase/migrations/20261016000000_partner_region_abbr.sql, supabase/migrations/20261108000000_partner_search_literal_and_folded.sql",
 });
 
 const STATEMENTS = [

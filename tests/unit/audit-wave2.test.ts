@@ -689,6 +689,41 @@ describe("Audit Wave 2 unit suite (A06, A08, A10, A12)", () => {
         expect(preview.data[0]?.partnerId).toBe("dddddddd-0000-4000-8000-000000000077");
       }
     });
+
+    it("keeps server directory search available on single-page directories and uses literal folded search in SQL (A10)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const path = await import("node:path");
+      const { auditWave2MigrationManifest, buildAuditWave2RollbackSql } = await import(
+        "../../scripts/lib/audit-wave2-release.mjs"
+      );
+
+      const tableSource = readFileSync(
+        path.resolve(process.cwd(), "components/partners/partners-table.tsx"),
+        "utf8",
+      );
+      expect(tableSource).toContain(
+        "const showServerSearch = Boolean(pagination) && (totalCount > 0 || hasServerFilter);",
+      );
+
+      const migrationSql = readFileSync(
+        path.resolve(
+          process.cwd(),
+          "supabase/migrations/20261108000000_partner_search_literal_and_folded.sql",
+        ),
+        "utf8",
+      );
+      expect(migrationSql).toContain("strpos(a.name_folded, prm.q_folded) > 0");
+      expect(migrationSql).toContain("strpos(p.name_folded, prm.q_folded) > 0");
+      expect(migrationSql).not.toMatch(/\blike\s+'%'/i);
+
+      const manifestVersions = auditWave2MigrationManifest().map((entry) => entry.version);
+      expect(manifestVersions).toContain(
+        "20261108000000_partner_search_literal_and_folded.sql",
+      );
+      expect(buildAuditWave2RollbackSql()).toContain(
+        "create or replace function public.search_partners(term text, lim int default 50)",
+      );
+    });
   });
 
   describe("A12 — Paginated exportAuditLogs beyond 200 rows & truncation reporting", () => {

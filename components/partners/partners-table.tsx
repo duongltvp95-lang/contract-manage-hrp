@@ -123,7 +123,7 @@ export function PartnersTable({
       pagination?.company ||
       pagination?.contracts,
   );
-  const showServerSearch = pageCount > 1 || hasServerFilter;
+  const showServerSearch = Boolean(pagination) && (totalCount > 0 || hasServerFilter);
 
   const {
     filters,

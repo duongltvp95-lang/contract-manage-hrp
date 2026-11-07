@@ -3,7 +3,7 @@ import { guardLegacyDdlScript } from "./lib/legacy-script-guard.mjs";
 const { service } = guardLegacyDdlScript({
   scriptName: "scripts/apply-round38-performance-indexes.mjs",
   statementCount: 6,
-  supersededBy: "supabase/migrations/20261021000000_performance_indexes.sql",
+  supersededBy: "supabase/migrations/20261020000000_optimize_performance_indexes.sql",
 });
 
 const STATEMENTS = [

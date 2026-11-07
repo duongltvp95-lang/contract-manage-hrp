@@ -34,7 +34,7 @@ const {
 } = guardLegacyDdlScript({
   scriptName: "scripts/apply-round35-partner-merge.mjs",
   statementCount: 4,
-  supersededBy: "supabase/migrations/20261011000001_merge_dongyang_partners.sql",
+  supersededBy: "supabase/migrations/20261011000001_partner_merge_dongyang.sql",
 });
 
 function describeEnv(name, value) {

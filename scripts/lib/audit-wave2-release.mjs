@@ -10,6 +10,7 @@ export function auditWave2MigrationManifest() {
   const files = [
     "20261106140100_audit_deleted_actor_snapshots.sql",
     "20261106140200_partners_folded_keys_and_pagination.sql",
+    "20261108000000_partner_search_literal_and_folded.sql",
   ];
   return files.map((version) => {
     const sql = readFileSync(new URL(version, directory), "utf8");
@@ -314,6 +315,29 @@ begin
 
   drop function if exists public.get_partners_directory_page(uuid, text, text, text, text, integer, integer);
 
+  create or replace function public.search_partners(term text, lim int default 50)
+  returns setof public.partners
+  language sql
+  security invoker
+  set search_path = public, extensions
+  as $fn$
+    select *
+    from public.partners
+    where status = 'active'
+      and (
+        lower(replace(unaccent(coalesce(name, '')), 'đ', 'd'))
+          like '%' || lower(replace(unaccent(coalesce(term, '')), 'đ', 'd')) || '%'
+        or coalesce(tax_code, '') ilike '%' || coalesce(term, '') || '%'
+        or lower(replace(unaccent(coalesce(abbreviation, '')), 'đ', 'd'))
+          like '%' || lower(replace(unaccent(coalesce(term, '')), 'đ', 'd')) || '%'
+      )
+    order by name asc
+    limit lim;
+  $fn$;
+
+  revoke all on function public.search_partners(text, int) from public, anon;
+  grant execute on function public.search_partners(text, int) to authenticated;
+
   create or replace function public.get_partners_summary(org_id uuid)
   returns table (
     id uuid,
@@ -522,7 +546,8 @@ begin
   delete from hrp_private.review_migrations
    where version in (
      '20261106140100_audit_deleted_actor_snapshots.sql',
-     '20261106140200_partners_folded_keys_and_pagination.sql'
+     '20261106140200_partners_folded_keys_and_pagination.sql',
+     '20261108000000_partner_search_literal_and_folded.sql'
    );
 
   delete from hrp_private.review_releases

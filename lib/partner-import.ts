@@ -230,15 +230,25 @@ function detectColumns(
 const ZIP_LOCAL_FILE_HEADER_SIG = 0x04034b50;
 const ZIP_CENTRAL_DIR_HEADER_SIG = 0x02014b50;
 const ZIP_END_OF_CENTRAL_DIR_SIG = 0x06054b50;
+const ZIP_METHOD_STORED = 0;
+const ZIP_METHOD_DEFLATE = 8;
+const ZIP_ENCRYPTED_FLAG_MASK = 0x0001;
+
+type XlsxArchiveEntrySlice = {
+  compressionMethod: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  dataStart: number;
+};
 
 /**
- * Inspects the PKZIP Central Directory BEFORE handing bytes to `exceljs` so
- * zip bombs, ZIP64 archives, or workbooks with excessive XML inflation are
- * rejected cheaply in O(entryCount) without inflating a single byte.
+ * Inspects the PKZIP Central Directory and Local File Header offsets BEFORE
+ * handing bytes to `exceljs` so zip bombs, ZIP64 archives, encrypted entries,
+ * or workbooks with excessive XML inflation are rejected cheaply in O(entryCount).
  */
 export function inspectXlsxArchiveBounds(
   bytes: Uint8Array,
-): { ok: true } | ({ ok: false } & PartnerImportParseFailure) {
+): { ok: true; entries: XlsxArchiveEntrySlice[] } | ({ ok: false } & PartnerImportParseFailure) {
   if (bytes.byteLength < 22) {
     return {
       ok: false,
@@ -316,6 +326,7 @@ export function inspectXlsxArchiveBounds(
   const centralDirEnd = centralDirOffset + centralDirSize;
   let cursor = centralDirOffset;
   let totalUncompressed = 0;
+  const entries: XlsxArchiveEntrySlice[] = [];
 
   for (let index = 0; index < totalEntries; index += 1) {
     if (cursor + 46 > centralDirEnd) {
@@ -334,11 +345,14 @@ export function inspectXlsxArchiveBounds(
       };
     }
 
+    const flags = view.getUint16(cursor + 8, true);
+    const compressionMethod = view.getUint16(cursor + 10, true);
     const compressedSize = view.getUint32(cursor + 20, true);
     const uncompressedSize = view.getUint32(cursor + 24, true);
     const fileNameLen = view.getUint16(cursor + 28, true);
     const extraLen = view.getUint16(cursor + 30, true);
     const commentLen = view.getUint16(cursor + 32, true);
+    const localHeaderOffset = view.getUint32(cursor + 42, true);
     const nextCursor = cursor + 46 + fileNameLen + extraLen + commentLen;
 
     if (nextCursor > centralDirEnd) {
@@ -350,8 +364,20 @@ export function inspectXlsxArchiveBounds(
     }
 
     if (
+      (flags & ZIP_ENCRYPTED_FLAG_MASK) !== 0 ||
+      (compressionMethod !== ZIP_METHOD_STORED && compressionMethod !== ZIP_METHOD_DEFLATE)
+    ) {
+      return {
+        ok: false,
+        code: "unreadable_file",
+        message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
+      };
+    }
+
+    if (
       compressedSize === 0xffffffff ||
       uncompressedSize === 0xffffffff ||
+      localHeaderOffset === 0xffffffff ||
       uncompressedSize > PARTNER_IMPORT_MAX_SINGLE_ENTRY_BYTES
     ) {
       return {
@@ -359,6 +385,30 @@ export function inspectXlsxArchiveBounds(
         code: "file_too_large",
         message:
           "Nội dung giải nén của file vượt giới hạn an toàn. Vui lòng xoá các vùng dữ liệu thừa và thử lại.",
+      };
+    }
+
+    if (
+      (compressionMethod === ZIP_METHOD_STORED && compressedSize !== uncompressedSize) ||
+      (compressionMethod === ZIP_METHOD_DEFLATE && compressedSize === 0 && uncompressedSize > 0) ||
+      localHeaderOffset + 30 > centralDirOffset ||
+      view.getUint32(localHeaderOffset, true) !== ZIP_LOCAL_FILE_HEADER_SIG
+    ) {
+      return {
+        ok: false,
+        code: "unreadable_file",
+        message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
+      };
+    }
+
+    const localFileNameLen = view.getUint16(localHeaderOffset + 26, true);
+    const localExtraLen = view.getUint16(localHeaderOffset + 28, true);
+    const dataStart = localHeaderOffset + 30 + localFileNameLen + localExtraLen;
+    if (dataStart > centralDirOffset || compressedSize > centralDirOffset - dataStart) {
+      return {
+        ok: false,
+        code: "unreadable_file",
+        message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
       };
     }
 
@@ -372,7 +422,110 @@ export function inspectXlsxArchiveBounds(
       };
     }
 
+    entries.push({
+      compressionMethod,
+      compressedSize,
+      uncompressedSize,
+      dataStart,
+    });
     cursor = nextCursor;
+  }
+
+  return { ok: true, entries };
+}
+
+/**
+ * Verifies actual DEFLATE inflation bounds chunk-by-chunk without buffering
+ * decompressed output (`A05`). Prevents spoofed-header PKZIP bombs (where the
+ * Central Directory lies about `uncompressedSize`) from triggering unbounded
+ * RAM allocation inside `exceljs` / `JSZip`.
+ */
+async function verifyXlsxInflatedStreams(
+  bytes: Uint8Array,
+  entries: XlsxArchiveEntrySlice[],
+): Promise<{ ok: true } | ({ ok: false } & PartnerImportParseFailure)> {
+  if (typeof DecompressionStream === "undefined") {
+    return { ok: true };
+  }
+
+  let totalActualUncompressed = 0;
+
+  for (const entry of entries) {
+    if (entry.compressionMethod === ZIP_METHOD_STORED || entry.compressedSize === 0) {
+      totalActualUncompressed += entry.uncompressedSize;
+      if (totalActualUncompressed > PARTNER_IMPORT_MAX_UNCOMPRESSED_BYTES) {
+        return {
+          ok: false,
+          code: "file_too_large",
+          message:
+            "Nội dung giải nén của file vượt giới hạn an toàn. Vui lòng xoá các vùng dữ liệu thừa và thử lại.",
+        };
+      }
+      continue;
+    }
+
+    const slice = bytes.subarray(entry.dataStart, entry.dataStart + entry.compressedSize);
+    const remainingBudget = PARTNER_IMPORT_MAX_UNCOMPRESSED_BYTES - totalActualUncompressed;
+    const stream = new DecompressionStream("deflate-raw");
+    const writer = stream.writable.getWriter();
+    const reader = stream.readable.getReader();
+
+    let writeError: unknown = null;
+    const pumpPromise = (async () => {
+      try {
+        const chunkSize = 16 * 1024;
+        for (let offset = 0; offset < slice.byteLength; offset += chunkSize) {
+          const end = Math.min(slice.byteLength, offset + chunkSize);
+          await writer.write(slice.subarray(offset, end) as unknown as BufferSource);
+        }
+        await writer.close();
+      } catch (error) {
+        writeError = error;
+      }
+    })();
+
+    let entryInflated = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        entryInflated += value.byteLength;
+        if (
+          entryInflated > PARTNER_IMPORT_MAX_SINGLE_ENTRY_BYTES ||
+          entryInflated > remainingBudget
+        ) {
+          await reader.cancel().catch(() => {});
+          await writer.abort().catch(() => {});
+          await pumpPromise;
+          return {
+            ok: false,
+            code: "file_too_large",
+            message:
+              "Nội dung giải nén của file vượt giới hạn an toàn. Vui lòng xoá các vùng dữ liệu thừa và thử lại.",
+          };
+        }
+      }
+    } catch {
+      await reader.cancel().catch(() => {});
+      await writer.abort().catch(() => {});
+      await pumpPromise;
+      return {
+        ok: false,
+        code: "unreadable_file",
+        message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
+      };
+    }
+
+    await pumpPromise;
+    if (writeError || entryInflated !== entry.uncompressedSize) {
+      return {
+        ok: false,
+        code: "unreadable_file",
+        message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
+      };
+    }
+
+    totalActualUncompressed += entryInflated;
   }
 
   return { ok: true };
@@ -424,6 +577,11 @@ export async function parsePartnerWorkbook(
   const archiveBounds = inspectXlsxArchiveBounds(rawBytes);
   if (!archiveBounds.ok) {
     return archiveBounds;
+  }
+
+  const streamBounds = await verifyXlsxInflatedStreams(rawBytes, archiveBounds.entries);
+  if (!streamBounds.ok) {
+    return streamBounds;
   }
 
   // Dynamic import, like the audit-log export: keep exceljs out of every bundle
