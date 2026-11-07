@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   PARTNER_IMPORT_MAX_BYTES,
+  PARTNER_IMPORT_MAX_PHYSICAL_ROW,
   PARTNER_IMPORT_MAX_ROWS,
+  PARTNER_IMPORT_MAX_SINGLE_ENTRY_BYTES,
   buildPartnerImportTemplate,
+  inspectXlsxArchiveBounds,
   parsePartnerWorkbook,
   summarisePartnerImport,
   validatePartnerImportFile,
@@ -213,6 +216,68 @@ describe("parsePartnerWorkbook", { timeout: 30_000 }, () => {
 
     expect(result.code).toBe("file_too_large");
   });
+
+  it("rejects sparse workbooks placed far beyond the physical row limit without iterating empty rows (A05)", async () => {
+    const ExcelJS = (await import("exceljs")).default;
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Đối tác");
+    sheet.getRow(1).values = ["Tên đối tác", "Mã số thuế"];
+    sheet.getRow(100_000).values = ["Công ty Thưa", "0312345678"];
+    const sparseBytes = (await workbook.xlsx.writeBuffer()) as unknown as Uint8Array;
+
+    const result = await parsePartnerWorkbook(sparseBytes);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+
+    expect(result.code).toBe("too_many_rows");
+    expect(result.message).toContain(String(PARTNER_IMPORT_MAX_PHYSICAL_ROW));
+  });
+
+  it("parses sparse workbooks within the physical row limit without materialising intermediate rows (A05)", async () => {
+    const ExcelJS = (await import("exceljs")).default;
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Đối tác");
+    sheet.getRow(1).values = ["Tên đối tác", "Mã số thuế"];
+    sheet.getRow(2).values = ["Công ty Đầu", "0312345678"];
+    sheet.getRow(2_500).values = ["Công ty Cuối", "0312345679"];
+    const sparseBytes = (await workbook.xlsx.writeBuffer()) as unknown as Uint8Array;
+
+    const result = await parsePartnerWorkbook(sparseBytes);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows.map((r) => r.rowNumber)).toEqual([2, 2_500]);
+  });
+
+  it("rejects PKZIP archives claiming excessive uncompressed inflation before loading XML (A05)", async () => {
+    const valid = await buildWorkbook(["Tên đối tác"], [["Công ty A"]]);
+    const forged = new Uint8Array(valid);
+    const view = new DataView(forged.buffer, forged.byteOffset, forged.byteLength);
+
+    // Locate first Central Directory header (0x02014b50) and forge uncompressedSize > limit.
+    let patched = false;
+    for (let offset = 0; offset <= forged.byteLength - 46; offset += 1) {
+      if (view.getUint32(offset, true) === 0x02014b50) {
+        view.setUint32(offset + 24, PARTNER_IMPORT_MAX_SINGLE_ENTRY_BYTES + 1024, true);
+        patched = true;
+        break;
+      }
+    }
+    expect(patched).toBe(true);
+
+    const bounds = inspectXlsxArchiveBounds(forged);
+    expect(bounds.ok).toBe(false);
+    if (!bounds.ok) {
+      expect(bounds.code).toBe("file_too_large");
+    }
+
+    const parsed = await parsePartnerWorkbook(forged);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.code).toBe("file_too_large");
+    }
+  });
 });
 
 describe("validatePartnerImportRows", () => {
@@ -383,7 +448,7 @@ describe("validatePartnerImportFile", () => {
     if (result.ok) return;
 
     expect(result.code).toBe("file_too_large");
-    expect(result.message).toContain("5 MB");
+    expect(result.message).toContain("4 MB");
   });
 });
 

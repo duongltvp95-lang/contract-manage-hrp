@@ -51,6 +51,8 @@ export default defineConfig({
           NODE_ENV: "development",
           NEXT_TELEMETRY_DISABLED: "1",
           NEXT_DIST_DIR: ".next-e2e",
+          HRP_AI_TEST_MODE: "stub",
+          GEMINI_API_KEY: process.env.GEMINI_API_KEY || "e2e-stub-gemini-key",
           // Round 19: make the e2e admin a delete-admin for the privileged flow.
           // NEVER set this on Vercel production (the app default = the owner).
           DELETE_ADMIN_EMAILS:

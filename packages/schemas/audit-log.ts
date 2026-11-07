@@ -111,3 +111,6 @@ export const LogsFilterSchema = z.object({
 });
 
 export type LogsFilter = z.infer<typeof LogsFilterSchema>;
+
+export const AUDIT_LOGS_EXPORT_MAX_ROWS = 5_000;
+export const AUDIT_LOGS_EXPORT_BATCH_SIZE = 500;

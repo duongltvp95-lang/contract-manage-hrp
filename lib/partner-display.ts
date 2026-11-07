@@ -20,6 +20,9 @@ export type PartnerNamed = {
  */
 export const PARTNER_SEARCH_LIMIT = 50;
 
+/** Default page size for `/partners` server-side pagination (`A10`). */
+export const PARTNERS_PAGE_SIZE_DEFAULT = 100;
+
 /** The dash shown when a contract has no partner information at all. */
 export const NO_PARTNER = "—";
 

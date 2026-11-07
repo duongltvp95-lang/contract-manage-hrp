@@ -307,5 +307,21 @@ test.describe("upload", () => {
     expect(response.status()).toBe(422);
     expect(await response.text()).toContain("không được hỗ trợ");
   });
+
+  test("selecting a file via the picker auto-runs AI extraction on an empty form (A11)", async ({ page }) => {
+    const aiPdfName = `${TEST_PREFIX}auto-ai-${stamp}.pdf`;
+    const aiPdfPath = writeArtifact(aiPdfName, buildPdf(1, `Auto AI ${stamp}`));
+
+    await login(page);
+    await gotoAndSettle(page, "/contracts/new");
+
+    await page.setInputFiles('[data-testid="document-dropzone-input"]', aiPdfPath);
+
+    await expect(page.locator('input[name="contractNumber"]')).toHaveValue(
+      new RegExp(`^STUB-`),
+      { timeout: 30_000 },
+    );
+    await expect(page.getByText("Tóm tắt nội dung hợp đồng từ AI")).toBeVisible();
+  });
 });
 

@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CopyObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -58,6 +60,96 @@ export function buildR2CopyProbeKeys(probeId) {
     sourceB: `${prefix}/source-b.txt`,
     dest: `${prefix}/dest.txt`,
     destMismatch: `${prefix}/dest-etag-mismatch.txt`,
+  };
+}
+
+/**
+ * Delete all ephemeral probe keys AND verify via both HeadObject (404) and ListObjectsV2 (0 keys)
+ * that zero probe objects remain under `${prefix}/`. Never swallows deletion or verification errors.
+ *
+ * @param {{
+ *   send: (command: unknown, options?: { abortSignal?: AbortSignal }) => Promise<unknown>;
+ *   bucket: string;
+ *   prefix: string;
+ *   keys: string[];
+ * }} params
+ */
+export async function cleanupAndVerifyR2ProbeKeys(params) {
+  /** @type {string[]} */
+  const deleteErrors = [];
+  /** @type {string[]} */
+  const verifyErrors = [];
+  /** @type {Set<string>} */
+  const remainingSet = new Set();
+
+  for (const key of params.keys) {
+    try {
+      await params.send(
+        new DeleteObjectCommand({ Bucket: params.bucket, Key: key }),
+        { abortSignal: AbortSignal.timeout(8_000) },
+      );
+    } catch (error) {
+      deleteErrors.push(
+        `${key}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  for (const key of params.keys) {
+    try {
+      await params.send(
+        new HeadObjectCommand({ Bucket: params.bucket, Key: key }),
+        { abortSignal: AbortSignal.timeout(8_000) },
+      );
+      remainingSet.add(key);
+    } catch (error) {
+      const errObj = /** @type {{ name?: string; $metadata?: { httpStatusCode?: number } }} */ (
+        error
+      );
+      const isGone =
+        errObj?.name === "NotFound" ||
+        errObj?.name === "NoSuchKey" ||
+        errObj?.$metadata?.httpStatusCode === 404;
+      if (!isGone) {
+        verifyErrors.push(
+          `HEAD ${key}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+
+  try {
+    const listed = /** @type {{ Contents?: Array<{ Key?: string }> }} */ (
+      await params.send(
+        new ListObjectsV2Command({
+          Bucket: params.bucket,
+          Prefix: `${params.prefix}/`,
+          MaxKeys: 20,
+        }),
+        { abortSignal: AbortSignal.timeout(8_000) },
+      )
+    );
+    for (const item of listed?.Contents ?? []) {
+      if (item?.Key) {
+        remainingSet.add(item.Key);
+      }
+    }
+  } catch (error) {
+    verifyErrors.push(
+      `LIST ${params.prefix}/: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const remainingKeys = Array.from(remainingSet);
+  return {
+    ok:
+      deleteErrors.length === 0 &&
+      verifyErrors.length === 0 &&
+      remainingKeys.length === 0,
+    deletedAttempted: params.keys.length,
+    remainingKeys,
+    deleteErrors,
+    verifyErrors,
   };
 }
 
@@ -157,94 +249,128 @@ export async function runConditionalCopyProbe(config) {
     }
   }
 
+  /** @type {unknown} */
+  let primaryError = null;
+  /** @type {null | { freshCopySucceeded: boolean; destinationOverwriteBlocked: boolean | string; sourceEtagMismatchBlocked: boolean }} */
+  let checks = null;
+
   try {
-    await client.send(
-      new PutObjectCommand({
-        Bucket: config.bucket,
-        Key: keys.sourceA,
-        Body: Buffer.from(`hrp-r2-probe-alpha-${probeId}`, "utf8"),
-        ContentType: "text/plain",
-      }),
-      { abortSignal: AbortSignal.timeout(10_000) },
-    );
-    await client.send(
-      new PutObjectCommand({
-        Bucket: config.bucket,
-        Key: keys.sourceB,
-        Body: Buffer.from(`hrp-r2-probe-beta-${probeId}`, "utf8"),
-        ContentType: "text/plain",
-      }),
-      { abortSignal: AbortSignal.timeout(10_000) },
-    );
+    try {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: config.bucket,
+          Key: keys.sourceA,
+          Body: Buffer.from(`hrp-r2-probe-alpha-${probeId}`, "utf8"),
+          ContentType: "text/plain",
+        }),
+        { abortSignal: AbortSignal.timeout(10_000) },
+      );
+      await client.send(
+        new PutObjectCommand({
+          Bucket: config.bucket,
+          Key: keys.sourceB,
+          Body: Buffer.from(`hrp-r2-probe-beta-${probeId}`, "utf8"),
+          ContentType: "text/plain",
+        }),
+        { abortSignal: AbortSignal.timeout(10_000) },
+      );
 
-    const headA = await headProbe(keys.sourceA);
-    const headB = await headProbe(keys.sourceB);
-    if (!headA.exists || !headA.etag || !headB.exists || !headB.etag) {
-      throw new Error("Probe source objects failed HEAD verification after PutObject");
-    }
+      const headA = await headProbe(keys.sourceA);
+      const headB = await headProbe(keys.sourceB);
+      if (!headA.exists || !headA.etag || !headB.exists || !headB.etag) {
+        throw new Error("Probe source objects failed HEAD verification after PutObject");
+      }
 
-    // 1. Copy to fresh destination -> must succeed
-    const firstCopy = await sendConditionalCopy(keys.sourceA, keys.dest, headA.etag);
-    if (firstCopy.status !== "copied") {
-      throw new Error(`Initial conditional CopyObject failed: ${JSON.stringify(firstCopy)}`);
-    }
-    const destAfterFirst = await headProbe(keys.dest);
-    if (!destAfterFirst.exists || !destAfterFirst.etag) {
-      throw new Error("Destination object missing after initial CopyObject");
-    }
+      // 1. Copy to fresh destination -> must succeed
+      const firstCopy = await sendConditionalCopy(keys.sourceA, keys.dest, headA.etag);
+      if (firstCopy.status !== "copied") {
+        throw new Error(`Initial conditional CopyObject failed: ${JSON.stringify(firstCopy)}`);
+      }
+      const destAfterFirst = await headProbe(keys.dest);
+      if (!destAfterFirst.exists || !destAfterFirst.etag) {
+        throw new Error("Destination object missing after initial CopyObject");
+      }
 
-    // 2. Copy different source onto existing destination -> on Cloudflare R2 must fail with 412
-    const overwriteAttempt = await sendConditionalCopy(keys.sourceB, keys.dest, headB.etag);
-    const destAfterSecond = await headProbe(keys.dest);
-    if (isCloudflare) {
-      if (overwriteAttempt.status !== "precondition_failed") {
+      // 2. Copy different source onto existing destination -> on Cloudflare R2 must fail with 412
+      const overwriteAttempt = await sendConditionalCopy(keys.sourceB, keys.dest, headB.etag);
+      const destAfterSecond = await headProbe(keys.dest);
+      if (isCloudflare) {
+        if (overwriteAttempt.status !== "precondition_failed") {
+          throw new Error(
+            `Expected 412 PreconditionFailed from cf-copy-destination-if-none-match: *, received ${JSON.stringify(overwriteAttempt)}`,
+          );
+        }
+        if (destAfterSecond.etag !== destAfterFirst.etag) {
+          throw new Error("Destination ETag changed despite cf-copy-destination-if-none-match: *");
+        }
+      }
+
+      // 3. Copy with mismatched source ETag -> must fail with 412 and leave destMismatch absent
+      const mismatchAttempt = await sendConditionalCopy(
+        keys.sourceA,
+        keys.destMismatch,
+        "00000000000000000000000000000000",
+      );
+      if (mismatchAttempt.status !== "precondition_failed") {
         throw new Error(
-          `Expected 412 PreconditionFailed from cf-copy-destination-if-none-match: *, received ${JSON.stringify(overwriteAttempt)}`,
+          `Expected 412 PreconditionFailed from CopySourceIfMatch mismatch, received ${JSON.stringify(mismatchAttempt)}`,
         );
       }
-      if (destAfterSecond.etag !== destAfterFirst.etag) {
-        throw new Error("Destination ETag changed despite cf-copy-destination-if-none-match: *");
+      const mismatchHead = await headProbe(keys.destMismatch);
+      if (mismatchHead.exists) {
+        throw new Error("Destination object was created despite CopySourceIfMatch mismatch");
       }
-    }
 
-    // 3. Copy with mismatched source ETag -> must fail with 412 and leave destMismatch absent
-    const mismatchAttempt = await sendConditionalCopy(
-      keys.sourceA,
-      keys.destMismatch,
-      "00000000000000000000000000000000",
-    );
-    if (mismatchAttempt.status !== "precondition_failed") {
-      throw new Error(
-        `Expected 412 PreconditionFailed from CopySourceIfMatch mismatch, received ${JSON.stringify(mismatchAttempt)}`,
-      );
-    }
-    const mismatchHead = await headProbe(keys.destMismatch);
-    if (mismatchHead.exists) {
-      throw new Error("Destination object was created despite CopySourceIfMatch mismatch");
-    }
-
-    return {
-      ok: true,
-      isCloudflareR2: isCloudflare,
-      bucket: config.bucket,
-      probePrefix: keys.prefix,
-      checks: {
+      checks = {
         freshCopySucceeded: true,
         destinationOverwriteBlocked: isCloudflare
           ? overwriteAttempt.status === "precondition_failed"
           : "skipped_non_cloudflare_endpoint",
         sourceEtagMismatchBlocked: true,
+      };
+    } catch (error) {
+      primaryError = error;
+    }
+
+    const cleanup = await cleanupAndVerifyR2ProbeKeys({
+      send: (cmd, opts) => client.send(/** @type {any} */ (cmd), opts),
+      bucket: config.bucket,
+      prefix: keys.prefix,
+      keys: allKeys,
+    });
+
+    if (primaryError) {
+      if (!cleanup.ok) {
+        const primaryMsg =
+          primaryError instanceof Error ? primaryError.message : String(primaryError);
+        throw new Error(
+          `${primaryMsg} | Cleanup verification ALSO failed under ${keys.prefix}: ${JSON.stringify(cleanup)}`,
+          { cause: primaryError },
+        );
+      }
+      throw primaryError;
+    }
+
+    if (!cleanup.ok) {
+      throw new Error(
+        `R2 probe cleanup verification failed under ${keys.prefix}: ${JSON.stringify(cleanup)}`,
+      );
+    }
+
+    return {
+      ok: true,
+      verifiedAt: new Date().toISOString(),
+      isCloudflareR2: isCloudflare,
+      bucket: config.bucket,
+      probePrefix: keys.prefix,
+      checks,
+      cleanup: {
+        verifiedAbsent: true,
+        remainingKeys: cleanup.remainingKeys,
       },
     };
   } finally {
-    for (const key of allKeys) {
-      await client
-        .send(
-          new DeleteObjectCommand({ Bucket: config.bucket, Key: key }),
-          { abortSignal: AbortSignal.timeout(8_000) },
-        )
-        .catch(() => {});
-    }
+    client.destroy();
   }
 }
 
@@ -253,6 +379,8 @@ async function main() {
   const verifyMode = args.includes("--verify");
   const envIdx = args.indexOf("--env");
   const envFile = envIdx >= 0 ? args[envIdx + 1] : null;
+  const outIdx = args.indexOf("--output");
+  const outputPath = outIdx >= 0 ? args[outIdx + 1] : null;
 
   if (!verifyMode) {
     console.log(
@@ -260,6 +388,7 @@ async function main() {
         {
           mode: "plan",
           action: "verify-r2-conditional-copy",
+          requiredTokenPermission: "Object Read & Write (scoped strictly to the target R2 bucket)",
           writesCanonicalContractsPrefix: false,
           probePrefixPattern: "uploads-staging/_r2-copy-probe-<uuid>/",
           steps: [
@@ -267,9 +396,10 @@ async function main() {
             "CopyObject source-a -> dest with CopySourceIfMatch + cf-copy-destination-if-none-match: * (assert 200)",
             "CopyObject source-b -> dest with cf-copy-destination-if-none-match: * (assert 412 & destination ETag unchanged on Cloudflare R2)",
             "CopyObject source-a -> dest-etag-mismatch with bogus CopySourceIfMatch (assert 412 & object not created)",
-            "Delete all probe keys in finally{}",
+            "Delete all probe keys AND verify 404 HEAD + 0 objects via ListObjectsV2 under probe prefix before reporting ok: true",
           ],
-          usage: "node scripts/verify-r2-conditional-copy.mjs --verify --env <env-file>",
+          usage:
+            "node scripts/verify-r2-conditional-copy.mjs --verify --env <env-file> [--output test-results/release/r2-probe-receipt.json]",
         },
         null,
         2,
@@ -304,11 +434,16 @@ async function main() {
     bucket,
     accountId,
   });
+
+  if (outputPath) {
+    mkdirSync(path.dirname(outputPath), { recursive: true });
+    writeFileSync(outputPath, JSON.stringify(summary, null, 2) + "\n", "utf8");
+  }
   console.log(JSON.stringify(summary, null, 2));
 }
 
 const isDirectEntry =
-  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+  process.argv[1] && path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1]);
 
 if (isDirectEntry) {
   main().catch((err) => {

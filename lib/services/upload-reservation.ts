@@ -5,6 +5,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { FileKind } from "@schemas/file";
 
 const RESERVATION_TTL_MS = 24 * 60 * 60 * 1000;
+const AI_UPLOAD_SESSION_TTL_MS = 2 * 60 * 60 * 1000;
 
 export type UploadReservationPayload = {
   userId: string;
@@ -67,6 +68,61 @@ export function verifyUploadReservation(
       && payload.fileSize === expected.fileSize
       && payload.kind === expected.kind
       && payload.baseContractNumber === expected.baseContractNumber;
+  } catch {
+    return false;
+  }
+}
+
+export type AiUploadSessionPayload = {
+  purpose: "ai-temp";
+  userId: string;
+  organizationId: string;
+  objectKey: string;
+  issuedAt: number;
+};
+
+export function createAiUploadSession(
+  payload: Omit<AiUploadSessionPayload, "purpose" | "issuedAt">,
+): string {
+  const encodedPayload = toBase64Url(
+    JSON.stringify({
+      purpose: "ai-temp",
+      ...payload,
+      issuedAt: Date.now(),
+    } satisfies AiUploadSessionPayload),
+  );
+  return `${encodedPayload}.${sign(encodedPayload)}`;
+}
+
+export function verifyAiUploadSession(
+  token: string,
+  expected: Omit<AiUploadSessionPayload, "purpose" | "issuedAt">,
+): boolean {
+  try {
+    const [encodedPayload, suppliedSignature, extra] = token.split(".");
+    if (!encodedPayload || !suppliedSignature || extra !== undefined) return false;
+
+    const expectedSignature = sign(encodedPayload);
+    const supplied = Buffer.from(suppliedSignature, "base64url");
+    const actual = Buffer.from(expectedSignature, "base64url");
+    if (supplied.length !== actual.length || !timingSafeEqual(supplied, actual)) {
+      return false;
+    }
+
+    const payload = JSON.parse(
+      Buffer.from(encodedPayload, "base64url").toString("utf8"),
+    ) as AiUploadSessionPayload;
+    const age = Date.now() - payload.issuedAt;
+    if (!Number.isFinite(payload.issuedAt) || age < -60_000 || age > AI_UPLOAD_SESSION_TTL_MS) {
+      return false;
+    }
+
+    return (
+      payload.purpose === "ai-temp" &&
+      payload.userId === expected.userId &&
+      payload.organizationId === expected.organizationId &&
+      payload.objectKey === expected.objectKey
+    );
   } catch {
     return false;
   }

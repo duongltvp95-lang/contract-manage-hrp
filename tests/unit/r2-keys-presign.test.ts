@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  AI_TEMP_OBJECT_KEY_PREFIX,
   OBJECT_KEY_PREFIX,
   STAGING_OBJECT_KEY_PREFIX,
+  buildAiTempObjectKey,
   buildObjectKey,
   buildStagingObjectKey,
   isObjectKeyFor,
+  isOwnedAiTempObjectKey,
   isStagingObjectKeyFor,
   sanitizeFilename,
   stagingKeyToFinalObjectKey,
@@ -206,6 +209,36 @@ describe("staging object keys (A03)", () => {
     expect(
       stagingKeyToFinalObjectKey(`uploads-staging/${ORG}/${CONTRACT}/${FILE}/../doc.pdf`, parts),
     ).toBeNull();
+  });
+});
+
+describe("AI temp object keys (A08)", () => {
+  const USER_A = "aaaaaaaa-0000-4000-8000-000000000001";
+  const USER_B = "aaaaaaaa-0000-4000-8000-000000000002";
+
+  it("scopes AI temp uploads to ai-temp/{orgId}/{userId}/{fileId}/{filename} and enforces user ownership", () => {
+    const key = buildAiTempObjectKey({
+      organizationId: ORG,
+      userId: USER_A,
+      fileId: FILE,
+      filename: "Hợp đồng scan.pdf",
+    });
+
+    expect(key).toBe(`${AI_TEMP_OBJECT_KEY_PREFIX}/${ORG}/${USER_A}/${FILE}/Hợp-đồng-scan.pdf`);
+    expect(isOwnedAiTempObjectKey(key, { organizationId: ORG, userId: USER_A })).toBe(true);
+    expect(isOwnedAiTempObjectKey(key, { organizationId: ORG, userId: USER_B })).toBe(false);
+    expect(
+      isOwnedAiTempObjectKey(key, {
+        organizationId: "22222222-2222-2222-2222-222222222222",
+        userId: USER_A,
+      }),
+    ).toBe(false);
+    expect(
+      isOwnedAiTempObjectKey(`ai-temp/${ORG}/${FILE}/legacy-without-user.pdf`, {
+        organizationId: ORG,
+        userId: USER_A,
+      }),
+    ).toBe(false);
   });
 });
 

@@ -37,39 +37,56 @@ import { dbError, err, ok, type ServiceResult } from "./types";
 export const TOMBSTONE_PROFILE_ID = "00000000-0000-0000-0000-000000005a01";
 export const TOMBSTONE_PROFILE_EMAIL = "tombstone.deleted-user@hrpartner.vn";
 
-let tombstoneProfileIdCache: string | null = null;
+const tombstoneProfileIdCache = new Map<string, string>();
+
+/** Test seam: clears in-memory tombstone cache between unit tests. */
+export function resetTombstoneProfileCache(): void {
+  tombstoneProfileIdCache.clear();
+}
+
+function isAuthUserNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { status?: number; code?: string; message?: string };
+  if (candidate.status === 404 || candidate.code === "user_not_found") {
+    return true;
+  }
+  return typeof candidate.message === "string" && /user not found/i.test(candidate.message);
+}
 
 /**
- * Ensure the tombstone profile row exists in `profiles`, returning its id.
- *
- * The flow:
- *
- *   1. Return the cached id on the hot path.
- *   2. Look up an `auth.users` row by the well-known email. The Admin
- *      API is paginated; the loop stops when a page is short, which is
- *      the documented "end of list" signal.
- *   3. If no auth row is present, create one with a random 64-char
- *      password (no human can ever type it) and `email_confirm: true`.
- *      Re-read the new id from the response.
- *   4. UPSERT the `profiles` row at that id: role='user', is_active=false,
- *      full_name='[Người dùng đã xoá]', organisation set to the admin's.
- *      The `on_auth_user_created` trigger fired during step 3 wrote a
- *      different shape (role='user', is_active=true, full_name from
- *      user_metadata); this UPSERT normalises it.
- *   5. Cache and return the id.
- *
- * Errors at any step return a `ServiceErr`; the cache is not poisoned,
- * so a follow-up attempt can try again. Two concurrent deletes are
- * safe: the `find` in step 2 short-circuits whichever loses the race.
+ * Ensure the tombstone profile row exists in `profiles` for `organizationId`,
+ * returning its id.
  */
 async function ensureTombstoneProfile(
   service: SupabaseClient,
   organizationId: string,
 ): Promise<ServiceResult<{ id: string }>> {
-  if (tombstoneProfileIdCache) {
-    return ok({ id: tombstoneProfileIdCache });
+  const cached = tombstoneProfileIdCache.get(organizationId);
+  if (cached) {
+    return ok({ id: cached });
   }
 
+  // Fast path: check if this organization already has a tombstone profile row.
+  const { data: existingTombstone, error: lookupError } = await service
+    .from("profiles")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("is_tombstone", true)
+    .order("id", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (lookupError) {
+    return dbError("ensureTombstoneProfile", lookupError);
+  }
+
+  if (existingTombstone?.id) {
+    const existingId = String(existingTombstone.id);
+    tombstoneProfileIdCache.set(organizationId, existingId);
+    return ok({ id: existingId });
+  }
+
+  let candidateEmail = TOMBSTONE_PROFILE_EMAIL;
   let found: string | null = null;
   try {
     for (let page = 1; ; page += 1) {
@@ -81,12 +98,26 @@ async function ensureTombstoneProfile(
         return dbError("ensureTombstoneProfile", error);
       }
       const users = data?.users ?? [];
-      const match = users.find(
-        (user) => user.email === TOMBSTONE_PROFILE_EMAIL,
-      );
-      if (match) {
-        found = match.id;
+      const orgSpecificEmail = `tombstone.deleted-user.${organizationId}@hrpartner.vn`;
+      const orgSpecificMatch = users.find((user) => user.email === orgSpecificEmail);
+      if (orgSpecificMatch) {
+        found = orgSpecificMatch.id;
+        candidateEmail = orgSpecificEmail;
         break;
+      }
+      const legacyMatch = users.find((user) => user.email === TOMBSTONE_PROFILE_EMAIL);
+      if (legacyMatch) {
+        const { data: legacyProfile } = await service
+          .from("profiles")
+          .select("organization_id")
+          .eq("id", legacyMatch.id)
+          .maybeSingle();
+        if (!legacyProfile?.organization_id || legacyProfile.organization_id === organizationId) {
+          found = legacyMatch.id;
+          candidateEmail = TOMBSTONE_PROFILE_EMAIL;
+        } else {
+          candidateEmail = orgSpecificEmail;
+        }
       }
       if (users.length < 200) break;
     }
@@ -103,7 +134,7 @@ async function ensureTombstoneProfile(
         : "no-real-password-tombstone-fallback";
     try {
       const { data, error } = await service.auth.admin.createUser({
-        email: TOMBSTONE_PROFILE_EMAIL,
+        email: candidateEmail,
         password: random,
         email_confirm: true,
         user_metadata: { full_name: "[Người dùng đã xoá]" },
@@ -143,7 +174,7 @@ async function ensureTombstoneProfile(
     return dbError("ensureTombstoneProfile", upsertError);
   }
 
-  tombstoneProfileIdCache = found;
+  tombstoneProfileIdCache.set(organizationId, found);
   return ok({ id: found });
 }
 
@@ -907,26 +938,64 @@ export async function deleteUser(
   }
   const tombstoneId = tombstone.data.id;
 
-  // --- step 5a: re-point existing audit rows at the tombstone -------------
+  // --- step 5a: snapshot historical actor identity & re-point to tombstone -
   // The `audit_logs.actor_id` FK to `profiles` is `on delete restrict`, and
-  // deleting `auth.users` cascades its `profiles` row away. Without this
-  // re-pointing the cascade trips the RESTRICT and the whole delete fails.
-  // The metadata, created_at, and organization_id columns are untouched, so
-  // the timeline is still readable; only the "who did it" cell now reads
-  // "[Người dùng đã xoá]" via the tombstone's full_name.
-  const { error: repointError } = await service
-    .from("audit_logs")
-    .update({ actor_id: tombstoneId })
-    .eq("actor_id", userId);
+  // deleting `auth.users` cascades its `profiles` row away. `prepare_actor_audit_for_user_delete`
+  // snapshots the user's real name/email + `deleted_actor_id` on their historical
+  // audit rows before moving `actor_id` to the org tombstone, so historical logs
+  // keep human attribution AND can be rolled back cleanly if GoTrue fails.
+  const { error: repointError } = await service.rpc(
+    "prepare_actor_audit_for_user_delete",
+    {
+      p_organization_id: targetOrgId,
+      p_user_id: userId,
+      p_tombstone_id: tombstoneId,
+      p_actor_name: targetRow.full_name,
+      p_actor_email: realEmail,
+    },
+  );
 
   if (repointError) {
     return dbError("deleteUser", repointError);
   }
 
-  // --- step 5b: write the delete_user audit row -------------------------
-  // The new row's actor is the *admin* (this caller), not the target, so
-  // the cascade does not touch it. `target_id` is the about-to-be-deleted
-  // user; that column has no FK, so the later cascade is a no-op for it.
+  // --- step 5b: drop the auth.users row BEFORE recording delete_user -------
+  // If GoTrue rejects the deletion (e.g. transient outage), we restore the
+  // re-pointed audit rows back to `userId` and return an error without writing
+  // a premature `delete_user` event. If GoTrue reports 404 (a prior attempt
+  // already deleted auth.users just before a network drop), treat it as
+  // idempotently completed and clean up any orphaned profile row.
+  let authError: unknown = null;
+  try {
+    const deleteResult = await service.auth.admin.deleteUser(userId);
+    authError = deleteResult.error;
+  } catch (error) {
+    authError = error;
+  }
+
+  if (authError && !isAuthUserNotFoundError(authError)) {
+    try {
+      await service.rpc("restore_actor_audit_after_failed_user_delete", {
+        p_organization_id: targetOrgId,
+        p_user_id: userId,
+        p_tombstone_id: tombstoneId,
+      });
+    } catch (rollbackError) {
+      console.error("[users:deleteUser:rollback]", rollbackError);
+    }
+    return dbError("deleteUser", authError);
+  }
+
+  if (authError && isAuthUserNotFoundError(authError)) {
+    await service
+      .from("profiles")
+      .delete()
+      .eq("id", userId)
+      .eq("organization_id", targetOrgId)
+      .eq("is_tombstone", false);
+  }
+
+  // --- step 6: write the delete_user audit row AFTER Auth confirms ---------
   try {
     await recordAudit({
       organizationId: targetOrgId,
@@ -943,22 +1012,7 @@ export async function deleteUser(
       },
     });
   } catch {
-    /* see file-level rule: an audit failure does not block the real action */
-  }
-
-  // --- step 6: drop the auth.users row -----------------------------------
-  // The cascade covers:
-  //   - profiles (on delete cascade) — but the actor_id re-pointing above
-  //     already protected any audit rows that named this profile.
-  //   - contracts.created_by (on delete set null) — kept; we want the
-  //     contract to stay so the audit trail for that contract is intact.
-  // If the auth delete fails (rare; would mean a Supabase-side revocation
-  // just landed), the partial work — re-pointed actor rows + the new
-  // delete_user log — is the only evidence of the attempt. The user is
-  // still alive and can be retried.
-  const { error: authError } = await service.auth.admin.deleteUser(userId);
-  if (authError) {
-    return dbError("deleteUser", authError);
+    /* see file-level rule: an audit failure does not block the completed action */
   }
 
   return ok({ deletedUserId: userId });

@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
+  AUDIT_LOGS_EXPORT_BATCH_SIZE,
+  AUDIT_LOGS_EXPORT_MAX_ROWS,
   type AuditAction,
   type AuditTargetKind,
   type LogsFilter,
@@ -24,10 +26,13 @@ import { dbError, err, ok, type ServiceResult } from "./types";
  * The maintenance cron retries delivery and reports exhausted events as errors.
  */
 
+export { AUDIT_LOGS_EXPORT_BATCH_SIZE, AUDIT_LOGS_EXPORT_MAX_ROWS };
+
 export type AuditLogRow = {
   id: string;
   organizationId: string;
   actorId: string;
+  deletedActorId?: string | null;
   actorRole: "admin" | "user";
   actorName: string | null;
   actorEmail?: string | null;
@@ -42,6 +47,9 @@ type AuditRowDb = {
   id: string;
   organization_id: string;
   actor_id: string;
+  deleted_actor_id?: string | null;
+  actor_name_snapshot?: string | null;
+  actor_email_snapshot?: string | null;
   actor_role: string;
   action: string;
   target_kind: string;
@@ -50,13 +58,28 @@ type AuditRowDb = {
   created_at: string;
 };
 
+function readMetadataString(
+  metadata: Record<string, unknown> | null | undefined,
+  key: string,
+): string | null {
+  const raw = metadata?.[key];
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function rowFromDb(row: AuditRowDb): AuditLogRow {
   return {
     id: row.id,
     organizationId: row.organization_id,
     actorId: row.actor_id,
+    deletedActorId:
+      row.deleted_actor_id ??
+      readMetadataString(row.metadata, "deletedActorId") ??
+      readMetadataString(row.metadata, "originalActorId") ??
+      null,
     actorRole: row.actor_role === "admin" ? "admin" : "user",
-    // Filled in by `listAuditLogs` after a single profiles lookup.
+    // Filled in by `hydrateAuditActorDetails` after a single profiles lookup.
     actorName: null,
     actorEmail: null,
     action: row.action as AuditAction,
@@ -171,6 +194,88 @@ export async function recordCurrentUserAudit(
   }
 }
 
+const AUDIT_SELECT_COLUMNS =
+  "id, organization_id, actor_id, deleted_actor_id, actor_name_snapshot, actor_email_snapshot, actor_role, action, target_kind, target_id, metadata, created_at";
+
+function applyAuditFilter<T extends {
+  or: (filters: string) => T;
+  eq: (column: string, value: string) => T;
+  gte: (column: string, value: string) => T;
+  lt: (column: string, value: string) => T;
+}>(query: T, filter: Pick<LogsFilter, "actorId" | "action" | "from" | "to">): T {
+  let next = query;
+  if (filter.actorId) {
+    next = next.or(
+      `actor_id.eq.${filter.actorId},deleted_actor_id.eq.${filter.actorId},metadata->>deletedActorId.eq.${filter.actorId},metadata->>originalActorId.eq.${filter.actorId}`,
+    );
+  }
+  if (filter.action) {
+    next = next.eq("action", filter.action);
+  }
+  if (filter.from) {
+    next = next.gte("created_at", filter.from);
+  }
+  if (filter.to) {
+    next = next.lt("created_at", filter.to);
+  }
+  return next;
+}
+
+async function hydrateAuditActorDetails(
+  service: SupabaseClient,
+  rows: AuditRowDb[],
+): Promise<AuditLogRow[]> {
+  // Resolve every distinct actor to its display name and email.
+  // A profile that no longer exists, or the system tombstone that a hard-deleted
+  // actor is re-pointed to (round 4), resolves to its stored actor snapshot
+  // (or `null` when no snapshot exists — the UI then shows "[Người dùng đã xoá]").
+  const actorNames = new Map<string, string | null>();
+  const actorEmails = new Map<string, string | null>();
+  const actorIds = [...new Set(rows.map((row) => row.actor_id))];
+
+  if (actorIds.length > 0) {
+    const { data: profiles } = await service
+      .from("profiles")
+      .select("id, full_name, is_tombstone")
+      .in("id", actorIds);
+
+    const liveActorIds: string[] = [];
+    for (const profile of (profiles ?? []) as {
+      id: string;
+      full_name: string | null;
+      is_tombstone: boolean | null;
+    }[]) {
+      if (profile.is_tombstone) {
+        actorNames.set(profile.id, null);
+      } else {
+        actorNames.set(profile.id, profile.full_name ?? null);
+        liveActorIds.push(profile.id);
+      }
+    }
+
+    if (liveActorIds.length > 0) {
+      const authEmails = await resolveAuthEmails(service, liveActorIds);
+      for (const [id, email] of authEmails) {
+        actorEmails.set(id, email);
+      }
+    }
+  }
+
+  return rows.map((row) => ({
+    ...rowFromDb(row),
+    actorName:
+      actorNames.get(row.actor_id) ??
+      row.actor_name_snapshot ??
+      readMetadataString(row.metadata, "actorNameSnapshot") ??
+      null,
+    actorEmail:
+      actorEmails.get(row.actor_id) ??
+      row.actor_email_snapshot ??
+      readMetadataString(row.metadata, "actorEmailSnapshot") ??
+      null,
+  }));
+}
+
 /**
  * Read logs for an organization, newest first. RLS restricts the row set to the
  * signed-in admin's organization, so we don't repeat that filter at the SQL
@@ -201,24 +306,12 @@ export async function listAuditLogs(
 
   let query = service
     .from("audit_logs")
-    .select(
-      "id, organization_id, actor_id, actor_role, action, target_kind, target_id, metadata, created_at",
-    )
+    .select(AUDIT_SELECT_COLUMNS)
     .eq("organization_id", organizationId)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false });
 
-  if (filter.actorId) {
-    query = query.eq("actor_id", filter.actorId);
-  }
-  if (filter.action) {
-    query = query.eq("action", filter.action);
-  }
-  if (filter.from) {
-    query = query.gte("created_at", filter.from);
-  }
-  if (filter.to) {
-    query = query.lt("created_at", filter.to);
-  }
+  query = applyAuditFilter(query, filter);
 
   const from = (filter.page - 1) * filter.pageSize;
   const to = from + filter.pageSize - 1;
@@ -231,46 +324,101 @@ export async function listAuditLogs(
   }
 
   const rows = (data ?? []) as AuditRowDb[];
+  return ok({ rows: await hydrateAuditActorDetails(service, rows) });
+}
 
-  // Resolve every distinct actor to its display name and email in ONE query.
-  // A profile that no longer exists, or the system tombstone that a hard-deleted
-  // actor is re-pointed to (round 4), resolves to `null` — the UI then shows its
-  // own placeholder or email.
-  const actorNames = new Map<string, string | null>();
-  const actorEmails = new Map<string, string | null>();
-  const actorIds = [...new Set(rows.map((row) => row.actor_id))];
+export type AuditLogsExportResult = {
+  rows: AuditLogRow[];
+  total: number;
+  truncated: boolean;
+  maxRows: number;
+};
 
-  if (actorIds.length > 0) {
-    const [{ data: profiles }, authEmails] = await Promise.all([
-      service
-        .from("profiles")
-        .select("id, full_name, is_tombstone")
-        .in("id", actorIds),
-      resolveAuthEmails(service, actorIds),
-    ]);
-
-    for (const profile of (profiles ?? []) as {
-      id: string;
-      full_name: string | null;
-      is_tombstone: boolean | null;
-    }[]) {
-      actorNames.set(
-        profile.id,
-        profile.is_tombstone ? null : (profile.full_name ?? null),
-      );
-    }
-
-    for (const [id, email] of authEmails) {
-      actorEmails.set(id, email);
-    }
+/**
+ * Paginated export reader (A12): fetches all matching audit events up to
+ * `AUDIT_LOGS_EXPORT_MAX_ROWS` (5,000) in deterministic 500-row batches and
+ * reports exact `total` + `truncated` metadata so exports never silently stop
+ * at 200 rows.
+ */
+export async function exportAuditLogs(
+  organizationId: string,
+  filter: Pick<LogsFilter, "actorId" | "action" | "from" | "to">,
+  options?: { maxRows?: number },
+): Promise<ServiceResult<AuditLogsExportResult>> {
+  const access = await getCurrentUser();
+  if (!access) {
+    return err("unauthenticated", "Bạn cần đăng nhập");
+  }
+  if (access.role !== "admin") {
+    return err("forbidden", "Chỉ quản trị viên mới xem được nhật ký");
+  }
+  if (access.organizationId !== organizationId) {
+    return err("forbidden", "Không thể xem nhật ký của tổ chức khác");
   }
 
+  let service: SupabaseClient;
+  try {
+    service = await getService();
+  } catch (error) {
+    return dbError("exportAuditLogs", error);
+  }
+
+  const maxRows = Math.max(
+    1,
+    Math.min(options?.maxRows ?? AUDIT_LOGS_EXPORT_MAX_ROWS, AUDIT_LOGS_EXPORT_MAX_ROWS),
+  );
+
+  let countQuery = service
+    .from("audit_logs")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", organizationId);
+  countQuery = applyAuditFilter(countQuery, filter);
+
+  const { count, error: countError } = await countQuery;
+  if (countError) {
+    return dbError("exportAuditLogs.count", countError);
+  }
+
+  const collected: AuditRowDb[] = [];
+  let offset = 0;
+
+  while (collected.length < maxRows) {
+    const remaining = maxRows - collected.length;
+    const batchSize = Math.min(AUDIT_LOGS_EXPORT_BATCH_SIZE, remaining);
+
+    let batchQuery = service
+      .from("audit_logs")
+      .select(AUDIT_SELECT_COLUMNS)
+      .eq("organization_id", organizationId)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false });
+    batchQuery = applyAuditFilter(batchQuery, filter).range(
+      offset,
+      offset + batchSize - 1,
+    );
+
+    const { data, error } = await batchQuery;
+    if (error) {
+      return dbError("exportAuditLogs.batch", error);
+    }
+
+    const batch = (data ?? []) as AuditRowDb[];
+    collected.push(...batch);
+
+    if (batch.length < batchSize) {
+      break;
+    }
+    offset += batch.length;
+  }
+
+  const hydrated = await hydrateAuditActorDetails(service, collected);
+  const total = Math.max(count ?? 0, hydrated.length);
+
   return ok({
-    rows: rows.map((row) => ({
-      ...rowFromDb(row),
-      actorName: actorNames.get(row.actor_id) ?? null,
-      actorEmail: actorEmails.get(row.actor_id) ?? null,
-    })),
+    rows: hydrated,
+    total,
+    truncated: total > hydrated.length,
+    maxRows,
   });
 }
 
@@ -362,18 +510,7 @@ export async function countAuditLogs(
     .select("id", { count: "exact", head: true })
     .eq("organization_id", organizationId);
 
-  if (filter.actorId) {
-    query = query.eq("actor_id", filter.actorId);
-  }
-  if (filter.action) {
-    query = query.eq("action", filter.action);
-  }
-  if (filter.from) {
-    query = query.gte("created_at", filter.from);
-  }
-  if (filter.to) {
-    query = query.lt("created_at", filter.to);
-  }
+  query = applyAuditFilter(query, filter);
 
   const { count, error } = await query;
 

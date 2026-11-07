@@ -1,7 +1,11 @@
 import "server-only";
 
 import { ExtractedContractSchema, type ExtractedContract } from "@schemas/contract";
-import { MAX_AI_FILE_SIZE_BYTES, MAX_AI_FILE_SIZE_MB } from "@schemas/file";
+import {
+  hasAppendixKeyword,
+  MAX_AI_FILE_SIZE_BYTES,
+  MAX_AI_FILE_SIZE_MB,
+} from "@schemas/file";
 import { err, ok, type ServiceResult } from "@/lib/services/types";
 import { calculateExpiryDateFromDuration, normalizeDurationText } from "@/lib/ai/matching";
 import { aiLog } from "@/lib/ai/log";
@@ -405,6 +409,98 @@ export function detectAppendixMetadata({
   };
 }
 
+export function hasUsableExtractedContractData(extracted: ExtractedContract): boolean {
+  if (extracted.documentType === "appendix") {
+    return Boolean(
+      extracted.appendixNumber.trim() ||
+        extracted.baseContractNumber.trim() ||
+        extracted.contractNumber.trim() ||
+        extracted.signedDate.trim() ||
+        extracted.expiryDate.trim() ||
+        extracted.partnerName.trim() ||
+        extracted.partnerTaxCode.trim() ||
+        extracted.companyName.trim() ||
+        extracted.summary.trim(),
+    );
+  }
+
+  return Boolean(
+    extracted.contractNumber.trim() ||
+      extracted.signedDate.trim() ||
+      extracted.expiryDate.trim() ||
+      extracted.durationText.trim() ||
+      extracted.partnerName.trim() ||
+      extracted.partnerTaxCode.trim() ||
+      extracted.companyName.trim() ||
+      extracted.summary.trim(),
+  );
+}
+
+function isNonProductionAiStubEnabled(): boolean {
+  return (
+    !process.env.VERCEL &&
+    process.env.NODE_ENV !== "production" &&
+    process.env.HRP_AI_TEST_MODE === "stub"
+  );
+}
+
+function buildStubGeminiResponse(filename?: string): Response {
+  const rawBase = (filename ?? "document.pdf").replace(/\.[^.]+$/, "");
+  const safeStem = rawBase.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 48) || "DOC";
+  const isAppendix = hasAppendixKeyword(filename ?? "");
+
+  const payload = isAppendix
+    ? {
+        firstPageTitle: "PHỤ LỤC HỢP ĐỒNG SỐ 01",
+        documentType: "appendix",
+        appendixNumber: "01",
+        baseContractNumber: `STUB-BASE-${safeStem}`,
+        contractNumber: "PL-01",
+        signedDate: "2026-01-15",
+        expiryDate: "2027-01-15",
+        durationText: "12 tháng",
+        partnerName: "Công ty TNHH Đối tác Kiểm thử",
+        partnerTaxCode: "0101234567",
+        partnerAddress: "Hà Nội",
+        companyName: "HRP",
+        summary: "Phụ lục trích xuất tự động (chế độ stub kiểm thử)",
+      }
+    : {
+        firstPageTitle: "HỢP ĐỒNG DỊCH VỤ",
+        documentType: "contract",
+        contractNumber: `STUB-${safeStem}`,
+        signedDate: "2026-01-15",
+        expiryDate: "2027-01-15",
+        durationText: "12 tháng",
+        partnerName: "Công ty TNHH Đối tác Kiểm thử",
+        partnerTaxCode: "0101234567",
+        partnerAddress: "Hà Nội",
+        companyName: "HRP",
+        summary: "Hợp đồng trích xuất tự động (chế độ stub kiểm thử)",
+      };
+
+  return new Response(
+    JSON.stringify({
+      candidates: [
+        {
+          finishReason: "STOP",
+          content: {
+            parts: [{ text: JSON.stringify(payload) }],
+          },
+        },
+      ],
+      usageMetadata: {
+        promptTokenCount: 120,
+        candidatesTokenCount: 80,
+      },
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    },
+  );
+}
+
 /**
  * Extracts contract metadata and parties from a file buffer using Google Gemini.
  *
@@ -445,7 +541,9 @@ export async function extractContractFromBuffer({
   const extractStartTime = Date.now();
   const extractDeadline = extractStartTime + remainingBudgetMs;
 
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  const apiKey =
+    process.env.GEMINI_API_KEY?.trim() ||
+    (isNonProductionAiStubEnabled() ? "e2e-stub-gemini-key" : "");
   if (!apiKey) {
     return err(
       "validation",
@@ -662,15 +760,17 @@ export async function extractContractFromBuffer({
           modelTimeoutMs,
           elapsedMs: Date.now() - startTime,
         });
-        const response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": apiKey,
-          },
-          body: JSON.stringify(requestBody),
-          signal: AbortSignal.timeout(modelTimeoutMs),
-        });
+        const response = isNonProductionAiStubEnabled()
+          ? buildStubGeminiResponse(filename)
+          : await fetch(url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-goog-api-key": apiKey,
+              },
+              body: JSON.stringify(requestBody),
+              signal: AbortSignal.timeout(modelTimeoutMs),
+            });
         telemetry.httpStatuses.push(response.status);
 
         if (response.ok) {
@@ -694,8 +794,34 @@ export async function extractContractFromBuffer({
           telemetry.outputTokens = result.usageMetadata?.candidatesTokenCount;
           telemetry.thoughtTokens = result.usageMetadata?.thoughtsTokenCount;
 
+          if (finishReason === "MAX_TOKENS") {
+            lastError =
+              "Phản hồi AI bị cắt ngang do vượt giới hạn độ dài đầu ra (MAX_TOKENS). Vui lòng bấm trích xuất lại.";
+            aiLog.warn("Model dừng do chạm giới hạn token (MAX_TOKENS), chuyển fallback", {
+              traceId,
+              model,
+              attempt: telemetry.attemptCount,
+              finishReason,
+              elapsedMs: Date.now() - startTime,
+            });
+            continue;
+          }
+
+          if (finishReason && finishReason !== "STOP") {
+            lastError = `Mô hình AI kết thúc sớm (${finishReason}) trước khi hoàn tất JSON hợp đồng.`;
+            aiLog.warn("Model kết thúc bất thường, chuyển fallback", {
+              traceId,
+              model,
+              attempt: telemetry.attemptCount,
+              finishReason,
+              elapsedMs: Date.now() - startTime,
+            });
+            continue;
+          }
+
           const rawText = result.candidates?.[0]?.content?.parts?.[0]?.text;
           if (!rawText) {
+            lastError = "Mô hình AI trả về nội dung rỗng.";
             aiLog.warn("Model trả về nội dung rỗng", {
               traceId,
               model,
@@ -764,6 +890,19 @@ export async function extractContractFromBuffer({
               throw new Error("Dữ liệu trích xuất không khớp schema hợp đồng");
             }
 
+            if (!hasUsableExtractedContractData(validated.data)) {
+              lastError =
+                "AI không nhận diện được thông tin hợp đồng nào từ tài liệu này. Vui lòng kiểm tra chất lượng bản scan hoặc nhập thủ công.";
+              aiLog.warn("Model trả về JSON hợp lệ nhưng rỗng về mặt nghiệp vụ", {
+                traceId,
+                model,
+                attempt: telemetry.attemptCount,
+                finishReason,
+                elapsedMs: Date.now() - startTime,
+              });
+              continue;
+            }
+
             aiLog.info("Trích xuất thành công", {
               traceId,
               model,
@@ -778,6 +917,7 @@ export async function extractContractFromBuffer({
             });
             return ok(validated.data);
           } catch (parseErr) {
+            lastError = "Phản hồi JSON từ mô hình AI bị lỗi định dạng hoặc không hợp lệ.";
             aiLog.error("Parse JSON thất bại", {
               traceId,
               model,

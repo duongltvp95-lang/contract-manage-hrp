@@ -52,12 +52,20 @@ export function LogsTable({ rows }: { rows: AuditLogRow[] }) {
               <td className="px-3 py-2">
                 <div className="flex flex-col">
                   <div className="flex items-center gap-1.5">
-                    <span className="font-medium text-sm text-foreground" title={row.actorId}>
+                    <span
+                      className="font-medium text-sm text-foreground"
+                      title={row.deletedActorId ?? row.actorId}
+                    >
                       {row.actorName || row.actorEmail || "[Người dùng đã xoá]"}
                     </span>
                     <Badge variant="outline" className="text-[11px] px-1.5 py-0">
                       {row.actorRole}
                     </Badge>
+                    {row.deletedActorId && (
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                        Đã xoá
+                      </Badge>
+                    )}
                   </div>
                   {row.actorEmail && row.actorName && (
                     <span className="text-xs text-muted-foreground font-mono">
