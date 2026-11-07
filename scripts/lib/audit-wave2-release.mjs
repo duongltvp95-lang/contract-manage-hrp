@@ -18,16 +18,29 @@ export function auditWave2MigrationManifest() {
 }
 
 // Note: 20261106140200 backfills partners.name_folded and partners.tax_code_folded,
-// and 20261106140100 adds nullable snapshot columns on audit_logs. Core business
-// columns are fingerprinted excluding the new derived/snapshot columns so any
-// unintended row mutation aborts the transaction immediately.
+// and 20261106140100 adds typed snapshot columns on audit_logs & audit_event_outbox.
+// Every table — INCLUDING audit_logs and audit_event_outbox — is fingerprinted so
+// losing any deleted-actor ID, name, or email during release OR rollback aborts immediately!
 const fingerprints = `jsonb_build_object(
   'contracts',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from public.contracts t),
   'partnersCore',(select md5(coalesce(jsonb_agg((to_jsonb(t) - 'name_folded' - 'tax_code_folded' - 'updated_at') order by id)::text,'')) from public.partners t),
   'profiles',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from public.profiles t),
   'files',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from public.contract_files t),
   'companies',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by id)::text,'')) from public.companies t),
-  'partnerCompanies',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by partner_id,company_id)::text,'')) from public.partner_companies t)
+  'partnerCompanies',(select md5(coalesce(jsonb_agg(to_jsonb(t) order by partner_id,company_id)::text,'')) from public.partner_companies t),
+  'auditLogs',(select md5(coalesce(jsonb_agg(jsonb_build_object(
+    'row',(to_jsonb(t) - 'deleted_actor_id' - 'actor_name_snapshot' - 'actor_email_snapshot' - 'metadata'),
+    'coreMetadata',(coalesce(t.metadata,'{}'::jsonb) - 'deletedActorId' - 'originalActorId' - 'actorNameSnapshot' - 'actorEmailSnapshot'),
+    'deletedActorId',coalesce(to_jsonb(t)->>'deleted_actor_id', t.metadata->>'deletedActorId', t.metadata->>'originalActorId'),
+    'actorNameSnapshot',coalesce(to_jsonb(t)->>'actor_name_snapshot', t.metadata->>'actorNameSnapshot'),
+    'actorEmailSnapshot',coalesce(to_jsonb(t)->>'actor_email_snapshot', t.metadata->>'actorEmailSnapshot')
+  ) order by t.id)::text,'')) from public.audit_logs t),
+  'auditOutbox',(select md5(coalesce(jsonb_agg(jsonb_build_object(
+    'row',(to_jsonb(t) - 'actor_name_snapshot' - 'actor_email_snapshot' - 'metadata'),
+    'coreMetadata',(coalesce(t.metadata,'{}'::jsonb) - 'actorNameSnapshot' - 'actorEmailSnapshot'),
+    'actorNameSnapshot',coalesce(to_jsonb(t)->>'actor_name_snapshot', t.metadata->>'actorNameSnapshot'),
+    'actorEmailSnapshot',coalesce(to_jsonb(t)->>'actor_email_snapshot', t.metadata->>'actorEmailSnapshot')
+  ) order by t.id)::text,'')) from public.audit_event_outbox t)
 )`;
 
 export function buildAuditWave2MigrationSql() {
@@ -59,7 +72,8 @@ begin
     public.contract_files,
     public.companies,
     public.partner_companies,
-    public.audit_logs
+    public.audit_logs,
+    public.audit_event_outbox
     in share mode;
 
   select ${fingerprints} into v_before;
@@ -193,7 +207,8 @@ begin
     public.contract_files,
     public.companies,
     public.partner_companies,
-    public.audit_logs
+    public.audit_logs,
+    public.audit_event_outbox
     in share mode;
 
   select ${fingerprints} into v_before;
@@ -363,6 +378,106 @@ begin
   drop function if exists public.prepare_actor_audit_for_user_delete(uuid, uuid, uuid, text, text);
   drop function if exists public.restore_actor_audit_after_failed_user_delete(uuid, uuid, uuid);
 
+  -- Preserve ALL historical deleted-actor snapshots in both hrp_private archive tables
+  -- AND row metadata BEFORE dropping Wave 2 columns so zero attribution data is ever lost!
+  create table if not exists hrp_private.audit_actor_snapshot_archive(
+    log_id uuid primary key,
+    organization_id uuid not null,
+    deleted_actor_id uuid,
+    actor_name_snapshot text,
+    actor_email_snapshot text,
+    archived_at timestamptz not null default now()
+  );
+  create table if not exists hrp_private.audit_outbox_snapshot_archive(
+    event_id uuid primary key,
+    organization_id uuid not null,
+    actor_name_snapshot text,
+    actor_email_snapshot text,
+    archived_at timestamptz not null default now()
+  );
+  revoke all on table
+    hrp_private.audit_actor_snapshot_archive,
+    hrp_private.audit_outbox_snapshot_archive
+    from public, anon, authenticated;
+
+  insert into hrp_private.audit_actor_snapshot_archive(
+    log_id,
+    organization_id,
+    deleted_actor_id,
+    actor_name_snapshot,
+    actor_email_snapshot,
+    archived_at
+  )
+  select
+    id,
+    organization_id,
+    deleted_actor_id,
+    actor_name_snapshot,
+    actor_email_snapshot,
+    now()
+  from public.audit_logs
+  where deleted_actor_id is not null
+     or actor_name_snapshot is not null
+     or actor_email_snapshot is not null
+  on conflict (log_id) do update
+    set deleted_actor_id = coalesce(excluded.deleted_actor_id, hrp_private.audit_actor_snapshot_archive.deleted_actor_id),
+        actor_name_snapshot = coalesce(excluded.actor_name_snapshot, hrp_private.audit_actor_snapshot_archive.actor_name_snapshot),
+        actor_email_snapshot = coalesce(excluded.actor_email_snapshot, hrp_private.audit_actor_snapshot_archive.actor_email_snapshot),
+        archived_at = excluded.archived_at;
+
+  insert into hrp_private.audit_outbox_snapshot_archive(
+    event_id,
+    organization_id,
+    actor_name_snapshot,
+    actor_email_snapshot,
+    archived_at
+  )
+  select
+    id,
+    organization_id,
+    actor_name_snapshot,
+    actor_email_snapshot,
+    now()
+  from public.audit_event_outbox
+  where actor_name_snapshot is not null
+     or actor_email_snapshot is not null
+  on conflict (event_id) do update
+    set actor_name_snapshot = coalesce(excluded.actor_name_snapshot, hrp_private.audit_outbox_snapshot_archive.actor_name_snapshot),
+        actor_email_snapshot = coalesce(excluded.actor_email_snapshot, hrp_private.audit_outbox_snapshot_archive.actor_email_snapshot),
+        archived_at = excluded.archived_at;
+
+  update public.audit_logs
+     set metadata = coalesce(metadata, '{}'::jsonb) || pg_catalog.jsonb_strip_nulls(
+       pg_catalog.jsonb_build_object(
+         'deletedActorId', coalesce(deleted_actor_id::text, metadata->>'deletedActorId', metadata->>'originalActorId'),
+         'originalActorId', coalesce(metadata->>'originalActorId', deleted_actor_id::text, metadata->>'deletedActorId'),
+         'actorNameSnapshot', coalesce(actor_name_snapshot, metadata->>'actorNameSnapshot'),
+         'actorEmailSnapshot', coalesce(actor_email_snapshot, metadata->>'actorEmailSnapshot')
+       )
+     )
+   where deleted_actor_id is not null
+      or actor_name_snapshot is not null
+      or actor_email_snapshot is not null;
+
+  update public.audit_event_outbox
+     set metadata = coalesce(metadata, '{}'::jsonb) || pg_catalog.jsonb_strip_nulls(
+       pg_catalog.jsonb_build_object(
+         'actorNameSnapshot', coalesce(actor_name_snapshot, metadata->>'actorNameSnapshot'),
+         'actorEmailSnapshot', coalesce(actor_email_snapshot, metadata->>'actorEmailSnapshot')
+       )
+     )
+   where actor_name_snapshot is not null
+      or actor_email_snapshot is not null;
+
+  alter table public.audit_event_outbox
+    drop column if exists actor_name_snapshot,
+    drop column if exists actor_email_snapshot;
+
+  alter table public.audit_logs
+    drop column if exists deleted_actor_id,
+    drop column if exists actor_name_snapshot,
+    drop column if exists actor_email_snapshot;
+
   create or replace function public.deliver_audit_event(p_id uuid)
   returns boolean language plpgsql security definer set search_path=''
   as $fn$
@@ -376,12 +491,15 @@ begin
    if v_event.completed_at is not null then return true; end if;
    begin
     v_actor := v_event.actor_id;
-    v_metadata := v_event.metadata;
+    v_metadata := coalesce(v_event.metadata, '{}'::jsonb);
     if not exists (select 1 from public.profiles where id=v_actor and organization_id=v_event.organization_id) then
      select id into v_actor from public.profiles
       where organization_id=v_event.organization_id and is_tombstone order by id limit 1;
      if v_actor is null then raise exception 'Historical audit actor unavailable' using errcode='23503'; end if;
-     v_metadata := v_metadata || jsonb_build_object('originalActorId',v_event.actor_id);
+     v_metadata := v_metadata || jsonb_build_object(
+       'originalActorId', v_event.actor_id,
+       'deletedActorId', v_event.actor_id
+     );
     end if;
     insert into public.audit_logs(id,organization_id,actor_id,actor_role,action,target_kind,target_id,metadata,created_at)
      values(v_event.id,v_event.organization_id,v_actor,v_event.actor_role,v_event.action,v_event.target_kind,
@@ -400,15 +518,6 @@ begin
 
   revoke all on function public.deliver_audit_event(uuid)
     from public, anon, authenticated, service_role;
-
-  alter table public.audit_event_outbox
-    drop column if exists actor_name_snapshot,
-    drop column if exists actor_email_snapshot;
-
-  alter table public.audit_logs
-    drop column if exists deleted_actor_id,
-    drop column if exists actor_name_snapshot,
-    drop column if exists actor_email_snapshot;
 
   delete from hrp_private.review_migrations
    where version in (
@@ -467,5 +576,17 @@ begin
        and fingerprints_before = fingerprints_after
   ) then
     raise exception 'Wave 2 rollback receipt or data integrity proof missing';
+  end if;
+
+  if to_regclass('hrp_private.audit_actor_snapshot_archive') is not null
+     and exists (
+       select 1
+         from hrp_private.audit_actor_snapshot_archive a
+         join public.audit_logs l on l.id = a.log_id
+        where (a.deleted_actor_id is not null and coalesce(l.metadata->>'deletedActorId', l.metadata->>'originalActorId') is distinct from a.deleted_actor_id::text)
+           or (a.actor_name_snapshot is not null and l.metadata->>'actorNameSnapshot' is distinct from a.actor_name_snapshot)
+           or (a.actor_email_snapshot is not null and l.metadata->>'actorEmailSnapshot' is distinct from a.actor_email_snapshot)
+     ) then
+    raise exception 'Wave 2 rollback lost historical actor attribution in public.audit_logs.metadata';
   end if;
 end $verify_rollback$;`;

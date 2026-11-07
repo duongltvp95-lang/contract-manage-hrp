@@ -58,12 +58,26 @@ type AuditRowDb = {
   created_at: string;
 };
 
+function readMetadataString(
+  metadata: Record<string, unknown> | null | undefined,
+  key: string,
+): string | null {
+  const raw = metadata?.[key];
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function rowFromDb(row: AuditRowDb): AuditLogRow {
   return {
     id: row.id,
     organizationId: row.organization_id,
     actorId: row.actor_id,
-    deletedActorId: row.deleted_actor_id ?? null,
+    deletedActorId:
+      row.deleted_actor_id ??
+      readMetadataString(row.metadata, "deletedActorId") ??
+      readMetadataString(row.metadata, "originalActorId") ??
+      null,
     actorRole: row.actor_role === "admin" ? "admin" : "user",
     // Filled in by `hydrateAuditActorDetails` after a single profiles lookup.
     actorName: null,
@@ -191,7 +205,9 @@ function applyAuditFilter<T extends {
 }>(query: T, filter: Pick<LogsFilter, "actorId" | "action" | "from" | "to">): T {
   let next = query;
   if (filter.actorId) {
-    next = next.or(`actor_id.eq.${filter.actorId},deleted_actor_id.eq.${filter.actorId}`);
+    next = next.or(
+      `actor_id.eq.${filter.actorId},deleted_actor_id.eq.${filter.actorId},metadata->>deletedActorId.eq.${filter.actorId},metadata->>originalActorId.eq.${filter.actorId}`,
+    );
   }
   if (filter.action) {
     next = next.eq("action", filter.action);
@@ -247,8 +263,16 @@ async function hydrateAuditActorDetails(
 
   return rows.map((row) => ({
     ...rowFromDb(row),
-    actorName: actorNames.get(row.actor_id) ?? row.actor_name_snapshot ?? null,
-    actorEmail: actorEmails.get(row.actor_id) ?? row.actor_email_snapshot ?? null,
+    actorName:
+      actorNames.get(row.actor_id) ??
+      row.actor_name_snapshot ??
+      readMetadataString(row.metadata, "actorNameSnapshot") ??
+      null,
+    actorEmail:
+      actorEmails.get(row.actor_id) ??
+      row.actor_email_snapshot ??
+      readMetadataString(row.metadata, "actorEmailSnapshot") ??
+      null,
   }));
 }
 

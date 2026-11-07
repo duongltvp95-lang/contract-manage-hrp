@@ -306,12 +306,81 @@ try {
   releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Bundle) + ");\n" + verifyAuditWave1Sql);
   console.log("PASS Wave 1 zero-downtime upload transition, app-only rollback, full DB rollback, and clean re-apply");
 
-  // Rehearse Wave 2 stacked release, dependency guard on Wave 1 rollback, ordered Wave 2 -> Wave 1 rollback, and clean re-apply.
+  // Rehearse Wave 2 stacked release, real user deletion + audit history, dependency guard on Wave 1 rollback,
+  // lossless historical actor preservation across Wave 2 -> Wave 1 DB rollback, and clean re-apply.
   const wave2Bundle = buildAuditWave2MigrationSql();
   const wave2Rollback = buildAuditWave2RollbackSql();
   for (let attempt = 0; attempt < 2; attempt++) {
     releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave2Bundle) + ");\n" + verifyAuditWave2Sql);
   }
+
+  // Create real user activity + pending outbox event, delete the user during Wave 2,
+  // and verify rollback preserves historical ID, name, and email without any loss!
+  releaseSql(`set request.jwt.claim.role='service_role';
+    do $$
+    declare
+      v_tombstone uuid;
+    begin
+      select id into v_tombstone
+        from public.profiles
+       where organization_id = '11111111-1111-1111-1111-111111111111'
+         and is_tombstone
+       order by id
+       limit 1;
+
+      if v_tombstone is null then
+        v_tombstone := 'abababab-0000-4000-8000-000000000090'::uuid;
+        insert into auth.users(id, email) values (v_tombstone, 'tombstone-fixture@hrpartner.test');
+        update public.profiles
+           set is_tombstone = true, is_active = false, full_name = '[Người dùng đã xoá]'
+         where id = v_tombstone;
+      end if;
+
+      insert into auth.users(id, email, raw_user_meta_data)
+      values (
+        'abababab-0000-4000-8000-000000000091',
+        'deleted-during-wave2@hrpartner.test',
+        '{"full_name":"Trần Thị Lịch Sử"}'
+      );
+
+      insert into public.audit_logs(
+        id, organization_id, actor_id, actor_role, action, target_kind, target_id, metadata
+      ) values
+        ('99999999-0000-4000-8000-000000000051','11111111-1111-1111-1111-111111111111',
+         'abababab-0000-4000-8000-000000000091','user','create_contract','contract',
+         'abababab-0000-4000-8000-000000000003','{"contractNumber":"HD-AUDIT-51"}'::jsonb),
+        ('99999999-0000-4000-8000-000000000052','11111111-1111-1111-1111-111111111111',
+         'abababab-0000-4000-8000-000000000091','user','update_contract','contract',
+         'abababab-0000-4000-8000-000000000003','{"customKey":"keep-me"}'::jsonb);
+
+      insert into public.audit_event_outbox(
+        id, organization_id, actor_id, actor_role, action, target_kind, target_id, metadata
+      ) values (
+        '99999999-0000-4000-8000-000000000053','11111111-1111-1111-1111-111111111111',
+        'abababab-0000-4000-8000-000000000091','user','export_partners','partner',
+        null,'{"rowCount":12}'::jsonb
+      );
+
+      if public.prepare_actor_audit_for_user_delete(
+        '11111111-1111-1111-1111-111111111111',
+        'abababab-0000-4000-8000-000000000091',
+        v_tombstone,
+        'Trần Thị Lịch Sử',
+        'deleted-during-wave2@hrpartner.test'
+      ) <> 2 then
+        raise exception 'expected 2 historical audit_logs rows to be prepared before user delete';
+      end if;
+
+      -- Force row 52 to rely strictly on typed Wave 2 columns prior to rollback
+      -- so rollback SQL itself must migrate column snapshots into metadata!
+      update public.audit_logs
+         set metadata = '{"customKey":"keep-me"}'::jsonb
+       where id = '99999999-0000-4000-8000-000000000052';
+
+      delete from public.profiles where id = 'abababab-0000-4000-8000-000000000091';
+      delete from auth.users where id = 'abababab-0000-4000-8000-000000000091';
+    end $$;`);
+
   try {
     releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Rollback) + ");");
     throw new Error("Wave 1 rollback unexpectedly succeeded while Wave 2 remained applied");
@@ -321,10 +390,68 @@ try {
   for (let attempt = 0; attempt < 2; attempt++) {
     releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave2Rollback) + ");\n" + verifyAuditWave2RollbackSql);
   }
+
+  // Verify historical actor ID, name, and email survived Wave 2 rollback in metadata
+  // AND pending outbox events delivered post-rollback also preserve full attribution!
+  releaseSql(`set request.jwt.claim.role='service_role';
+    do $$
+    begin
+      if (
+        select count(*)
+          from public.audit_logs
+         where id in ('99999999-0000-4000-8000-000000000051','99999999-0000-4000-8000-000000000052')
+           and metadata->>'deletedActorId' = 'abababab-0000-4000-8000-000000000091'
+           and metadata->>'originalActorId' = 'abababab-0000-4000-8000-000000000091'
+           and metadata->>'actorNameSnapshot' = 'Trần Thị Lịch Sử'
+           and metadata->>'actorEmailSnapshot' = 'deleted-during-wave2@hrpartner.test'
+      ) <> 2 then
+        raise exception 'Wave 2 rollback failed to preserve deleted actor ID/name/email in audit_logs.metadata';
+      end if;
+
+      if (select metadata->>'customKey' from public.audit_logs where id = '99999999-0000-4000-8000-000000000052') is distinct from 'keep-me' then
+        raise exception 'Wave 2 rollback clobbered existing audit_logs.metadata keys';
+      end if;
+
+      if not public.deliver_audit_event('99999999-0000-4000-8000-000000000053') then
+        raise exception 'post-rollback deliver_audit_event failed for deleted actor outbox event';
+      end if;
+
+      if (
+        select count(*)
+          from public.audit_logs
+         where id = '99999999-0000-4000-8000-000000000053'
+           and metadata->>'deletedActorId' = 'abababab-0000-4000-8000-000000000091'
+           and metadata->>'actorNameSnapshot' = 'Trần Thị Lịch Sử'
+           and metadata->>'actorEmailSnapshot' = 'deleted-during-wave2@hrpartner.test'
+      ) <> 1 then
+        raise exception 'post-rollback outbox delivery lost deleted actor identity';
+      end if;
+    end $$;`);
+
   releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Rollback) + ");\n" + verifyAuditWave1RollbackSql);
   releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Bundle) + ");\n" + verifyAuditWave1Sql);
   releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave2Bundle) + ");\n" + verifyAuditWave2Sql);
-  console.log("PASS Wave 2 stacked release, ordered Wave 2 -> Wave 1 DB rollback, and clean re-apply");
+
+  // Verify re-applying Wave 2 re-hydrates typed deleted_actor_id, actor_name_snapshot, and actor_email_snapshot!
+  releaseSql(`set request.jwt.claim.role='service_role';
+    do $$
+    begin
+      if (
+        select count(*)
+          from public.audit_logs
+         where id in (
+           '99999999-0000-4000-8000-000000000051',
+           '99999999-0000-4000-8000-000000000052',
+           '99999999-0000-4000-8000-000000000053'
+         )
+           and deleted_actor_id = 'abababab-0000-4000-8000-000000000091'
+           and actor_name_snapshot = 'Trần Thị Lịch Sử'
+           and actor_email_snapshot = 'deleted-during-wave2@hrpartner.test'
+      ) <> 3 then
+        raise exception 'Wave 2 re-apply failed to backfill typed snapshot columns from preserved metadata';
+      end if;
+    end $$;`);
+  console.log("PASS Wave 2 stacked release, lossless deleted-actor rollback & re-apply, and ordered Wave 2 -> Wave 1 DB rollback");
 } catch (error) {
   console.error(error.message);
   if (error.cause) console.error(error.cause.stderr?.toString() || error.cause.message);

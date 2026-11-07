@@ -363,6 +363,75 @@ describe("Audit Wave 2 unit suite (A06, A08, A10, A12)", () => {
         ),
       ).toBe(true);
 
+      // Regression: short expiration (< 2 days) or Date-based expiration on an
+      // uploads-staging/* sub-prefix (e.g. uploads-staging/example-tenant/) MUST fail!
+      const shortStagingSubPrefix = evaluateLifecycleRules([
+        {
+          ID: "auto-delete-ai-temp-24h",
+          Status: "Enabled",
+          Filter: { Prefix: "ai-temp/" },
+          Expiration: { Days: 1 },
+        },
+        {
+          ID: "auto-delete-uploads-staging-48h",
+          Status: "Enabled",
+          Filter: { Prefix: "uploads-staging/" },
+          Expiration: { Days: 2 },
+        },
+        {
+          ID: "tenant-staging-1d-too-short",
+          Status: "Enabled",
+          Filter: { Prefix: "uploads-staging/example-tenant/" },
+          Expiration: { Days: 1 },
+        },
+      ]);
+      expect(shortStagingSubPrefix.ok).toBe(false);
+      expect(
+        shortStagingSubPrefix.issues.some((msg: string) =>
+          msg.includes("uploads-staging/example-tenant/") && msg.includes(">= 2 days"),
+        ),
+      ).toBe(true);
+
+      const dateBasedSubPrefix = evaluateLifecycleRules([
+        {
+          ID: "auto-delete-ai-temp-24h",
+          Status: "Enabled",
+          Filter: { Prefix: "ai-temp/" },
+          Expiration: { Days: 1 },
+        },
+        {
+          ID: "auto-delete-uploads-staging-48h",
+          Status: "Enabled",
+          Filter: { Prefix: "uploads-staging/" },
+          Expiration: { Days: 2 },
+        },
+        {
+          ID: "date-based-ai-temp-subprefix",
+          Status: "Enabled",
+          Filter: { Prefix: "ai-temp/tenant/" },
+          Expiration: { Date: "2026-12-01T00:00:00Z" } as unknown as { Days: number },
+        },
+      ]);
+      expect(dateBasedSubPrefix.ok).toBe(false);
+
+      // A sub-prefix rule alone must NOT satisfy bucket-wide uploads-staging/ coverage
+      const subPrefixOnlyStaging = evaluateLifecycleRules([
+        {
+          ID: "auto-delete-ai-temp-24h",
+          Status: "Enabled",
+          Filter: { Prefix: "ai-temp/" },
+          Expiration: { Days: 1 },
+        },
+        {
+          ID: "only-one-tenant-staging",
+          Status: "Enabled",
+          Filter: { Prefix: "uploads-staging/example-tenant/" },
+          Expiration: { Days: 2 },
+        },
+      ]);
+      expect(subPrefixOnlyStaging.ok).toBe(false);
+      expect(subPrefixOnlyStaging.hasUploadsStagingRule).toBe(false);
+
       // R2 conditional CopyObject probe helper safety: never writes under contracts/
       const probeKeys = buildR2CopyProbeKeys("probe-123");
       expect(probeKeys.prefix).toBe("uploads-staging/_r2-copy-probe-probe-123");
@@ -555,14 +624,21 @@ describe("Audit Wave 2 unit suite (A06, A08, A10, A12)", () => {
         id: `88888888-0000-4000-8000-${String(idx + 1).padStart(12, "0")}`,
         organization_id: ORG_ID,
         actor_id: TOMBSTONE_ID,
-        deleted_actor_id: VICTIM_ID,
-        actor_name_snapshot: "Nhân sự Cũ",
-        actor_email_snapshot: "old@hrp.test",
+        deleted_actor_id: idx === 1 ? null : VICTIM_ID,
+        actor_name_snapshot: idx === 1 ? null : "Nhân sự Cũ",
+        actor_email_snapshot: idx === 1 ? null : "old@hrp.test",
         actor_role: "user",
         action: "create_contract",
         target_kind: "contract",
         target_id: null,
-        metadata: {},
+        metadata:
+          idx === 1
+            ? {
+                deletedActorId: VICTIM_ID,
+                actorNameSnapshot: "Nhân sự Metadata Rollback",
+                actorEmailSnapshot: "rollback-meta@hrp.test",
+              }
+            : {},
         created_at: "2026-06-01T00:00:00Z",
       }));
 
@@ -616,10 +692,13 @@ describe("Audit Wave 2 unit suite (A06, A08, A10, A12)", () => {
         expect(fullExport.data.rows).toHaveLength(650);
         expect(fullExport.data.total).toBe(650);
         expect(fullExport.data.truncated).toBe(false);
-        // Verifies A06 snapshot hydration on tombstoned actor rows too!
+        // Verifies A06 snapshot hydration on tombstoned actor rows (both typed columns & metadata rollback fallback)!
         expect(fullExport.data.rows[0]?.actorName).toBe("Nhân sự Cũ");
         expect(fullExport.data.rows[0]?.actorEmail).toBe("old@hrp.test");
         expect(fullExport.data.rows[0]?.deletedActorId).toBe(VICTIM_ID);
+        expect(fullExport.data.rows[1]?.actorName).toBe("Nhân sự Metadata Rollback");
+        expect(fullExport.data.rows[1]?.actorEmail).toBe("rollback-meta@hrp.test");
+        expect(fullExport.data.rows[1]?.deletedActorId).toBe(VICTIM_ID);
       }
 
       const cappedExport = await exportAuditLogs(ORG_ID, {}, { maxRows: 550 });

@@ -89,7 +89,11 @@ export function evaluateLifecycleRules(rules = []) {
     if (rule?.Status !== "Enabled") continue;
     const ruleId = rule?.ID ?? "(unnamed)";
     const prefix = rule?.Filter?.Prefix ?? rule?.Filter?.And?.Prefix ?? rule?.Prefix ?? "";
+    const hasTagFilter = Array.isArray(rule?.Filter?.And?.Tags)
+      ? rule.Filter.And.Tags.length > 0
+      : Boolean(rule?.Filter?.Tag);
     const days = rule?.Expiration?.Days ?? null;
+    const hasExpiration = Boolean(rule?.Expiration);
     const deletesObjects = Boolean(rule?.Expiration || rule?.NoncurrentVersionExpiration);
 
     if (!prefix) {
@@ -108,11 +112,10 @@ export function evaluateLifecycleRules(rules = []) {
       continue;
     }
 
-    const isAllowedTempPrefix =
-      prefix === "ai-temp/" ||
-      prefix.startsWith("ai-temp/") ||
-      prefix === "uploads-staging/" ||
-      prefix.startsWith("uploads-staging/");
+    const isAiTempPrefix = prefix === "ai-temp/" || prefix.startsWith("ai-temp/");
+    const isUploadsStagingPrefix =
+      prefix === "uploads-staging/" || prefix.startsWith("uploads-staging/");
+    const isAllowedTempPrefix = isAiTempPrefix || isUploadsStagingPrefix;
 
     if (deletesObjects && !isAllowedTempPrefix) {
       issues.push(
@@ -121,16 +124,30 @@ export function evaluateLifecycleRules(rules = []) {
       continue;
     }
 
-    if (prefix === "ai-temp/" && typeof days === "number" && days >= 1) {
-      hasAiTempRule = true;
+    if (isAiTempPrefix && hasExpiration) {
+      if (typeof days !== "number") {
+        issues.push(
+          `WARNING: Enabled rule "${ruleId}" on "${prefix}" must specify numeric Expiration.Days >= 1.`,
+        );
+      } else if (days < 1) {
+        issues.push(
+          `WARNING: Enabled rule "${ruleId}" on "${prefix}" expires objects in ${days} day(s); must be >= 1 day.`,
+        );
+      } else if (prefix === "ai-temp/" && !hasTagFilter) {
+        hasAiTempRule = true;
+      }
     }
 
-    if (prefix === "uploads-staging/") {
-      if (typeof days === "number" && days < 2) {
+    if (isUploadsStagingPrefix && hasExpiration) {
+      if (typeof days !== "number") {
         issues.push(
-          `WARNING: uploads-staging/ expiration is ${days} day(s); must be >= 2 days to exceed the 24h20m upload reservation window.`,
+          `WARNING: Enabled rule "${ruleId}" on "${prefix}" must specify numeric Expiration.Days >= 2.`,
         );
-      } else if (typeof days === "number" && days >= 2) {
+      } else if (days < 2) {
+        issues.push(
+          `WARNING: Enabled rule "${ruleId}" on "${prefix}" expires objects in ${days} day(s); must be >= 2 days to exceed the 24h20m upload reservation window.`,
+        );
+      } else if (prefix === "uploads-staging/" && !hasTagFilter) {
         hasUploadsStagingRule = true;
       }
     }
