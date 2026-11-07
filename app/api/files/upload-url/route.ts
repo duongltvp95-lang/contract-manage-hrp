@@ -48,6 +48,7 @@ export async function POST(request: NextRequest) {
     uploadReservation: parsed.data.uploadReservation,
     baseContractNumber: parsed.data.baseContractNumber,
     userEmail: guard.user.email,
+    canManageArchived: guard.user.canManageArchived,
   });
 
   if (!result.ok) {

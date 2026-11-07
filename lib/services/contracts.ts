@@ -63,11 +63,47 @@ export type ContractDetail = ContractRow & {
 };
 
 function contractWriteError(scope: string, error: unknown): ServiceErr {
-  const failure = error as { code?: string; message?: string };
-  if (failure?.code === "23505" && failure.message?.includes("contracts_active_identity_unique")) {
+  const failure = error as { code?: string; message?: string; details?: string };
+  const details = `${failure?.message ?? ""} ${failure?.details ?? ""}`;
+  if (failure?.code === "23505" && details.includes("contracts_active_identity_unique")) {
     return err("validation", "Hợp đồng có cùng số, ngày ký và ngày hết hạn đã tồn tại trong hệ thống");
   }
+  if (failure?.code === "23514" && details.includes("contracts_expiry_on_or_after_signed_check")) {
+    return err("validation", "Ngày hết hạn không được sớm hơn ngày ký hợp đồng");
+  }
+  if (failure?.code === "23503" && details.includes("contracts_partner_org_fkey")) {
+    return err("validation", "Đối tác được chọn không thuộc tổ chức của bạn");
+  }
+  if (failure?.code === "23503" && details.includes("contracts_company_org_fkey")) {
+    return err("validation", "Công ty được chọn không thuộc tổ chức của bạn");
+  }
   return dbError(scope, error);
+}
+
+export type ContractArchiveState = "active" | "archived" | "missing";
+
+/**
+ * Minimal same-org status check via `get_contract_archive_state` RPC.
+ * Reveals zero contract fields or file metadata while allowing callers to
+ * distinguish an archived contract in their own org from a missing/foreign id.
+ */
+export async function getContractArchiveState(
+  id: string,
+): Promise<ContractArchiveState> {
+  if (!id || typeof id !== "string") {
+    return "missing";
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("get_contract_archive_state", {
+    p_contract_id: id,
+  });
+
+  if (error || (data !== "active" && data !== "archived")) {
+    return "missing";
+  }
+
+  return data;
 }
 
 export type CreateContractContext = {
@@ -323,6 +359,12 @@ export async function createContract(
   const company = await getCompany(companyId, { organizationId });
   if (!company.ok) {
     return err("validation", "Công ty được chọn không thuộc tổ chức của bạn");
+  }
+
+  const signedDate = emptyToNull(values.signedDate);
+  const expiryDate = emptyToNull(values.expiryDate);
+  if (signedDate && expiryDate && expiryDate < signedDate) {
+    return err("validation", "Ngày hết hạn không được sớm hơn ngày ký hợp đồng");
   }
 
   /**
@@ -595,20 +637,20 @@ export async function listContracts({
  */
 async function explainMissingContract(
   id: string,
-  organizationId: string,
+  _organizationId: string,
   action: "update" | "archive",
 ): Promise<ServiceErr> {
-  const existing = await getContract(id, organizationId);
+  const state = await getContractArchiveState(id);
 
-  if (!existing.ok) {
-    return err("not_found", "Không tìm thấy hợp đồng");
-  }
-
-  if (existing.data.archived_at) {
+  if (state === "archived") {
     return err(
       "forbidden",
       "Hợp đồng đã được lưu trữ nên không thể thay đổi",
     );
+  }
+
+  if (state === "missing") {
+    return err("not_found", "Không tìm thấy hợp đồng");
   }
 
   return err(
@@ -748,6 +790,10 @@ export async function updateContract(
     return err("validation", "Không có thay đổi nào để lưu");
   }
 
+  if (patch.signed_date && patch.expiry_date && patch.expiry_date < patch.signed_date) {
+    return err("validation", "Ngày hết hạn không được sớm hơn ngày ký hợp đồng");
+  }
+
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -799,7 +845,15 @@ export async function renewContract(
 
   // 1. Kiểm tra hợp đồng tồn tại và thuộc tổ chức
   const existing = await getContract(id, context.organizationId);
-  if (!existing.ok) return existing;
+  if (!existing.ok) {
+    if (existing.code === "not_found") {
+      const archiveState = await getContractArchiveState(id);
+      if (archiveState === "archived") {
+        return err("forbidden", "Không thể gia hạn hợp đồng đã lưu trữ");
+      }
+    }
+    return existing;
+  }
   const currentContract = existing.data;
 
   if (currentContract.archived_at) {
@@ -858,50 +912,62 @@ export async function renewContract(
   return ok(updated);
 }
 
+export type ArchiveContractResult = {
+  id: string;
+  archived_at: string;
+};
+
 /**
  * Plan sections 66, 76 — archive instead of deleting.
  *
- * Soft delete only: `archived_at` is stamped and the row stays. There is no hard
- * delete path in the Wave 1 UI, and no unarchive UI either — both are owner
- * decisions for M7.
+ * Uses `archive_contract_atomic` so non-privileged callers can archive an active
+ * contract in their own organization without hitting the `SELECT` RLS restriction
+ * on archived rows that `UPDATE ... RETURNING` would trigger.
  */
 export async function archiveContract(
   id: string,
   organizationId: string,
-): Promise<ServiceResult<ContractRow>> {
-  const supabase = await createClient();
+): Promise<ServiceResult<ArchiveContractResult>> {
+  if (!id || !organizationId) {
+    return err("not_found", "Không tìm thấy hợp đồng");
+  }
 
-  const { data, error } = await supabase
-    .from("contracts")
-    .update({ archived_at: new Date().toISOString() })
-    .eq("id", id)
-    .eq("organization_id", organizationId)
-    // Makes a repeated archive a no-op rather than moving the timestamp, which
-    // keeps "when was this archived?" meaningful.
-    .is("archived_at", null)
-    .select(CONTRACT_COLUMNS)
-    .maybeSingle();
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("archive_contract_atomic", {
+    p_contract_id: id,
+  });
 
   if (error) {
     return dbError("archiveContract", error);
   }
 
-  if (!data) {
-    return explainMissingContract(id, organizationId, "archive");
+  const payload = (data ?? {}) as {
+    status?: string;
+    id?: string;
+    archived_at?: string;
+  };
+
+  if (payload.status === "already_archived") {
+    return err("forbidden", "Hợp đồng đã được lưu trữ nên không thể thay đổi");
   }
 
-  const archived = data as ContractRow;
+  if (payload.status !== "archived" || !payload.id || !payload.archived_at) {
+    return err("not_found", "Không tìm thấy hợp đồng");
+  }
 
-  return ok(archived);
+  return ok({
+    id: payload.id,
+    archived_at: payload.archived_at,
+  });
 }
 
 /**
- * Round 19 — hard-delete a contract (owner-only, email-gated).
+ * Round 19 — hard-delete a contract (privileged archive/delete capability).
  *
- * The delete admin is resolved from the session and must match
- * `DELETE_ADMIN_EMAILS`. A service-role RPC deletes the contract and its file
- * rows while adding all R2 cleanup intents in one transaction. The scheduled
- * worker removes the private objects after the database commit.
+ * The delete admin is resolved from the session (`profiles.can_manage_archived`).
+ * A service-role RPC deletes the contract and its file rows while adding all R2
+ * cleanup intents in one transaction. The scheduled worker removes the private
+ * objects after the database commit.
  */
 export async function deleteContract(
   id: string,
@@ -909,7 +975,7 @@ export async function deleteContract(
 ): Promise<ServiceResult<{ id: string }>> {
   const user = await getCurrentUser();
   if (!user) return err("unauthenticated", "Bạn cần đăng nhập");
-  if (!canDeleteEntities(user.email)) {
+  if (!canDeleteEntities(user)) {
     return err("forbidden", "Không có quyền xoá hợp đồng");
   }
 
@@ -970,7 +1036,7 @@ export async function deleteContracts(
 ): Promise<ServiceResult<{ results: BulkDeleteItem[] }>> {
   const user = await getCurrentUser();
   if (!user) return err("unauthenticated", "Bạn cần đăng nhập");
-  if (!canDeleteEntities(user.email)) {
+  if (!canDeleteEntities(user)) {
     return err("forbidden", "Không có quyền xoá hợp đồng");
   }
 
@@ -1002,7 +1068,7 @@ export async function deleteContracts(
 export async function unarchiveContract(id: string): Promise<ServiceResult<ContractRow>> {
   const user = await getCurrentUser();
   if (!user) return err("unauthenticated", "Bạn cần đăng nhập");
-  if (!canDeleteEntities(user.email)) {
+  if (!canDeleteEntities(user)) {
     return err("forbidden", "Không có quyền bỏ lưu trữ hợp đồng");
   }
 

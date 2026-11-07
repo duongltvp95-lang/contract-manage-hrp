@@ -37,7 +37,7 @@ async function PartnersContent({
       {result.ok ? (
         <PartnersTable
           rows={result.data}
-          canDelete={canDeleteEntities(me.email)}
+          canDelete={canDeleteEntities(me)}
         />
       ) : (
         // Plan section 80: a readable message, never a raw stack trace.

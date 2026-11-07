@@ -1374,7 +1374,7 @@ export async function deletePartner(
 ): Promise<ServiceResult<{ id: string }>> {
   const user = await getCurrentUser();
   if (!user) return err("unauthenticated", "Bạn cần đăng nhập");
-  if (!canDeleteEntities(user.email)) {
+  if (!canDeleteEntities(user)) {
     return err("forbidden", "Không có quyền xoá đối tác");
   }
 
@@ -1427,7 +1427,7 @@ export async function deletePartners(
 ): Promise<ServiceResult<{ results: BulkDeleteItem[] }>> {
   const user = await getCurrentUser();
   if (!user) return err("unauthenticated", "Bạn cần đăng nhập");
-  if (!canDeleteEntities(user.email)) {
+  if (!canDeleteEntities(user)) {
     return err("forbidden", "Không có quyền xoá đối tác");
   }
 

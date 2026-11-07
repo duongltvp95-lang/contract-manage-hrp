@@ -12,6 +12,7 @@ import { requireUser, type CurrentUser } from "@/lib/auth";
 import { canDeleteEntities } from "@/lib/delete-permissions";
 import {
   getContract,
+  getContractArchiveState,
   type ContractDetail as ContractDetailRow,
 } from "@/lib/services/contracts";
 import { getFileViewUrl, listContractFiles } from "@/lib/services/files";
@@ -64,16 +65,20 @@ type DetailSearchParams = Promise<{ file?: string }>;
  * This also means a user who cannot see the contract never gets the skeleton,
  * and only the slower viewer data (files + a signed URL) streams.
  */
+type LoadedContractResult =
+  | { status: "archived_forbidden" }
+  | {
+      status: "ok";
+      id: string;
+      requestedFileId: string | undefined;
+      user: CurrentUser;
+      contract: ContractDetailRow;
+    };
+
 async function loadAuthorizedContract(
   params: DetailParams,
   searchParams: DetailSearchParams,
-): Promise<{
-  id: string;
-  requestedFileId: string | undefined;
-  user: CurrentUser;
-  contract: ContractDetailRow;
-  canViewArchived: boolean;
-}> {
+): Promise<LoadedContractResult> {
   const { id } = await params;
   const { file: requestedFileId } = await searchParams;
   const user = await requireUser();
@@ -81,30 +86,32 @@ async function loadAuthorizedContract(
   const contract = await getContract(id, user.organizationId);
 
   if (!contract.ok) {
-    // Also covers another organization's contract: `getContract` answers the
-    // same way for "missing" and "not yours", so nothing leaks.
+    if (contract.code === "not_found" && (await getContractArchiveState(id)) === "archived") {
+      return { status: "archived_forbidden" };
+    }
+    // Also covers another organization's contract: `getContract` and
+    // `getContractArchiveState` answer the same way for "missing" and "not yours".
     notFound();
   }
 
-  // Round 19: an archived contract is only viewable by the delete-admin emails.
-  const canViewArchived =
-    contract.data.archived_at === null || canDeleteEntities(user.email);
+  // Round 19 + A01: an archived contract is only viewable with `can_manage_archived`.
+  if (contract.data.archived_at !== null && !canDeleteEntities(user)) {
+    return { status: "archived_forbidden" };
+  }
 
-  return { id, requestedFileId, user, contract: contract.data, canViewArchived };
+  return { status: "ok", id, requestedFileId, user, contract: contract.data };
 }
 
 async function ContractDetailContent({
   id,
   requestedFileId,
-  organizationId,
-  userEmail,
+  user,
   contract,
   canDelete,
 }: {
   id: string;
   requestedFileId: string | undefined;
-  organizationId: string;
-  userEmail: string | null;
+  user: CurrentUser;
   contract: ContractDetailRow;
   canDelete: boolean;
 }) {
@@ -112,7 +119,7 @@ async function ContractDetailContent({
   // Sheet's combobox has its options on first paint; typing searches the whole
   // directory through a server action (round 6).
   const [files, partners] = await Promise.all([
-    listContractFiles(organizationId, id, userEmail),
+    listContractFiles(user.organizationId, id, user),
     searchPartners(""),
   ]);
 
@@ -128,7 +135,7 @@ async function ContractDetailContent({
   // of waiting for a client round trip. Switching files happens client-side.
   let initialViewUrl = null;
   if (initial) {
-    const signed = await getFileViewUrl(initial.id, organizationId, userEmail);
+    const signed = await getFileViewUrl(initial.id, user.organizationId, user);
     initialViewUrl = signed.ok ? signed.data : null;
   }
 
@@ -152,22 +159,22 @@ export default async function ContractDetailPage({
   params: DetailParams;
   searchParams: DetailSearchParams;
 }) {
-  const { id, requestedFileId, user, contract, canViewArchived } =
-    await loadAuthorizedContract(params, searchParams);
+  const loaded = await loadAuthorizedContract(params, searchParams);
 
-  if (!canViewArchived) {
+  if (loaded.status === "archived_forbidden") {
     return <ArchivedForbidden />;
   }
+
+  const { id, requestedFileId, user, contract } = loaded;
 
   return (
     <Suspense fallback={<ContractDetailSkeleton />}>
       <ContractDetailContent
         id={id}
         requestedFileId={requestedFileId}
-        organizationId={user.organizationId}
-        userEmail={user.email}
+        user={user}
         contract={contract}
-        canDelete={canDeleteEntities(user.email)}
+        canDelete={canDeleteEntities(user)}
       />
     </Suspense>
   );

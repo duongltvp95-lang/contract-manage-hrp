@@ -96,4 +96,145 @@ select public.test_assert(
 select public.clear_login_attempts(repeat('a',64));
 select public.test_assert(
  (public.claim_login_attempt(repeat('a',64))->>'remaining')::int=4, 'successful login budget can reset');
+
+-- A01: archived contracts & file metadata RLS + dedicated archive RPC
+insert into auth.users(id, email) values ('aaaaaaaa-0000-4000-8000-000000000003', 'priv@test.invalid');
+update public.profiles set role='admin', can_manage_archived=true where id='aaaaaaaa-0000-4000-8000-000000000003';
+insert into public.contracts(id, organization_id, contract_number, notes, archived_at)
+ values ('cccccccc-0000-4000-8000-000000000002','11111111-1111-1111-1111-111111111111','ARCHIVED-SECRET','SECRET-NOTE',now()),
+        ('cccccccc-0000-4000-8000-000000000003','11111111-1111-1111-1111-111111111111','TO-ARCHIVE','ACTIVE-NOTE',null),
+        ('cccccccc-0000-4000-8000-000000000005','11111111-1111-1111-1111-111111111111','LEGACY-APP-ARCHIVE','LEGACY-NOTE',null);
+insert into public.contract_files(id, organization_id, contract_id, bucket, object_key, original_filename, mime_type)
+ values ('ffffffff-0000-4000-8000-000000000099','11111111-1111-1111-1111-111111111111',
+         'cccccccc-0000-4000-8000-000000000002','test','contracts/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000002/ffffffff-0000-4000-8000-000000000099/secret.pdf','secret.pdf','application/pdf'),
+        ('ffffffff-0000-4000-8000-000000000098','11111111-1111-1111-1111-111111111111',
+         'cccccccc-0000-4000-8000-000000000005','test','contracts/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000005/ffffffff-0000-4000-8000-000000000098/legacy.pdf','legacy.pdf','application/pdf');
+
+set role authenticated;
+set request.jwt.claim.role='authenticated';
+set request.jwt.claim.sub='aaaaaaaa-0000-4000-8000-000000000001';
+select public.test_assert((select count(*)=0 from public.contracts where id='cccccccc-0000-4000-8000-000000000002'),
+ 'A01: non-privileged user cannot SELECT archived contract');
+select public.test_assert((select count(*)=0 from public.contract_files where id='ffffffff-0000-4000-8000-000000000099'),
+ 'A01: non-privileged user cannot SELECT archived contract file metadata');
+select public.test_assert(public.get_contract_archive_state('cccccccc-0000-4000-8000-000000000002')='archived',
+ 'A01: minimal archive state RPC reports archived for same-org contract without leaking fields');
+do $$
+begin
+  begin
+    update public.profiles set can_manage_archived=true where id='aaaaaaaa-0000-4000-8000-000000000001';
+    raise exception 'Client unexpectedly updated can_manage_archived';
+  exception when insufficient_privilege then null;
+  end;
+end $$;
+select public.test_assert((public.archive_contract_atomic('cccccccc-0000-4000-8000-000000000003')->>'status')='archived',
+ 'A01: non-privileged user can archive active contract via dedicated RPC');
+select public.test_assert((select count(*)=0 from public.contracts where id='cccccccc-0000-4000-8000-000000000003'),
+ 'A01: newly archived contract becomes hidden from non-privileged SELECT');
+
+-- Note: review-hardening.sql runs via `psql -f` / stdin where statements run in autocommit unless wrapped in `begin; ... commit;`.
+-- Simulate the exact pre-cutover PostgREST `UPDATE ... SET archived_at = ... RETURNING *` transaction!
+begin;
+set local role authenticated;
+set local request.jwt.claim.role='authenticated';
+set local request.jwt.claim.sub='aaaaaaaa-0000-4000-8000-000000000001';
+with pgrst_source as (
+  update public.contracts
+     set archived_at = now()
+   where id = 'cccccccc-0000-4000-8000-000000000005'
+     and organization_id = '11111111-1111-1111-1111-111111111111'
+     and archived_at is null
+  returning id, contract_number, archived_at
+)
+select public.test_assert(
+  (select count(*) = 1 and bool_and(archived_at is not null) from pgrst_source),
+  'A01 transition: legacy PostgREST UPDATE ... SET archived_at RETURNING succeeds for non-privileged user'
+);
+commit;
+
+set role authenticated;
+set request.jwt.claim.role='authenticated';
+set request.jwt.claim.sub='aaaaaaaa-0000-4000-8000-000000000001';
+select public.test_assert((select count(*)=0 from public.contracts where id='cccccccc-0000-4000-8000-000000000005'),
+ 'A01 transition: contract archived via legacy UPDATE ... RETURNING is hidden in subsequent SELECT');
+select public.test_assert((select count(*)=0 from public.contract_files where id='ffffffff-0000-4000-8000-000000000098'),
+ 'A01 transition: files of contract archived via legacy UPDATE ... RETURNING are hidden in subsequent SELECT');
+
+set request.jwt.claim.sub='aaaaaaaa-0000-4000-8000-000000000003';
+select public.test_assert((select count(*)=3 from public.contracts where id in ('cccccccc-0000-4000-8000-000000000002','cccccccc-0000-4000-8000-000000000003','cccccccc-0000-4000-8000-000000000005')),
+ 'A01: privileged user with can_manage_archived=true can SELECT archived contracts');
+select public.test_assert((select count(*)=2 from public.contract_files where id in ('ffffffff-0000-4000-8000-000000000099','ffffffff-0000-4000-8000-000000000098')),
+ 'A01: privileged user with can_manage_archived=true can SELECT archived contract files');
+reset role;
+set request.jwt.claim.role='service_role';
+select public.test_assert((select count(*)=0 from hrp_private.archive_returning_grants),
+ 'A01 transition: deferred cleanup leaves zero rows in hrp_private.archive_returning_grants after commit');
+
+-- A02: composite tenant FKs, valid date ordering, and created_by invariants
+insert into public.partners(id, organization_id, name)
+ values ('dddddddd-0000-4000-8000-000000000099','22222222-2222-2222-2222-222222222222','Other tenant partner');
+insert into public.companies(id, organization_id, name)
+ values ('eeeeeeee-0000-4000-8000-000000000099','22222222-2222-2222-2222-222222222222','Other tenant company'),
+        ('eeeeeeee-0000-4000-8000-000000000098','11111111-1111-1111-1111-111111111111','Disposable company');
+
+do $$
+begin
+  begin
+    insert into public.contracts(organization_id, contract_number, partner_id)
+      values ('11111111-1111-1111-1111-111111111111','CROSS-PARTNER','dddddddd-0000-4000-8000-000000000099');
+    raise exception 'Cross-tenant partner link unexpectedly succeeded';
+  exception when foreign_key_violation then null;
+  end;
+  begin
+    insert into public.contracts(organization_id, contract_number, company_id)
+      values ('11111111-1111-1111-1111-111111111111','CROSS-COMPANY','eeeeeeee-0000-4000-8000-000000000099');
+    raise exception 'Cross-tenant company link unexpectedly succeeded';
+  exception when foreign_key_violation then null;
+  end;
+  begin
+    insert into public.contracts(organization_id, contract_number, signed_date, expiry_date)
+      values ('11111111-1111-1111-1111-111111111111','BAD-DATE','2026-06-01','2026-01-01');
+    raise exception 'Expiry before signed_date unexpectedly succeeded';
+  exception when check_violation then null;
+  end;
+end $$;
+
+set role authenticated;
+set request.jwt.claim.role='authenticated';
+set request.jwt.claim.sub='aaaaaaaa-0000-4000-8000-000000000001';
+do $$
+begin
+  begin
+    insert into public.contracts(organization_id, contract_number, created_by)
+      values ('11111111-1111-1111-1111-111111111111','FORGED-CREATOR','aaaaaaaa-0000-4000-8000-000000000003');
+    raise exception 'Forged created_by unexpectedly succeeded';
+  exception when insufficient_privilege then null;
+  end;
+end $$;
+insert into public.contracts(id, organization_id, contract_number, company_id)
+ values ('cccccccc-0000-4000-8000-000000000004','11111111-1111-1111-1111-111111111111','COMPANY-SET-NULL','eeeeeeee-0000-4000-8000-000000000098');
+do $$
+begin
+  begin
+    update public.contracts set created_by='aaaaaaaa-0000-4000-8000-000000000003'
+      where id='cccccccc-0000-4000-8000-000000000004';
+    raise exception 'Direct created_by mutation unexpectedly succeeded';
+  exception when insufficient_privilege then null;
+  end;
+end $$;
+reset role;
+set request.jwt.claim.role='service_role';
+
+delete from public.companies where id='eeeeeeee-0000-4000-8000-000000000098';
+select public.test_assert((select company_id is null and organization_id='11111111-1111-1111-1111-111111111111'
+ from public.contracts where id='cccccccc-0000-4000-8000-000000000004'),
+ 'A02: deleting a company nulls only company_id while preserving organization_id');
+delete from public.contract_files where id in ('ffffffff-0000-4000-8000-000000000099','ffffffff-0000-4000-8000-000000000098');
+delete from public.contracts where id in (
+ 'cccccccc-0000-4000-8000-000000000002',
+ 'cccccccc-0000-4000-8000-000000000003',
+ 'cccccccc-0000-4000-8000-000000000004',
+ 'cccccccc-0000-4000-8000-000000000005'
+);
+
 select 'PASS RLS, atomic partner rollback, login budget, listing and file privileges';

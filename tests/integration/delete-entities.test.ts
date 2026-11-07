@@ -77,7 +77,12 @@ async function createPrivilegedAdmin(
   }
   await admin
     .from("profiles")
-    .update({ organization_id: organizationId, role: "admin", is_active: true })
+    .update({
+      organization_id: organizationId,
+      role: "admin",
+      is_active: true,
+      can_manage_archived: true,
+    })
     .eq("id", data.user.id);
   return signInAs(PRIVILEGED_EMAIL, password);
 }
@@ -155,13 +160,17 @@ suite("delete contract/partner (round 19)", () => {
       fileSize: body.length,
     });
     expect(completed.ok).toBe(true);
-    expect(await objectExists(objectKey)).toBe(true);
+    expect(objectKey.startsWith("uploads-staging/")).toBe(true);
+    const persistedKey = (completed.data as { object_key: string }).object_key;
+    expect(persistedKey.startsWith("contracts/")).toBe(true);
+    expect(await objectExists(persistedKey)).toBe(true);
 
     const deleted = await probe(privileged, "delete_contract", { id: contractId });
     expect(deleted.ok).toBe(true);
     await runStorageCleanup(privileged);
 
     // R2 object, file row and contract row are all gone.
+    expect(await objectExists(persistedKey)).toBe(false);
     expect(await objectExists(objectKey)).toBe(false);
     const { data: fileRows } = await admin
       .from("contract_files")

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { hasLiveBackend } from "../setup/env";
-import { ORG_A, TEST_PREFIX } from "./config";
+import { ORG_A, ORG_B, TEST_PREFIX } from "./config";
 import {
   adminClient,
   createSecondTenant,
@@ -344,6 +344,114 @@ suite("RLS isolates organizations", () => {
       expect(data?.[0]?.archived_at).not.toBeNull();
     } finally {
       await live.cleanup();
+    }
+  });
+
+  it("A01: blocks non-privileged same-org callers from reading archived contracts & files while letting them archive via RPC", async () => {
+    const seeded = await seedContractWithFile(admin, {
+      organizationId: ORG_B,
+      label: "RLS-A01",
+      withObject: false,
+    });
+    await admin
+      .from("contracts")
+      .update({ notes: "CONFIDENTIAL-ARCHIVED-NOTE" })
+      .eq("id", seeded.contractId);
+
+    try {
+      // Active contract + file are readable to same-org regular user before archiving.
+      const beforeContract = await orgB.client
+        .from("contracts")
+        .select("id, notes")
+        .eq("id", seeded.contractId);
+      expect(beforeContract.data).toHaveLength(1);
+
+      // Archive via dedicated RPC without hitting UPDATE ... RETURNING visibility trap.
+      const rpcRes = await orgB.client.rpc("archive_contract_atomic", {
+        p_contract_id: seeded.contractId,
+      });
+      expect(rpcRes.error).toBeNull();
+      expect((rpcRes.data as { status?: string } | null)?.status).toBe("archived");
+
+      // Once archived, neither contract notes nor file metadata can be read via PostgREST.
+      const afterContract = await orgB.client
+        .from("contracts")
+        .select("id, notes")
+        .eq("id", seeded.contractId);
+      expect(afterContract.data ?? []).toHaveLength(0);
+
+      const afterFiles = await orgB.client
+        .from("contract_files")
+        .select("id, object_key, original_filename")
+        .eq("contract_id", seeded.contractId);
+      expect(afterFiles.data ?? []).toHaveLength(0);
+    } finally {
+      await seeded.cleanup();
+    }
+
+    // Zero-downtime transition & app-rollback check:
+    // A non-privileged user on the pre-cutover app archives via `.update({ archived_at }).select(...)`.
+    const legacySeeded = await seedContractWithFile(admin, {
+      organizationId: ORG_B,
+      label: "RLS-A01-LEGACY",
+      withObject: false,
+    });
+    try {
+      const legacyArchive = await orgB.client
+        .from("contracts")
+        .update({ archived_at: new Date().toISOString() })
+        .eq("id", legacySeeded.contractId)
+        .eq("organization_id", ORG_B)
+        .is("archived_at", null)
+        .select("id, contract_number, archived_at")
+        .maybeSingle();
+
+      expect(legacyArchive.error).toBeNull();
+      expect(legacyArchive.data?.id).toBe(legacySeeded.contractId);
+      expect(legacyArchive.data?.archived_at).not.toBeNull();
+
+      const afterLegacySelect = await orgB.client
+        .from("contracts")
+        .select("id")
+        .eq("id", legacySeeded.contractId);
+      expect(afterLegacySelect.data ?? []).toHaveLength(0);
+
+      const afterLegacyFiles = await orgB.client
+        .from("contract_files")
+        .select("id")
+        .eq("contract_id", legacySeeded.contractId);
+      expect(afterLegacyFiles.data ?? []).toHaveLength(0);
+    } finally {
+      await legacySeeded.cleanup();
+    }
+  });
+
+  it("A02: rejects cross-tenant partner/company links and expiry_date < signed_date directly in PostgreSQL", async () => {
+    const { data: partnerA } = await admin
+      .from("partners")
+      .insert({ organization_id: ORG_A, name: `${TEST_PREFIX}RLS-A02-PARTNER` })
+      .select("id")
+      .single();
+
+    try {
+      const crossPartner = await orgB.client.from("contracts").insert({
+        organization_id: ORG_B,
+        contract_number: `${TEST_PREFIX}RLS-A02-CROSS`,
+        partner_id: partnerA!.id,
+      });
+      expect(crossPartner.error).not.toBeNull();
+
+      const badDates = await orgB.client.from("contracts").insert({
+        organization_id: ORG_B,
+        contract_number: `${TEST_PREFIX}RLS-A02-DATES`,
+        signed_date: "2026-08-10",
+        expiry_date: "2026-02-01",
+      });
+      expect(badDates.error).not.toBeNull();
+    } finally {
+      if (partnerA?.id) {
+        await admin.from("partners").delete().eq("id", partnerA.id);
+      }
     }
   });
 });

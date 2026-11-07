@@ -21,6 +21,7 @@ import {
   renewContract,
   unarchiveContract,
   updateContract,
+  type ArchiveContractResult,
   type BulkDeleteItem,
   type ContractRow,
 } from "@/lib/services/contracts";
@@ -299,6 +300,7 @@ export async function renewContractAction(
       organizationId: access.user.organizationId,
       userId: access.user.id,
       userEmail: access.user.email,
+      canManageArchived: access.user.canManageArchived,
       contractId: parsed.data.contractId,
       fileId: appendixFile.fileId,
       objectKey: appendixFile.objectKey,
@@ -333,7 +335,7 @@ export async function renewContractAction(
 /** Plan section 66 — W1-WEB-032. Soft delete: stamps `archived_at`. */
 export async function archiveContractAction(
   id: unknown,
-): Promise<ActionResult<ContractRow>> {
+): Promise<ActionResult<ArchiveContractResult>> {
   const access = await authorized();
   if (!access.ok) return access.result;
 
@@ -372,6 +374,7 @@ export async function completeUploadAction(
     organizationId: access.user.organizationId,
     userId: access.user.id,
     userEmail: access.user.email,
+    canManageArchived: access.user.canManageArchived,
     contractId: payload.contractId,
     fileId: payload.fileId,
     objectKey: payload.objectKey,
@@ -392,7 +395,7 @@ export async function deleteContractFileAction(
   const access = await authorized();
   if (!access.ok) return access.result;
 
-  if (!canDeleteEntities(access.user.email)) {
+  if (!canDeleteEntities(access.user)) {
     return fromService(err("forbidden", "Không có quyền xoá tệp hợp đồng"));
   }
 
@@ -403,7 +406,7 @@ export async function deleteContractFileAction(
   }
 
   return fromService(
-    await deleteContractFile(fileId, access.user.organizationId, access.user.email),
+    await deleteContractFile(fileId, access.user.organizationId, access.user),
   );
 }
 

@@ -3,7 +3,8 @@
  *
  * CẢNH BÁO QUAN TRỌNG VỀ AN TOÀN DỮ LIỆU:
  * --------------------------------------------------
- * Tệp tạm trích xuất AI được lưu với tiền tố: `ai-temp/{orgId}/{fileId}/{filename}`.
+ * Tệp tạm trích xuất AI được lưu với tiền tố: `ai-temp/{orgId}/{userId}/{fileId}/{filename}`.
+ * Tệp tải lên hợp đồng vùng tạm lưu với tiền tố: `uploads-staging/{orgId}/{contractId}/{fileId}/{filename}`.
  * Tệp hợp đồng chính thức được lưu với tiền tố: `contracts/{orgId}/{contractId}/{fileId}/{filename}`.
  *
  * TUYỆT ĐỐI KHÔNG để trống trường Prefix khi tạo Lifecycle Rule!
@@ -19,10 +20,14 @@
  *    - KIỂM TRA QUY TẮC HIỆN CÓ: Nếu thấy quy tắc nào có Prefix là "-" hoặc "All objects",
  *      hãy BẤM XÓA HOẶC SỬA NGAY để tránh tiếp tục bị xóa nhầm file hợp đồng!
  *    - THÊM HOẶC SỬA QUY TẮC:
- *      + Rule name: `auto-delete-ai-temp-24h`
- *      + Apply to: Chọn `Objects with a specific prefix` (BẮT BUỘC)
- *      + Prefix: Điền chính xác `ai-temp/` (BẮT BUỘC có dấu `/` ở cuối)
- *      + Action: `Delete uploaded objects` -> sau `1 day`
+ *      + Rule 1: `auto-delete-ai-temp-24h`
+ *        - Apply to: `Objects with a specific prefix` (BẮT BUỘC)
+ *        - Prefix: `ai-temp/` (BẮT BUỘC có dấu `/` ở cuối)
+ *        - Action: `Delete uploaded objects` -> sau `1 day`
+ *      + Rule 2: `auto-delete-uploads-staging-48h`
+ *        - Apply to: `Objects with a specific prefix` (BẮT BUỘC)
+ *        - Prefix: `uploads-staging/` (BẮT BUỘC có dấu `/` ở cuối; dài hơn cửa sổ xác nhận 24h20p)
+ *        - Action: `Delete uploaded objects` -> sau `2 days`
  * 5. Bấm `Save rule` để áp dụng.
  * 6. (Khuyến nghị an toàn): Bật `Object Versioning` trong tab Settings để có thể phục hồi tệp nếu lỡ bị xóa.
  */

@@ -45,8 +45,56 @@ select public.test_assert((select notes='Direct Data API change' from public.con
 drop trigger test_reject_audit on public.audit_logs;
 drop function public.test_reject_audit();
 
+do $$
+begin
+  begin
+    perform public.register_contract_upload_intent(
+      'ai-temp/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000001/ffffffff-0000-4000-8000-000000000001/forbidden-prefix.pdf',
+      'ffffffff-0000-4000-8000-000000000001','11111111-1111-1111-1111-111111111111',
+      'cccccccc-0000-4000-8000-000000000001','aaaaaaaa-0000-4000-8000-000000000001');
+    raise exception 'Unauthorized prefix unexpectedly accepted as upload intent';
+  exception when invalid_parameter_value then null;
+  end;
+
+  begin
+    perform public.register_contract_upload_intent(
+      'uploads-staging/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000001/ffffffff-0000-4000-8000-000000000001/..',
+      'ffffffff-0000-4000-8000-000000000001','11111111-1111-1111-1111-111111111111',
+      'cccccccc-0000-4000-8000-000000000001','aaaaaaaa-0000-4000-8000-000000000001');
+    raise exception 'Traversal filename unexpectedly accepted as upload intent';
+  exception when invalid_parameter_value then null;
+  end;
+end $$;
+
+-- Zero-downtime transition / app-only rollback compatibility: pre-Wave-1 server
+-- (via service_role) can still register and complete a canonical contracts/ key,
+-- while cross-prefix collision on the same file_id is blocked.
+select public.test_assert(public.register_contract_upload_intent(
+  'contracts/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000001/ffffffff-0000-4000-8000-000000000003/legacy-transition.pdf',
+  'ffffffff-0000-4000-8000-000000000003','11111111-1111-1111-1111-111111111111',
+  'cccccccc-0000-4000-8000-000000000001','aaaaaaaa-0000-4000-8000-000000000001'),
+  'legacy canonical upload intent stays compatible during version transition');
+do $$
+begin
+  begin
+    perform public.register_contract_upload_intent(
+      'uploads-staging/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000001/ffffffff-0000-4000-8000-000000000003/legacy-transition.pdf',
+      'ffffffff-0000-4000-8000-000000000003','11111111-1111-1111-1111-111111111111',
+      'cccccccc-0000-4000-8000-000000000001','aaaaaaaa-0000-4000-8000-000000000001');
+    raise exception 'Mismatched prefix on existing file_id unexpectedly succeeded';
+  exception when invalid_parameter_value then null;
+  end;
+end $$;
+select public.complete_contract_file_upload(
+  'ffffffff-0000-4000-8000-000000000003','11111111-1111-1111-1111-111111111111',
+  'cccccccc-0000-4000-8000-000000000001',
+  'contracts/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000001/ffffffff-0000-4000-8000-000000000003/legacy-transition.pdf',
+  'test','legacy-transition.pdf','application/pdf',123,null,'aaaaaaaa-0000-4000-8000-000000000001','document');
+select public.test_assert((select count(*)=0 from public.pending_contract_uploads),
+  'legacy canonical completion clears intent transactionally');
+
 select public.register_contract_upload_intent(
- 'contracts/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000001/ffffffff-0000-4000-8000-000000000001/abandoned.pdf',
+ 'uploads-staging/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000001/ffffffff-0000-4000-8000-000000000001/abandoned.pdf',
  'ffffffff-0000-4000-8000-000000000001','11111111-1111-1111-1111-111111111111',
  'cccccccc-0000-4000-8000-000000000001','aaaaaaaa-0000-4000-8000-000000000001');
 update public.pending_contract_uploads set expires_at=now()-interval '1 minute';
@@ -54,12 +102,12 @@ select public.test_assert((public.prepare_r2_cleanup(50,5)->>'queued')::int=1,
  'abandoned upload is queued without completeUpload');
 select public.test_assert((select count(*)=0 from public.pending_contract_uploads), 'expired intent reconciled');
 select public.test_assert(not public.register_contract_upload_intent(
- 'contracts/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000001/ffffffff-0000-4000-8000-000000000001/abandoned.pdf',
+ 'uploads-staging/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000001/ffffffff-0000-4000-8000-000000000001/abandoned.pdf',
  'ffffffff-0000-4000-8000-000000000001','11111111-1111-1111-1111-111111111111',
  'cccccccc-0000-4000-8000-000000000001','aaaaaaaa-0000-4000-8000-000000000001'),
  'cleanup tombstone cannot receive a refreshed PUT URL');
 select public.register_contract_upload_intent(
- 'contracts/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000001/ffffffff-0000-4000-8000-000000000002/saved.pdf',
+ 'uploads-staging/11111111-1111-1111-1111-111111111111/cccccccc-0000-4000-8000-000000000001/ffffffff-0000-4000-8000-000000000002/saved.pdf',
  'ffffffff-0000-4000-8000-000000000002','11111111-1111-1111-1111-111111111111',
  'cccccccc-0000-4000-8000-000000000001','aaaaaaaa-0000-4000-8000-000000000001');
 select public.complete_contract_file_upload(

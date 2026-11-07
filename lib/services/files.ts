@@ -8,8 +8,14 @@ import {
   type FileKind,
 } from "@schemas/file";
 
-import { buildObjectKey, isObjectKeyFor } from "@/lib/r2/keys";
-import { deleteObject, headObject } from "@/lib/r2/objects";
+import {
+  buildObjectKey,
+  buildStagingObjectKey,
+  isObjectKeyFor,
+  isStagingObjectKeyFor,
+  stagingKeyToFinalObjectKey,
+} from "@/lib/r2/keys";
+import { copyObjectConditional, deleteObject, headObject } from "@/lib/r2/objects";
 import {
   createUploadUrl,
   createViewUrl,
@@ -19,7 +25,7 @@ import { getR2Bucket } from "@/lib/r2/client";
 import { formatBytes } from "@/lib/format";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { canDeleteEntities } from "@/lib/delete-permissions";
+import { canDeleteEntities, type ArchivePrivilegeSubject } from "@/lib/delete-permissions";
 import { recordCurrentUserAudit } from "./audit-logs";
 import { enqueueR2Cleanup } from "./storage-cleanup";
 import { createUploadReservation, verifyUploadReservation } from "./upload-reservation";
@@ -84,11 +90,31 @@ export type FileAccess = {
  *
  * Any failure is a hard stop — no presigned URL may be produced.
  */
+function normalizePrivilegeOptions(subject: ArchivePrivilegeSubject): {
+  userEmail?: string | null;
+  canManageArchived?: boolean;
+} {
+  if (!subject) return {};
+  if (typeof subject === "string") {
+    return { userEmail: subject };
+  }
+  return {
+    userEmail: subject.email ?? null,
+    ...(typeof subject.canManageArchived === "boolean"
+      ? { canManageArchived: subject.canManageArchived }
+      : {}),
+  };
+}
+
 export async function getContractFileAccess(
   organizationId: string,
   contractId: string,
   fileId?: string,
-  options?: { userEmail?: string | null; forUpload?: boolean },
+  options?: {
+    userEmail?: string | null;
+    canManageArchived?: boolean;
+    forUpload?: boolean;
+  },
 ): Promise<ServiceResult<FileAccess>> {
   const supabase = await createClient();
 
@@ -104,6 +130,23 @@ export async function getContractFileAccess(
   }
 
   if (!contract) {
+    // Under A01 RLS, a non-privileged user cannot SELECT an archived contract row
+    // in their own org. Check the minimal archive-state RPC so upload/view callers
+    // still receive the right archived error without leaking contract fields.
+    const hasRpc = typeof (supabase as unknown as { rpc?: unknown }).rpc === "function";
+    if (hasRpc) {
+      const { data: archiveState } = await supabase.rpc(
+        "get_contract_archive_state",
+        { p_contract_id: contractId },
+      );
+      if (archiveState === "archived") {
+        if (options?.forUpload) {
+          return err("validation", "Hợp đồng đã được lưu trữ, không thể tải lên tệp mới");
+        }
+        return err("forbidden", "Hợp đồng đã được lưu trữ và bạn không có quyền truy cập");
+      }
+    }
+
     // `not_found` covers both "no such contract" and "another organization's
     // contract"; the caller turns it into 403, not 404, so nothing leaks.
     return err("forbidden", "Hợp đồng không thuộc tổ chức của bạn");
@@ -116,8 +159,14 @@ export async function getContractFileAccess(
     return err("validation", "Hợp đồng đã được lưu trữ, không thể tải lên tệp mới");
   }
 
-  // An archived contract is only viewable by delete-admins / Owner (matches contract detail page rule)
-  if (contractRow.archived_at !== null && !canDeleteEntities(options?.userEmail)) {
+  // An archived contract is only viewable with `can_manage_archived` (matches contract detail page rule)
+  if (
+    contractRow.archived_at !== null &&
+    !canDeleteEntities({
+      email: options?.userEmail,
+      canManageArchived: options?.canManageArchived,
+    })
+  ) {
     return err("forbidden", "Hợp đồng đã được lưu trữ và bạn không có quyền truy cập");
   }
 
@@ -165,14 +214,15 @@ export type CreateUploadRequestInput = {
   uploadReservation?: string;
   baseContractNumber?: string;
   userEmail?: string | null;
+  canManageArchived?: boolean;
 };
 
 /**
- * Reserves an object key and returns a presigned PUT (plan sections 37, 42).
+ * Reserves a staging object key under `uploads-staging/` and returns a presigned PUT.
  *
  * The file id is generated server-side, so the key layout is never influenced
- * by the client. Nothing is written to the database yet — the row is created by
- * `completeUpload()` only after the bytes really landed in R2.
+ * by the client. Browsers never receive write credentials for canonical `contracts/`
+ * keys — `completeUpload()` verifies the staged object and promotes it server-side.
  */
 export async function createUploadRequest(
   input: CreateUploadRequestInput,
@@ -194,6 +244,7 @@ export async function createUploadRequest(
 
   const access = await getContractFileAccess(organizationId, contractId, undefined, {
     userEmail: input.userEmail,
+    canManageArchived: input.canManageArchived,
     forUpload: true,
   });
   if (!access.ok) {
@@ -258,7 +309,13 @@ export async function createUploadRequest(
   }
 
   const fileId = parsed.data.fileId ?? crypto.randomUUID();
-  const objectKey = buildObjectKey({
+  const objectKey = buildStagingObjectKey({
+    organizationId,
+    contractId,
+    fileId,
+    filename,
+  });
+  const finalObjectKey = buildObjectKey({
     organizationId,
     contractId,
     fileId,
@@ -298,7 +355,7 @@ export async function createUploadRequest(
     const { data: cleanupJob, error: cleanupError } = await admin
       .from("r2_cleanup_queue")
       .select("id")
-      .eq("object_key", objectKey)
+      .in("object_key", [objectKey, finalObjectKey])
       .limit(1)
       .maybeSingle();
     if (cleanupError) return dbError("createUploadRequest.checkCleanupQueue", cleanupError);
@@ -332,6 +389,7 @@ export type CompleteUploadInput = {
   organizationId: string;
   userId: string;
   userEmail?: string | null;
+  canManageArchived?: boolean;
   contractId: string;
   fileId: string;
   objectKey: string;
@@ -344,28 +402,37 @@ export type CompleteUploadInput = {
 };
 
 /**
- * Persists the `contract_files` row (plan sections 34, 42, 77).
- *
- * Verifies with a HEAD request that the object exists before writing the row —
- * a row pointing at a missing object would break the viewer later. The HEAD
- * response also supplies the stored size and ETag used as `checksum`.
+ * Verifies the staged upload in `uploads-staging/`, promotes it conditionally to
+ * canonical `contracts/` storage, and persists the `contract_files` row.
  */
 export async function completeUpload(
   input: CompleteUploadInput,
 ): Promise<ServiceResult<ContractFileRow>> {
-  const { organizationId, userId, userEmail, contractId, fileId, objectKey } = input;
+  const { organizationId, userId, userEmail, canManageArchived, contractId, fileId, objectKey } = input;
 
   const access = await getContractFileAccess(organizationId, contractId, undefined, {
     userEmail,
+    canManageArchived,
     forUpload: true,
   });
   if (!access.ok) {
     return access;
   }
 
-  // The key must sit under this organization and contract; a client could
-  // otherwise hand back an arbitrary key it happens to know.
-  if (!isObjectKeyFor(objectKey, { organizationId, contractId, fileId })) {
+  const isStagedUpload = isStagingObjectKeyFor(objectKey, { organizationId, contractId, fileId });
+  const isLegacyDirectUpload =
+    !isStagedUpload && isObjectKeyFor(objectKey, { organizationId, contractId, fileId });
+  if (!isStagedUpload && !isLegacyDirectUpload) {
+    return err("forbidden", "objectKey không khớp với hợp đồng");
+  }
+  const finalObjectKey = isStagedUpload
+    ? stagingKeyToFinalObjectKey(objectKey, {
+        organizationId,
+        contractId,
+        fileId,
+      })
+    : objectKey;
+  if (!finalObjectKey) {
     return err("forbidden", "objectKey không khớp với hợp đồng");
   }
 
@@ -384,6 +451,43 @@ export async function completeUpload(
   } as const;
   if (!verifyUploadReservation(input.uploadReservation, reservationFields)) {
     return err("forbidden", "Phiên tải lên không hợp lệ hoặc đã hết hạn. Vui lòng tải lại tệp.");
+  }
+
+  // New createUploadRequest() calls exclusively issue uploads-staging/ keys.
+  // A canonical contracts/ key is accepted ONLY for an in-flight upload that was
+  // server-registered in pending_contract_uploads right before domain cutover.
+  if (isLegacyDirectUpload) {
+    const adminCheck = createAdminClient();
+    const { data: legacyIntent, error: legacyIntentError } = await adminCheck
+      .from("pending_contract_uploads")
+      .select("object_key")
+      .eq("file_id", fileId)
+      .eq("object_key", objectKey)
+      .eq("organization_id", organizationId)
+      .eq("contract_id", contractId)
+      .eq("created_by", userId)
+      .abortSignal(AbortSignal.timeout(5_000))
+      .maybeSingle();
+    if (legacyIntentError) {
+      return dbError("completeUpload.verifyLegacyIntent", legacyIntentError);
+    }
+    if (!legacyIntent) {
+      const { data: committedRow } = await adminCheck
+        .from("contract_files")
+        .select(CONTRACT_FILE_COLUMNS)
+        .eq("id", fileId)
+        .abortSignal(AbortSignal.timeout(5_000))
+        .maybeSingle();
+      if (
+        committedRow &&
+        committedRow.organization_id === organizationId &&
+        committedRow.contract_id === contractId &&
+        committedRow.object_key === finalObjectKey
+      ) {
+        return ok(committedRow as ContractFileRow);
+      }
+      return err("forbidden", "objectKey không khớp với hợp đồng");
+    }
   }
 
   if (input.kind === "appendix") {
@@ -463,24 +567,34 @@ export async function completeUpload(
     return dbError("completeUpload.headObject", new Error("R2 HEAD did not return a response"));
   }
   if (!head.exists) {
+    // Idempotent retry: a previous completeUpload may have already promoted the
+    // file to `contracts/` and deleted the staging object.
+    try {
+      const admin = createAdminClient();
+      const { data: committedRow } = await admin
+        .from("contract_files")
+        .select(CONTRACT_FILE_COLUMNS)
+        .eq("id", fileId)
+        .abortSignal(AbortSignal.timeout(5_000))
+        .maybeSingle();
+      if (
+        committedRow &&
+        committedRow.organization_id === organizationId &&
+        committedRow.contract_id === contractId &&
+        committedRow.object_key === finalObjectKey
+      ) {
+        return ok(committedRow as ContractFileRow);
+      }
+    } catch {
+      // Fall through to upload_incomplete if verification is unavailable.
+    }
+
     return err(
       "upload_incomplete",
       "Tệp chưa được tải lên hoàn tất. Vui lòng thử lại.",
     );
   }
 
-  /**
-   * Enforce the ceiling on what actually landed as server-side defense-in-depth.
-   *
-   * Presigned PUT now signs `Content-Length` into AWS SigV4 headers (`createUploadUrl`),
-   * which instructs R2 to reject uploads exceeding the declared fileSize.
-   * The HEAD check here remains as a server-side defense-in-depth verification:
-   * it guarantees the actual stored size is strictly within `MAX_UPLOAD_SIZE_BYTES`
-   * and records the verified byte count and ETag into the database.
-   *
-   * If the actual size somehow exceeds the maximum allowed limit, the object is
-   * immediately removed to prevent storing unauthorized payloads.
-   */
   const actualSize = head.contentLength ?? 0;
 
   if (actualSize > MAX_UPLOAD_SIZE_BYTES) {
@@ -506,19 +620,70 @@ export async function completeUpload(
     );
   }
 
+  let promotedChecksum: string | null = head.etag;
+  if (isStagedUpload) {
+    try {
+      const copyRes = await copyObjectConditional(objectKey, finalObjectKey, {
+        sourceEtag: head.etag,
+        contentType: input.mimeType,
+        timeoutMs: 10_000,
+      });
+
+      if (copyRes.status === "source_changed_or_missing") {
+        return err(
+          "upload_incomplete",
+          "Nội dung tệp tải lên đã thay đổi hoặc chưa sẵn sàng. Vui lòng tải lại tệp.",
+        );
+      }
+
+      if (copyRes.status === "destination_exists") {
+        const adminCheck = createAdminClient();
+        const { data: committedRow } = await adminCheck
+          .from("contract_files")
+          .select(CONTRACT_FILE_COLUMNS)
+          .eq("id", fileId)
+          .abortSignal(AbortSignal.timeout(5_000))
+          .maybeSingle();
+        if (
+          committedRow &&
+          committedRow.organization_id === organizationId &&
+          committedRow.contract_id === contractId &&
+          committedRow.object_key === finalObjectKey
+        ) {
+          await deleteObject(objectKey, { timeoutMs: 3_000 }).catch(() => {});
+          return ok(committedRow as ContractFileRow);
+        }
+
+        const existingFinalHead = await headObject(finalObjectKey, { timeoutMs: 5_000 });
+        if (!existingFinalHead.exists) {
+          return err("upload_incomplete", "Không xác minh được tệp đích trên kho lưu trữ. Vui lòng thử lại.");
+        }
+        promotedChecksum = existingFinalHead.etag ?? head.etag;
+      } else {
+        promotedChecksum = copyRes.etag ?? head.etag;
+      }
+    } catch (copyError) {
+      await discardRejectedUpload(
+        objectKey,
+        `R2 CopyObject thất bại: ${copyError instanceof Error ? copyError.message : String(copyError)}`,
+      );
+      return dbError("completeUpload.copyObject", copyError);
+    }
+  }
+
   const admin = createAdminClient();
   const { data: rpcData, error: persistError } = await admin
     .rpc("complete_contract_file_upload", {
       p_file_id: fileId,
       p_organization_id: organizationId,
       p_contract_id: contractId,
-      p_object_key: objectKey,
+      p_object_key: finalObjectKey,
       p_bucket: getR2Bucket(),
       p_original_filename: input.filename,
       p_mime_type: input.mimeType,
       // The measured size, not the declared one.
       p_file_size: actualSize > 0 ? actualSize : input.fileSize,
-      p_checksum: head.etag,
+      p_checksum: promotedChecksum,
       p_created_by: userId,
       p_kind: input.kind ?? "document",
     })
@@ -544,7 +709,7 @@ export async function completeUpload(
         existingRow &&
         existingRow.organization_id === organizationId &&
         existingRow.contract_id === contractId &&
-        existingRow.object_key === objectKey
+        existingRow.object_key === finalObjectKey
       ) {
         row = existingRow as ContractFileRow;
       }
@@ -553,17 +718,25 @@ export async function completeUpload(
     }
 
     if (!row) {
-      const queued = await enqueueR2Cleanup({
-        objectKey,
+      const lastError = verificationError
+        ? `DB verification failed: ${verificationError instanceof Error ? verificationError.message : String(verificationError)}`
+        : persistError.message;
+      const queuedFinal = await enqueueR2Cleanup({
+        objectKey: finalObjectKey,
         reason: "upload_db_failed",
-        lastError: verificationError
-          ? `DB verification failed: ${verificationError instanceof Error ? verificationError.message : String(verificationError)}`
-          : persistError.message,
+        lastError,
       });
-      if (!queued) {
+      if (isStagedUpload) {
+        await enqueueR2Cleanup({
+          objectKey,
+          reason: "upload_db_failed",
+          lastError,
+        });
+      }
+      if (!queuedFinal) {
         console.error(
           "[service:completeUpload] Không xác nhận được hàng DB và cũng không ghi được cleanup intent; object cần được đối soát thủ công",
-          { objectKey, persistError, verificationError },
+          { objectKey: finalObjectKey, stagingObjectKey: objectKey, persistError, verificationError },
         );
       }
       return dbError("completeUpload", persistError);
@@ -574,7 +747,20 @@ export async function completeUpload(
     return dbError("completeUpload", new Error("RPC complete_contract_file_upload returned no row"));
   }
 
-  // `completeUpload` runs with a signed-in session user as the actor.
+  if (!persistError && isStagedUpload) {
+    try {
+      await deleteObject(objectKey, { timeoutMs: 3_000 });
+    } catch (stagingDeleteError) {
+      await enqueueR2Cleanup({
+        objectKey,
+        reason: "reconciliation",
+        lastError:
+          stagingDeleteError instanceof Error
+            ? stagingDeleteError.message
+            : String(stagingDeleteError),
+      });
+    }
+  }
 
   return ok(row);
 }
@@ -583,11 +769,14 @@ export async function completeUpload(
 export async function listContractFiles(
   organizationId: string,
   contractId: string,
-  userEmail?: string | null,
+  subject?: ArchivePrivilegeSubject,
 ): Promise<ServiceResult<ContractFileRow[]>> {
-  const access = await getContractFileAccess(organizationId, contractId, undefined, {
-    userEmail,
-  });
+  const access = await getContractFileAccess(
+    organizationId,
+    contractId,
+    undefined,
+    normalizePrivilegeOptions(subject),
+  );
   if (!access.ok) {
     return access;
   }
@@ -633,7 +822,7 @@ export type FileViewUrl = {
 export async function getFileViewUrl(
   fileId: string,
   organizationId: string,
-  userEmail?: string | null,
+  subject?: ArchivePrivilegeSubject,
 ): Promise<ServiceResult<FileViewUrl>> {
   const supabase = await createClient();
 
@@ -657,7 +846,7 @@ export async function getFileViewUrl(
     organizationId,
     located.contract_id,
     fileId,
-    { userEmail },
+    normalizePrivilegeOptions(subject),
   );
   if (!access.ok) {
     return access;
@@ -716,9 +905,9 @@ export async function getFileViewUrl(
 export async function deleteContractFile(
   fileId: string,
   organizationId: string,
-  userEmail?: string | null,
+  subject?: ArchivePrivilegeSubject,
 ): Promise<ServiceResult<{ id: string; contractId: string }>> {
-  if (!canDeleteEntities(userEmail)) {
+  if (!canDeleteEntities(subject)) {
     return err("forbidden", "Không có quyền xoá tệp hợp đồng");
   }
 

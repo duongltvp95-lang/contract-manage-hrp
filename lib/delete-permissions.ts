@@ -27,9 +27,25 @@ function readDeleteAdminEmails(): string[] {
   return list.length > 0 ? list : DEFAULT_DELETE_ADMINS;
 }
 
-export function canDeleteEntities(userEmail: string | null | undefined): boolean {
-  if (!userEmail) return false;
-  return readDeleteAdminEmails().includes(userEmail.trim().toLowerCase());
+export type ArchivePrivilegeSubject =
+  | string
+  | {
+      email?: string | null;
+      canManageArchived?: boolean | null;
+    }
+  | null
+  | undefined;
+
+export function canDeleteEntities(subject: ArchivePrivilegeSubject): boolean {
+  if (!subject) return false;
+  if (typeof subject === "object") {
+    if (typeof subject.canManageArchived === "boolean") {
+      return subject.canManageArchived;
+    }
+    if (!subject.email) return false;
+    return readDeleteAdminEmails().includes(subject.email.trim().toLowerCase());
+  }
+  return readDeleteAdminEmails().includes(subject.trim().toLowerCase());
 }
 
 /** Round 24 — hard cap for one bulk-delete call. */

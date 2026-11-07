@@ -3,6 +3,7 @@ import "server-only";
 import { redirect } from "next/navigation";
 import { cache } from "react";
 
+import { canDeleteEntities } from "@/lib/delete-permissions";
 import { createClient } from "@/lib/supabase/server";
 import { hasEnvVars } from "@/lib/utils";
 
@@ -27,6 +28,7 @@ export type CurrentUser = {
   fullName: string | null;
   organizationId: string;
   role: "admin" | "user";
+  canManageArchived: boolean;
   accentColor: string | null;
   backgroundColor: string | null;
   sidebarColor: string | null;
@@ -43,6 +45,7 @@ type ProfileRow = {
   full_name: string | null;
   role: string;
   is_active: boolean;
+  can_manage_archived?: boolean | null;
   accent_color: string | null;
   background_color: string | null;
   sidebar_color: string | null;
@@ -66,7 +69,7 @@ async function resolveAccessUncached(
     let query = supabase
       .from("profiles")
       .select(
-        "id, organization_id, full_name, role, is_active, accent_color, background_color, sidebar_color",
+        "id, organization_id, full_name, role, is_active, can_manage_archived, accent_color, background_color, sidebar_color",
       )
       .eq("id", userId);
 
@@ -134,6 +137,10 @@ async function resolveAccessUncached(
       fullName: profile.full_name,
       organizationId: profile.organization_id,
       role: profile.role === "admin" ? "admin" : "user",
+      canManageArchived:
+        typeof profile.can_manage_archived === "boolean"
+          ? profile.can_manage_archived
+          : canDeleteEntities(user.email ?? null),
       accentColor: profile.accent_color ?? null,
       backgroundColor: profile.background_color ?? null,
       sidebarColor: profile.sidebar_color ?? null,

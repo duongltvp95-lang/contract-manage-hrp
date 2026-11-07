@@ -1,6 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { OBJECT_KEY_PREFIX, buildObjectKey, isObjectKeyFor, sanitizeFilename } from "@/lib/r2/keys";
+import {
+  OBJECT_KEY_PREFIX,
+  STAGING_OBJECT_KEY_PREFIX,
+  buildObjectKey,
+  buildStagingObjectKey,
+  isObjectKeyFor,
+  isStagingObjectKeyFor,
+  sanitizeFilename,
+  stagingKeyToFinalObjectKey,
+} from "@/lib/r2/keys";
 import {
   UPLOAD_URL_TTL_SECONDS,
   VIEW_URL_TTL_MAX_SECONDS,
@@ -174,6 +183,29 @@ describe("isObjectKeyFor — M8 hardening, fix 3", () => {
         organizationId: "../../etc",
       }),
     ).toBe(false);
+  });
+});
+
+describe("staging object keys (A03)", () => {
+  const parts = { organizationId: ORG, contractId: CONTRACT, fileId: FILE };
+
+  it("builds uploads-staging/{org}/{contract}/{file}/{filename} and promotes cleanly to contracts/", () => {
+    const stagingKey = buildStagingObjectKey({ ...parts, filename: "Hợp đồng mẫu.pdf" });
+    expect(stagingKey).toBe(`${STAGING_OBJECT_KEY_PREFIX}/${ORG}/${CONTRACT}/${FILE}/Hợp-đồng-mẫu.pdf`);
+    expect(isStagingObjectKeyFor(stagingKey, parts)).toBe(true);
+    expect(isObjectKeyFor(stagingKey, parts)).toBe(false);
+
+    const finalKey = stagingKeyToFinalObjectKey(stagingKey, parts);
+    expect(finalKey).toBe(`contracts/${ORG}/${CONTRACT}/${FILE}/Hợp-đồng-mẫu.pdf`);
+  });
+
+  it("refuses canonical contracts/ keys or path traversal in stagingKeyToFinalObjectKey", () => {
+    const canonical = buildObjectKey({ ...parts, filename: "doc.pdf" });
+    expect(isStagingObjectKeyFor(canonical, parts)).toBe(false);
+    expect(stagingKeyToFinalObjectKey(canonical, parts)).toBeNull();
+    expect(
+      stagingKeyToFinalObjectKey(`uploads-staging/${ORG}/${CONTRACT}/${FILE}/../doc.pdf`, parts),
+    ).toBeNull();
   });
 });
 

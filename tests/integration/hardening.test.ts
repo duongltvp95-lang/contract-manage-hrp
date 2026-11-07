@@ -1,4 +1,9 @@
-import { DeleteObjectCommand, HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+} from "@aws-sdk/client-s3";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -211,12 +216,68 @@ suite("M8 hardening — the real upload size is enforced", () => {
 
     const { data } = await admin
       .from("contract_files")
-      .select("file_size")
+      .select("file_size, object_key")
       .eq("id", signed.fileId)
       .maybeSingle();
     expect(data?.file_size).toBe(700);
+    expect(String(data?.object_key ?? "").startsWith("contracts/")).toBe(true);
 
     await admin.from("contract_files").delete().eq("id", signed.fileId);
+    if (data?.object_key) {
+      await r2Client().send(
+        new DeleteObjectCommand({ Bucket: bucketName(), Key: data.object_key }),
+      );
+    }
+  }, 120_000);
+
+  it("A03: prevents overwriting a persisted contract file by replaying its still-valid presigned PUT URL", async () => {
+    const filename = "immutable-after-complete.pdf";
+    const originalBytes = Buffer.from("%PDF-1.4\n%ORIGINAL-BYTES!\n%%EOF\n", "latin1");
+    const overwriteBytes = Buffer.from("%PDF-1.4\n%OVERWRITTEN-BAD\n%%EOF\n", "latin1");
+    expect(overwriteBytes.length).toBe(originalBytes.length);
+
+    const signed = await presign(contract.contractId, filename, originalBytes.length, orgA.cookie);
+    expect(signed.objectKey.startsWith("uploads-staging/")).toBe(true);
+
+    const firstPut = await fetch(signed.uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "application/pdf" },
+      body: originalBytes,
+    });
+    expect(firstPut.status).toBe(200);
+
+    const completed = await completeViaProbe(
+      { ...signed, contractId: contract.contractId, filename },
+      orgA.cookie,
+    );
+    expect(completed.status).toBe(200);
+
+    const { data: persisted } = await admin
+      .from("contract_files")
+      .select("object_key")
+      .eq("id", signed.fileId)
+      .single();
+    expect(persisted?.object_key.startsWith("contracts/")).toBe(true);
+
+    // Replay the still-valid presigned PUT URL with different bytes of the same length.
+    const replayPut = await fetch(signed.uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "application/pdf" },
+      body: overwriteBytes,
+    });
+    expect([200, 204]).toContain(replayPut.status);
+
+    // Canonical contracts/ object MUST still hold the original bytes.
+    const stored = await r2Client().send(
+      new GetObjectCommand({ Bucket: bucketName(), Key: persisted!.object_key }),
+    );
+    const storedText = await stored.Body!.transformToString("latin1");
+    expect(storedText).toBe(originalBytes.toString("latin1"));
+
+    await admin.from("contract_files").delete().eq("id", signed.fileId);
+    await r2Client().send(
+      new DeleteObjectCommand({ Bucket: bucketName(), Key: persisted!.object_key }),
+    );
     await r2Client().send(
       new DeleteObjectCommand({ Bucket: bucketName(), Key: signed.objectKey }),
     );

@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const mockCreateClient = vi.fn();
 const mockCreateAdminClient = vi.fn();
 const mockRpc = vi.fn();
+const mockCopyObjectConditional = vi.fn();
 const mockDeleteObject = vi.fn();
 const mockHeadObject = vi.fn();
 const mockCreateUploadUrl = vi.fn();
@@ -22,6 +23,7 @@ vi.mock("@/lib/supabase/admin", () => ({
 }));
 
 vi.mock("@/lib/r2/objects", () => ({
+  copyObjectConditional: (...args: unknown[]) => mockCopyObjectConditional(...args),
   deleteObject: (...args: unknown[]) => mockDeleteObject(...args),
   headObject: (...args: unknown[]) => mockHeadObject(...args),
 }));
@@ -90,6 +92,7 @@ describe("Contract Files Security & Access Control", () => {
   const contractId = "22222222-2222-2222-2222-222222222222";
   const fileId = "33333333-3333-3333-3333-333333333333";
   const objectKey = `contracts/${orgId}/${contractId}/${fileId}/doc.pdf`;
+  const stagingObjectKey = `uploads-staging/${orgId}/${contractId}/${fileId}/doc.pdf`;
   const nonAdminEmail = "viewer@hrpartner.vn";
   const adminEmail = OWNER_EMAIL;
   const makeReservation = (
@@ -130,6 +133,8 @@ describe("Contract Files Security & Access Control", () => {
     vi.clearAllMocks();
     mockRpc.mockReset();
     mockRpc.mockImplementation((name: string) => createRpcMock(name === "register_contract_upload_intent" ? true : null));
+    mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(null)));
+    mockCopyObjectConditional.mockResolvedValue({ status: "copied", etag: "etag-123" });
   });
 
   describe("[P1] getContractFileAccess & Archived Contracts", () => {
@@ -200,6 +205,34 @@ describe("Contract Files Security & Access Control", () => {
       if (res.ok) {
         expect(res.data.file?.id).toBe(fileId);
       }
+    });
+
+    it("trả đúng mã lỗi lưu trữ qua RPC get_contract_archive_state khi RLS ẩn hàng hợp đồng lưu trữ", async () => {
+      mockCreateClient.mockReturnValue({
+        from: () => createChainableMock(null),
+        rpc: vi.fn().mockResolvedValue({ data: "archived", error: null }),
+      });
+
+      const uploadRes = await getContractFileAccess(orgId, contractId, undefined, {
+        userEmail: nonAdminEmail,
+        canManageArchived: false,
+        forUpload: true,
+      });
+      expect(uploadRes).toEqual({
+        ok: false,
+        code: "validation",
+        message: "Hợp đồng đã được lưu trữ, không thể tải lên tệp mới",
+      });
+
+      const viewRes = await getContractFileAccess(orgId, contractId, fileId, {
+        userEmail: nonAdminEmail,
+        canManageArchived: false,
+      });
+      expect(viewRes).toEqual({
+        ok: false,
+        code: "forbidden",
+        message: "Hợp đồng đã được lưu trữ và bạn không có quyền truy cập",
+      });
     });
   });
 
@@ -337,6 +370,116 @@ describe("Contract Files Security & Access Control", () => {
   });
 
   describe("[P1] completeUpload: ghi hàng và khóa cleanup nguyên tử", () => {
+    it("từ chối objectKey trỏ thẳng vào contracts/ khi không có pending_contract_uploads tiền-chuyển-giao", async () => {
+      mockCreateClient.mockReturnValue({
+        from: () => createChainableMock({ id: contractId, archived_at: null }),
+      });
+
+      const res = await completeUpload({
+        organizationId: orgId,
+        userId: "user-1",
+        userEmail: nonAdminEmail,
+        contractId,
+        fileId,
+        objectKey,
+        uploadReservation: makeReservation(fileId, objectKey, "doc.pdf", 1024),
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+      });
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.code).toBe("forbidden");
+      expect(mockCopyObjectConditional).not.toHaveBeenCalled();
+    });
+
+    it("hoàn tất an toàn phiên upload tiền-chuyển-giao (contracts/) đã đăng ký trong pending_contract_uploads mà không xóa tệp đích", async () => {
+      mockCreateClient.mockReturnValue({
+        from: () => createChainableMock({ id: contractId, archived_at: null }),
+      });
+
+      mockCreateAdminClient.mockReturnValue(
+        createAdminMock((table: string) => {
+          if (table === "pending_contract_uploads") {
+            return createChainableMock({ object_key: objectKey });
+          }
+          return createChainableMock(null);
+        }),
+      );
+
+      mockHeadObject.mockResolvedValue({
+        exists: true,
+        contentLength: 1024,
+        etag: "etag-legacy-123",
+      });
+
+      mockRpc.mockImplementationOnce(() =>
+        createRpcMock({
+          id: fileId,
+          organization_id: orgId,
+          contract_id: contractId,
+          object_key: objectKey,
+          original_filename: "doc.pdf",
+          mime_type: "application/pdf",
+          file_size: 1024,
+          checksum: "etag-legacy-123",
+          created_by: "user-1",
+          kind: "document",
+          storage_provider: "r2",
+          bucket: "mock-bucket",
+          created_at: "2026-11-06T00:00:00Z",
+        }),
+      );
+
+      const res = await completeUpload({
+        organizationId: orgId,
+        userId: "user-1",
+        userEmail: nonAdminEmail,
+        contractId,
+        fileId,
+        objectKey,
+        uploadReservation: makeReservation(fileId, objectKey, "doc.pdf", 1024),
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(mockCopyObjectConditional).not.toHaveBeenCalled();
+      expect(mockDeleteObject).not.toHaveBeenCalled();
+      expect(mockRpc).toHaveBeenCalledWith(
+        "complete_contract_file_upload",
+        expect.objectContaining({
+          p_file_id: fileId,
+          p_object_key: objectKey,
+          p_checksum: "etag-legacy-123",
+        }),
+      );
+    });
+
+    it("createUploadRequest luôn cấp khóa uploads-staging/ thay vì contracts/", async () => {
+      mockCreateClient.mockReturnValue({
+        from: () => createChainableMock({ id: contractId, archived_at: null }),
+      });
+      mockCreateUploadUrl.mockResolvedValue("https://r2.example.com/put-staging");
+
+      const res = await createUploadRequest({
+        userId: "user-1",
+        organizationId: orgId,
+        contractId,
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+        userEmail: nonAdminEmail,
+      });
+
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.data.objectKey.startsWith(`uploads-staging/${orgId}/${contractId}/`)).toBe(true);
+        expect(res.data.objectKey.startsWith("contracts/")).toBe(false);
+      }
+    });
+
     it("khi RPC ghi hàng thất bại và hàng chưa tồn tại, enqueue cleanup dưới advisory lock", async () => {
       mockCreateClient.mockReturnValue({
         from: (table: string) => {
@@ -351,6 +494,7 @@ describe("Contract Files Security & Access Control", () => {
       mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(null)));
       mockRpc
         .mockImplementationOnce(() => createRpcMock(null, { message: "insert failed", code: "23505" }))
+        .mockImplementationOnce(() => createRpcMock(true))
         .mockImplementationOnce(() => createRpcMock(true));
 
       mockHeadObject.mockResolvedValue({
@@ -365,8 +509,8 @@ describe("Contract Files Security & Access Control", () => {
         userEmail: nonAdminEmail,
         contractId,
         fileId,
-        objectKey,
-        uploadReservation: makeReservation(fileId, objectKey, "test.pdf", 1024),
+        objectKey: stagingObjectKey,
+        uploadReservation: makeReservation(fileId, stagingObjectKey, "test.pdf", 1024),
         filename: "test.pdf",
         mimeType: "application/pdf",
         fileSize: 1024,
@@ -380,6 +524,10 @@ describe("Contract Files Security & Access Control", () => {
       }));
       expect(mockRpc).toHaveBeenNthCalledWith(2, "enqueue_r2_cleanup_if_unreferenced", expect.objectContaining({
         p_object_key: objectKey,
+        p_reason: "upload_db_failed",
+      }));
+      expect(mockRpc).toHaveBeenNthCalledWith(3, "enqueue_r2_cleanup_if_unreferenced", expect.objectContaining({
+        p_object_key: stagingObjectKey,
         p_reason: "upload_db_failed",
       }));
     });
@@ -425,8 +573,8 @@ describe("Contract Files Security & Access Control", () => {
         userEmail: nonAdminEmail,
         contractId,
         fileId,
-        objectKey,
-        uploadReservation: makeReservation(fileId, objectKey, "test.pdf", 1024),
+        objectKey: stagingObjectKey,
+        uploadReservation: makeReservation(fileId, stagingObjectKey, "test.pdf", 1024),
         filename: "test.pdf",
         mimeType: "application/pdf",
         fileSize: 1024,
@@ -458,6 +606,7 @@ describe("Contract Files Security & Access Control", () => {
       }));
       mockRpc
         .mockImplementationOnce(() => createRpcMock(null, { message: "connection error", code: "ECONNRESET" }))
+        .mockImplementationOnce(() => createRpcMock(true))
         .mockImplementationOnce(() => createRpcMock(true));
 
       mockHeadObject.mockResolvedValue({
@@ -472,8 +621,8 @@ describe("Contract Files Security & Access Control", () => {
         userEmail: nonAdminEmail,
         contractId,
         fileId,
-        objectKey,
-        uploadReservation: makeReservation(fileId, objectKey, "test.pdf", 1024),
+        objectKey: stagingObjectKey,
+        uploadReservation: makeReservation(fileId, stagingObjectKey, "test.pdf", 1024),
         filename: "test.pdf",
         mimeType: "application/pdf",
         fileSize: 1024,
@@ -485,6 +634,10 @@ describe("Contract Files Security & Access Control", () => {
       // Đưa vào queue bằng RPC khóa cùng key trước khi worker xử lý
       expect(mockRpc).toHaveBeenNthCalledWith(2, "enqueue_r2_cleanup_if_unreferenced", expect.objectContaining({
         p_object_key: objectKey,
+        p_reason: "upload_db_failed",
+      }));
+      expect(mockRpc).toHaveBeenNthCalledWith(3, "enqueue_r2_cleanup_if_unreferenced", expect.objectContaining({
+        p_object_key: stagingObjectKey,
         p_reason: "upload_db_failed",
       }));
     });
@@ -805,7 +958,7 @@ describe("Contract Files Security & Access Control", () => {
       mockCreateUploadUrl.mockResolvedValue("https://r2.example.com/presigned-put");
 
       const existingFileId = "44444444-4444-4444-4444-444444444444";
-      const retryObjectKey = `contracts/${orgId}/${contractId}/${existingFileId}/doc.pdf`;
+      const retryObjectKey = `uploads-staging/${orgId}/${contractId}/${existingFileId}/doc.pdf`;
       mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(null)));
       const res = await createUploadRequest({
         userId: "user-1",
@@ -832,7 +985,7 @@ describe("Contract Files Security & Access Control", () => {
         from: () => createChainableMock({ id: contractId, archived_at: null }, null),
       });
       const existingFileId = "55555555-5555-5555-5555-555555555555";
-      const retryObjectKey = `contracts/${orgId}/${contractId}/${existingFileId}/doc.pdf`;
+      const retryObjectKey = `uploads-staging/${orgId}/${contractId}/${existingFileId}/doc.pdf`;
       mockCreateAdminClient.mockReturnValue(createAdminMock((table) =>
         table === "contract_files"
           ? createChainableMock({ id: existingFileId })

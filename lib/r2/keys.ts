@@ -10,6 +10,7 @@ import "server-only";
  */
 
 export const OBJECT_KEY_PREFIX = "contracts";
+export const STAGING_OBJECT_KEY_PREFIX = "uploads-staging";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -87,6 +88,27 @@ export function buildObjectKey({
 }
 
 /**
+ * `uploads-staging/{organizationId}/{contractId}/{fileId}/{sanitizedFilename}`
+ *
+ * Temporary staging key for client-side presigned PUT uploads. Once verified,
+ * the server copies the object to `buildObjectKey()` so browser PUT credentials
+ * never touch canonical `contracts/` keys.
+ */
+export function buildStagingObjectKey({
+  organizationId,
+  contractId,
+  fileId,
+  filename,
+}: ObjectKeyParts): string {
+  const org = assertUuid(organizationId, "organizationId");
+  const contract = assertUuid(contractId, "contractId");
+  const file = assertUuid(fileId, "fileId");
+  const safeName = sanitizeFilename(filename);
+
+  return `${STAGING_OBJECT_KEY_PREFIX}/${org}/${contract}/${file}/${safeName}`;
+}
+
+/**
  * Is `objectKey` the key this file is *supposed* to live at?
  *
  * `buildObjectKey()` is the only thing that creates keys, so the shape is known
@@ -128,4 +150,44 @@ export function isObjectKeyFor(
     !rest.includes("\\") &&
     rest !== ".."
   );
+}
+
+export function isStagingObjectKeyFor(
+  objectKey: string,
+  { organizationId, contractId, fileId }: Omit<ObjectKeyParts, "filename">,
+): boolean {
+  let prefix: string;
+
+  try {
+    prefix = `${STAGING_OBJECT_KEY_PREFIX}/${assertUuid(organizationId, "organizationId")}/${assertUuid(contractId, "contractId")}/${assertUuid(fileId, "fileId")}/`;
+  } catch {
+    return false;
+  }
+
+  if (!objectKey.startsWith(prefix)) return false;
+
+  const rest = objectKey.slice(prefix.length);
+  return (
+    rest.length > 0 &&
+    !rest.includes("/") &&
+    !rest.includes("\\") &&
+    rest !== ".."
+  );
+}
+
+/**
+ * Promotes a verified `uploads-staging/...` key to its canonical `contracts/...`
+ * destination key using the exact validated filename tail.
+ */
+export function stagingKeyToFinalObjectKey(
+  stagingKey: string,
+  ids: Omit<ObjectKeyParts, "filename">,
+): string | null {
+  if (!isStagingObjectKeyFor(stagingKey, ids)) return null;
+  const org = assertUuid(ids.organizationId, "organizationId");
+  const contract = assertUuid(ids.contractId, "contractId");
+  const file = assertUuid(ids.fileId, "fileId");
+  const prefix = `${STAGING_OBJECT_KEY_PREFIX}/${org}/${contract}/${file}/`;
+  const rest = stagingKey.slice(prefix.length);
+  return `${OBJECT_KEY_PREFIX}/${org}/${contract}/${file}/${rest}`;
 }
