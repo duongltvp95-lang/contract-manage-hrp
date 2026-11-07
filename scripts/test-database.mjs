@@ -232,10 +232,10 @@ try {
       end if;
     end $$;`);
 
-  // Transition & app-only rollback check for A01 archiving:
+  // Application version transition & app-only rollback check for A01 archiving:
   // Verify that a non-privileged authenticated caller (`can_manage_archived = false`)
-  // executing the exact pre-cutover `UPDATE ... SET archived_at = now() ... RETURNING *`
-  // succeeds during the version transition window, yet cannot read the archived row afterward!
+  // executing the previous application version's `UPDATE ... SET archived_at = now() ... RETURNING *`
+  // succeeds during the application version transition window, yet cannot read the archived row afterward!
   releaseSql(`set request.jwt.claim.role='service_role';
     insert into public.contracts(id,organization_id,contract_number,partner_id,created_by) values
     ('abababab-0000-4000-8000-000000000020','11111111-1111-1111-1111-111111111111','LEGACY-TRANSITION-ARCHIVE',

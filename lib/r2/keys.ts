@@ -177,8 +177,8 @@ export function isStagingObjectKeyFor(
 }
 
 /**
- * Promotes a verified `uploads-staging/...` key to its canonical `contracts/...`
- * destination key using the exact validated filename tail.
+ * Maps a verified `uploads-staging/...` R2 object key to its canonical
+ * `contracts/...` destination key using the exact validated filename tail.
  */
 export function stagingKeyToFinalObjectKey(
   stagingKey: string,

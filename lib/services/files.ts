@@ -222,7 +222,7 @@ export type CreateUploadRequestInput = {
  *
  * The file id is generated server-side, so the key layout is never influenced
  * by the client. Browsers never receive write credentials for canonical `contracts/`
- * keys — `completeUpload()` verifies the staged object and promotes it server-side.
+ * keys — `completeUpload()` verifies the staged R2 object and copies it to `contracts/` server-side.
  */
 export async function createUploadRequest(
   input: CreateUploadRequestInput,
@@ -402,7 +402,7 @@ export type CompleteUploadInput = {
 };
 
 /**
- * Verifies the staged upload in `uploads-staging/`, promotes it conditionally to
+ * Verifies the staged R2 object in `uploads-staging/`, copies it conditionally to
  * canonical `contracts/` storage, and persists the `contract_files` row.
  */
 export async function completeUpload(
@@ -454,8 +454,8 @@ export async function completeUpload(
   }
 
   // New createUploadRequest() calls exclusively issue uploads-staging/ keys.
-  // A canonical contracts/ key is accepted ONLY for an in-flight upload that was
-  // server-registered in pending_contract_uploads right before domain cutover.
+  // A canonical contracts/ key is accepted ONLY for an in-flight upload registered
+  // in pending_contract_uploads by the previous application version during upgrade.
   if (isLegacyDirectUpload) {
     const adminCheck = createAdminClient();
     const { data: legacyIntent, error: legacyIntentError } = await adminCheck
@@ -567,8 +567,8 @@ export async function completeUpload(
     return dbError("completeUpload.headObject", new Error("R2 HEAD did not return a response"));
   }
   if (!head.exists) {
-    // Idempotent retry: a previous completeUpload may have already promoted the
-    // file to `contracts/` and deleted the staging object.
+    // Idempotent retry: a previous completeUpload may have already copied the
+    // R2 object to `contracts/` and deleted the staging object.
     try {
       const admin = createAdminClient();
       const { data: committedRow } = await admin
