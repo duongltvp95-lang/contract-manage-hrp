@@ -41,9 +41,14 @@ import {
  * 6. (Khuyến nghị an toàn): Bật `Object Versioning` trong tab Settings để có thể phục hồi tệp nếu lỡ bị xóa.
  */
 
+/**
+ * @param {string} envPath
+ * @returns {Record<string, string>}
+ */
 function parseEnvFile(envPath) {
   const resolved = path.resolve(process.cwd(), envPath);
   if (!fs.existsSync(resolved)) return {};
+  /** @type {Record<string, string>} */
   const map = {};
   const content = fs.readFileSync(resolved, "utf8");
   for (const rawLine of content.split(/\r?\n/)) {
@@ -64,27 +69,56 @@ function parseEnvFile(envPath) {
   return map;
 }
 
+/**
+ * @param {Array<{
+ *   ID?: string;
+ *   Status?: string;
+ *   Prefix?: string;
+ *   Filter?: { Prefix?: string; And?: { Prefix?: string } };
+ *   Expiration?: { Days?: number; Date?: Date | string; ExpiredObjectDeleteMarker?: boolean };
+ *   NoncurrentVersionExpiration?: { NoncurrentDays?: number };
+ * }>} [rules]
+ */
 export function evaluateLifecycleRules(rules = []) {
+  /** @type {string[]} */
   const issues = [];
   let hasAiTempRule = false;
   let hasUploadsStagingRule = false;
 
   for (const rule of rules) {
     if (rule?.Status !== "Enabled") continue;
-    const prefix = rule?.Filter?.Prefix ?? rule?.Prefix ?? "";
+    const ruleId = rule?.ID ?? "(unnamed)";
+    const prefix = rule?.Filter?.Prefix ?? rule?.Filter?.And?.Prefix ?? rule?.Prefix ?? "";
     const days = rule?.Expiration?.Days ?? null;
+    const deletesObjects = Boolean(rule?.Expiration || rule?.NoncurrentVersionExpiration);
 
     if (!prefix) {
       issues.push(
-        `CRITICAL: Enabled lifecycle rule "${rule?.ID ?? "(unnamed)"}" has an empty Prefix and threatens canonical contracts/ objects!`,
+        `CRITICAL: Enabled lifecycle rule "${ruleId}" has an empty Prefix and threatens canonical contracts/ objects!`,
       );
       continue;
     }
 
-    if ("contracts/".startsWith(prefix)) {
+    // Two prefixes overlap iff one startsWith the other (catches both "c" / "contracts"
+    // super-prefixes AND "contracts/example-tenant/" sub-prefixes).
+    if ("contracts/".startsWith(prefix) || prefix.startsWith("contracts/")) {
       issues.push(
-        `CRITICAL: Enabled lifecycle rule "${rule?.ID ?? "(unnamed)"}" matches prefix "${prefix}" which overlaps contracts/!`,
+        `CRITICAL: Enabled lifecycle rule "${ruleId}" matches prefix "${prefix}" which overlaps canonical contracts/ objects!`,
       );
+      continue;
+    }
+
+    const isAllowedTempPrefix =
+      prefix === "ai-temp/" ||
+      prefix.startsWith("ai-temp/") ||
+      prefix === "uploads-staging/" ||
+      prefix.startsWith("uploads-staging/");
+
+    if (deletesObjects && !isAllowedTempPrefix) {
+      issues.push(
+        `CRITICAL: Enabled expiration rule "${ruleId}" targets unexpected prefix "${prefix}" outside allowed temporary prefixes ('ai-temp/', 'uploads-staging/')!`,
+      );
+      continue;
     }
 
     if (prefix === "ai-temp/" && typeof days === "number" && days >= 1) {
@@ -123,14 +157,18 @@ function printGuide() {
   console.log("=== CLOUDFLARE R2 LIFECYCLE GUIDE & SAFETY AUDIT ===");
   console.log("1. Vào Cloudflare Dashboard -> R2 -> Bucket 'hrp-contract'");
   console.log("2. Settings -> Object lifecycle rules");
-  console.log("3. CẢNH BÁO: Kiểm tra trường Prefix PHẢI LÀ 'ai-temp/' (1 ngày) và 'uploads-staging/' (2 ngày). TUYỆT ĐỐI KHÔNG ĐỂ TRỐNG!");
-  console.log("4. Nếu Prefix đang trống hoặc All objects: SỬA HOẶC XÓA NGAY LẬP TỨC.");
-  console.log("5. Kiểm tra tự động (read-only): node scripts/setup-r2-lifecycle.mjs --check --env .env.local");
+  console.log("3. CẢNH BÁO: Kiểm tra trường Prefix PHẢI LÀ 'ai-temp/' (1 ngày) và 'uploads-staging/' (2 ngày). TUYỆT ĐỐI KHÔNG ĐỂ TRỐNG HOẶC CHẠM TỚI 'contracts/'!");
+  console.log("4. Nếu có bất kỳ rule nào mang Prefix trống, All objects, hoặc dưới 'contracts/...': SỬA HOẶC XÓA NGAY LẬP TỨC.");
+  console.log("5. Kiểm tra tự động (cần R2 API Token quyền Admin Read & Write): node scripts/setup-r2-lifecycle.mjs --check --env .env.local");
   console.log("====================================================");
 }
 
+/**
+ * @param {string} envPath
+ */
 async function runCheck(envPath) {
   const fileEnv = envPath ? parseEnvFile(envPath) : {};
+  /** @param {string} key */
   const getVar = (key) => process.env[key] || fileEnv[key] || "";
   const endpoint = getVar("R2_ENDPOINT");
   const bucket = getVar("R2_BUCKET_NAME");
@@ -161,12 +199,39 @@ async function runCheck(envPath) {
       process.exitCode = 1;
     }
   } catch (error) {
-    if (error?.name === "NoSuchLifecycleConfiguration") {
+    const errObj = /** @type {{ name?: string; Code?: string; $metadata?: { httpStatusCode?: number } }} */ (error);
+    const httpStatus = errObj?.$metadata?.httpStatusCode;
+    const code = errObj?.name ?? errObj?.Code ?? "";
+
+    if (code === "NoSuchLifecycleConfiguration") {
       const report = evaluateLifecycleRules([]);
       console.log(JSON.stringify({ bucket, ruleCount: 0, ...report }, null, 2));
       process.exitCode = 1;
       return;
     }
+
+    if (httpStatus === 403 || code === "AccessDenied" || code === "Forbidden") {
+      console.error(
+        JSON.stringify(
+          {
+            ok: false,
+            bucket,
+            error: "AccessDenied (HTTP 403) on GetBucketLifecycleConfiguration",
+            cause:
+              "Current R2 S3 credentials appear to be scoped to 'Object Read & Write', which cannot read bucket-level lifecycle rules.",
+            actionRequired: [
+              "Verify directly in Cloudflare Dashboard -> R2 -> Bucket -> Settings -> Object lifecycle rules that ONLY 'ai-temp/' (>= 1 day) and 'uploads-staging/' (>= 2 days) have enabled expiration rules, and NO rule touches 'contracts/' or All objects.",
+              "Or re-run this check using an R2 API token with 'Admin Read & Write' permission.",
+            ],
+          },
+          null,
+          2,
+        ),
+      );
+      process.exitCode = 1;
+      return;
+    }
+
     throw error;
   } finally {
     client.destroy();

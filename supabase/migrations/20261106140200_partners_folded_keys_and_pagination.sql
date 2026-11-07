@@ -240,6 +240,60 @@ revoke all on function public.get_partners_directory_page(uuid, text, text, text
 grant execute on function public.get_partners_directory_page(uuid, text, text, text, text, integer, integer)
   to authenticated, service_role;
 
+create schema if not exists hrp_private;
+revoke all on schema hrp_private from public, anon, authenticated;
+
+create table if not exists hrp_private.partner_company_locks (
+  partner_id uuid primary key,
+  generation bigint not null default 0
+);
+revoke all on table hrp_private.partner_company_locks from public, anon, authenticated;
+
+-- Serialize partner_companies link removals/reassignments per partner_id across
+-- concurrent transactions under both READ COMMITTED (blocks on advisory + row lock,
+-- then deferred trigger reads committed state) and REPEATABLE READ / SERIALIZABLE
+-- (aborts concurrent deleter with 40001 serialization failure on generation update).
+create or replace function public.serialize_partner_company_mutation()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('partner-companies:' || old.partner_id::text, 0)
+  );
+
+  insert into hrp_private.partner_company_locks (partner_id, generation)
+  values (old.partner_id, 1)
+  on conflict (partner_id) do update
+    set generation = hrp_private.partner_company_locks.generation + 1;
+
+  if tg_op = 'UPDATE' and new.partner_id is distinct from old.partner_id then
+    perform pg_catalog.pg_advisory_xact_lock(
+      pg_catalog.hashtextextended('partner-companies:' || new.partner_id::text, 0)
+    );
+    insert into hrp_private.partner_company_locks (partner_id, generation)
+    values (new.partner_id, 1)
+    on conflict (partner_id) do update
+      set generation = hrp_private.partner_company_locks.generation + 1;
+  end if;
+
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.serialize_partner_company_mutation()
+  from public, anon, authenticated, service_role;
+
+drop trigger if exists partner_companies_serialize_mutation on public.partner_companies;
+create trigger partner_companies_serialize_mutation
+  before delete or update of partner_id on public.partner_companies
+  for each row execute function public.serialize_partner_company_mutation();
+
 create or replace function public.enforce_partner_has_company_link()
 returns trigger
 language plpgsql
@@ -247,15 +301,13 @@ security definer
 set search_path = ''
 as $$
 begin
-  if auth.role() = 'authenticated' then
-    if exists (
-      select 1 from public.partners p where p.id = old.partner_id
-    ) and not exists (
-      select 1 from public.partner_companies pc where pc.partner_id = old.partner_id
-    ) then
-      raise exception 'Partner must remain linked to at least one company'
-        using errcode = '23514';
-    end if;
+  if exists (
+    select 1 from public.partners p where p.id = old.partner_id
+  ) and not exists (
+    select 1 from public.partner_companies pc where pc.partner_id = old.partner_id
+  ) then
+    raise exception 'Partner must remain linked to at least one company'
+      using errcode = '23514';
   end if;
   return null;
 end;
@@ -266,7 +318,7 @@ revoke all on function public.enforce_partner_has_company_link()
 
 drop trigger if exists partner_companies_require_at_least_one_link on public.partner_companies;
 create constraint trigger partner_companies_require_at_least_one_link
-  after delete on public.partner_companies
+  after delete or update of partner_id on public.partner_companies
   deferrable initially deferred
   for each row execute function public.enforce_partner_has_company_link();
 

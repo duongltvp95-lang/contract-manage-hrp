@@ -10,6 +10,12 @@ import {
   verifyAuditWave1RollbackSql,
   verifyAuditWave1Sql,
 } from "./lib/audit-wave1-release.mjs";
+import {
+  buildAuditWave2MigrationSql,
+  buildAuditWave2RollbackSql,
+  verifyAuditWave2RollbackSql,
+  verifyAuditWave2Sql,
+} from "./lib/audit-wave2-release.mjs";
 
 const execAsync = promisify(execFile);
 const root = new URL("../", import.meta.url);
@@ -71,6 +77,58 @@ try {
     throw new Error("Concurrent login claims exceeded the five-attempt budget");
   }
   console.log("PASS concurrent login budget (exactly 5 of 10 requests allowed)");
+
+  // Regression (A02/A10): Two concurrent transactions deleting two different company
+  // links of the same partner must serialize per partner_id and NEVER leave 0 links
+  // (tested under both READ COMMITTED and REPEATABLE READ).
+  sql(`insert into public.partners(id, organization_id, name) values
+    ('dddddddd-0000-4000-8000-000000000999','11111111-1111-1111-1111-111111111111','Concurrent junction partner')
+    on conflict (id) do nothing;
+    insert into public.partner_companies(partner_id, company_id) values
+    ('dddddddd-0000-4000-8000-000000000999','00000000-0000-4000-8000-000000000001'),
+    ('dddddddd-0000-4000-8000-000000000999','00000000-0000-4000-8000-000000000002')
+    on conflict do nothing;`);
+
+  for (const isolation of ["read committed", "repeatable read"]) {
+    sql(`insert into public.partner_companies(partner_id, company_id) values
+      ('dddddddd-0000-4000-8000-000000000999','00000000-0000-4000-8000-000000000001'),
+      ('dddddddd-0000-4000-8000-000000000999','00000000-0000-4000-8000-000000000002')
+      on conflict do nothing;`);
+
+    const txA = execAsync("docker", psqlArgs.concat(["-c",
+      `begin isolation level ${isolation};
+       select count(*) from public.partner_companies where partner_id='dddddddd-0000-4000-8000-000000000999';
+       delete from public.partner_companies
+        where partner_id='dddddddd-0000-4000-8000-000000000999'
+          and company_id='00000000-0000-4000-8000-000000000001';
+       select pg_sleep(0.8);
+       commit;`]),
+    { encoding: "utf8" });
+    await delay(100);
+    const txB = execAsync("docker", psqlArgs.concat(["-c",
+      `begin isolation level ${isolation};
+       select count(*) from public.partner_companies where partner_id='dddddddd-0000-4000-8000-000000000999';
+       delete from public.partner_companies
+        where partner_id='dddddddd-0000-4000-8000-000000000999'
+          and company_id='00000000-0000-4000-8000-000000000002';
+       commit;`]),
+    { encoding: "utf8" });
+
+    const pcResults = await Promise.allSettled([txA, txB]);
+    const committedCount = pcResults.filter((r) => r.status === "fulfilled").length;
+    const remainingLinks = Number(
+      execFileSync("docker", psqlArgs.concat([
+        "-At", "-c",
+        "select count(*) from public.partner_companies where partner_id='dddddddd-0000-4000-8000-000000000999';",
+      ]), { encoding: "utf8" }).trim(),
+    );
+    if (committedCount !== 1 || remainingLinks !== 1) {
+      throw new Error(
+        `Concurrent partner_companies deletion (${isolation}) failed: committed=${committedCount}, remainingLinks=${remainingLinks}`,
+      );
+    }
+  }
+  console.log("PASS concurrent partner_companies last-link serialization (READ COMMITTED & REPEATABLE READ)");
   console.log(`PASS ${migrations.length} migrations applied on isolated PostgreSQL 17`);
   // Exercise the exact operational RPC bundle on a fresh pre-review database.
   sql("create database hrp_release_fixture; alter database hrp_release_fixture set search_path=public,extensions;");
@@ -247,6 +305,26 @@ try {
     end $$;`);
   releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Bundle) + ");\n" + verifyAuditWave1Sql);
   console.log("PASS Wave 1 zero-downtime upload transition, app-only rollback, full DB rollback, and clean re-apply");
+
+  // Rehearse Wave 2 stacked release, dependency guard on Wave 1 rollback, ordered Wave 2 -> Wave 1 rollback, and clean re-apply.
+  const wave2Bundle = buildAuditWave2MigrationSql();
+  const wave2Rollback = buildAuditWave2RollbackSql();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave2Bundle) + ");\n" + verifyAuditWave2Sql);
+  }
+  try {
+    releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Rollback) + ");");
+    throw new Error("Wave 1 rollback unexpectedly succeeded while Wave 2 remained applied");
+  } catch (error) {
+    if (!String(error.stderr).includes("Rollback Wave 2")) throw error;
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave2Rollback) + ");\n" + verifyAuditWave2RollbackSql);
+  }
+  releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Rollback) + ");\n" + verifyAuditWave1RollbackSql);
+  releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Bundle) + ");\n" + verifyAuditWave1Sql);
+  releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave2Bundle) + ");\n" + verifyAuditWave2Sql);
+  console.log("PASS Wave 2 stacked release, ordered Wave 2 -> Wave 1 DB rollback, and clean re-apply");
 } catch (error) {
   console.error(error.message);
   if (error.cause) console.error(error.cause.stderr?.toString() || error.cause.message);

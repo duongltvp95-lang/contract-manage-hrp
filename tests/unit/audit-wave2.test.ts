@@ -66,6 +66,10 @@ import {
 import { createAiUploadSession } from "@/lib/services/upload-reservation";
 import { deleteUser, resetTombstoneProfileCache } from "@/lib/services/users";
 import { evaluateLifecycleRules } from "../../scripts/setup-r2-lifecycle.mjs";
+import {
+  buildR2CopyProbeKeys,
+  isCloudflareR2EndpointUrl,
+} from "../../scripts/verify-r2-conditional-copy.mjs";
 
 const ORG_ID = "11111111-1111-1111-1111-111111111111";
 const ADMIN_ID = "aaaaaaaa-0000-4000-8000-000000000001";
@@ -302,6 +306,78 @@ describe("Audit Wave 2 unit suite (A06, A08, A10, A12)", () => {
       ]);
       expect(safe.ok).toBe(true);
       expect(safe.issues).toEqual([]);
+
+      // Regression: sub-prefix under contracts/ (e.g. contracts/example-tenant/) MUST fail!
+      const subPrefixOverlap = evaluateLifecycleRules([
+        {
+          ID: "auto-delete-ai-temp-24h",
+          Status: "Enabled",
+          Filter: { Prefix: "ai-temp/" },
+          Expiration: { Days: 1 },
+        },
+        {
+          ID: "auto-delete-uploads-staging-48h",
+          Status: "Enabled",
+          Filter: { Prefix: "uploads-staging/" },
+          Expiration: { Days: 2 },
+        },
+        {
+          ID: "tenant-subprefix-danger",
+          Status: "Enabled",
+          Filter: { Prefix: "contracts/example-tenant/" },
+          Expiration: { Days: 30 },
+        },
+      ]);
+      expect(subPrefixOverlap.ok).toBe(false);
+      expect(
+        subPrefixOverlap.issues.some((msg: string) =>
+          msg.includes("CRITICAL") && msg.includes("contracts/example-tenant/"),
+        ),
+      ).toBe(true);
+
+      // Unexpected expiration prefix outside ai-temp/ and uploads-staging/ MUST also fail!
+      const unexpectedPrefix = evaluateLifecycleRules([
+        {
+          ID: "auto-delete-ai-temp-24h",
+          Status: "Enabled",
+          Filter: { Prefix: "ai-temp/" },
+          Expiration: { Days: 1 },
+        },
+        {
+          ID: "auto-delete-uploads-staging-48h",
+          Status: "Enabled",
+          Filter: { Prefix: "uploads-staging/" },
+          Expiration: { Days: 2 },
+        },
+        {
+          ID: "stray-expiration",
+          Status: "Enabled",
+          Filter: { And: { Prefix: "misc-prefix/" } },
+          Expiration: { Days: 7 },
+        },
+      ]);
+      expect(unexpectedPrefix.ok).toBe(false);
+      expect(
+        unexpectedPrefix.issues.some((msg: string) =>
+          msg.includes("CRITICAL") && msg.includes("misc-prefix/"),
+        ),
+      ).toBe(true);
+
+      // R2 conditional CopyObject probe helper safety: never writes under contracts/
+      const probeKeys = buildR2CopyProbeKeys("probe-123");
+      expect(probeKeys.prefix).toBe("uploads-staging/_r2-copy-probe-probe-123");
+      for (const key of [
+        probeKeys.sourceA,
+        probeKeys.sourceB,
+        probeKeys.dest,
+        probeKeys.destMismatch,
+      ]) {
+        expect(key.startsWith("uploads-staging/")).toBe(true);
+        expect(key.startsWith("contracts/")).toBe(false);
+      }
+      expect(isCloudflareR2EndpointUrl("https://abc.r2.cloudflarestorage.com")).toBe(true);
+      expect(isCloudflareR2EndpointUrl("https://abc.r2.cloudflarestorage.com", "isolated")).toBe(false);
+      expect(isCloudflareR2EndpointUrl("http://127.0.0.1:9000")).toBe(false);
     });
   });
 

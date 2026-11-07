@@ -642,16 +642,7 @@ export async function mergePartnersByTaxCode(
     }
   }
 
-  // 3. Xoá liên kết cũ + bản ghi dư.
-  const { error: deleteLinksError } = await admin
-    .from("partner_companies")
-    .delete()
-    .eq("partner_id", dropId);
-  if (deleteLinksError) {
-    throw new Error(
-      `mergePartnersByTaxCode: xoá partner_companies thất bại — ${deleteLinksError.message}`,
-    );
-  }
+  // 3. Xoá bản ghi đối tác dư (partner_companies tự xoá theo ON DELETE CASCADE trong cùng giao dịch).
   const { error: deletePartnerError } = await admin
     .from("partners")
     .delete()
