@@ -13,8 +13,7 @@
     "test:watch": "vitest --project unit",
     "test:integration": "vitest run --project integration",
     "test:e2e": "playwright test",
-    "test:all": "pnpm test && pnpm test:integration && pnpm test:e2e",
-    "test:db": "node scripts/test-database.mjs"
+    "test:all": "pnpm test && pnpm test:integration && pnpm test:e2e"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

@@ -47,22 +47,18 @@ unique identity, view listing, ngày Việt Nam, upload intent và AAL2 của g�
   Theo yêu cầu người dùng ngày 02/11, bỏ nghiệm thu ghi bằng bucket Cloudflare riêng.
   Production R2 chỉ kiểm tra đọc bucket và HEAD ba tệp tham chiếu: đạt; không tạo fixture ở production.
 
-## Tái chạy backend cô lập
+## Tái chạy kiểm thử với backend riêng
+
+Cấu hình Supabase test từ xa và bucket R2 test riêng theo `.env.test.example`,
+cài `tests/setup/test-environment.sql` trên project test rồi lưu khóa vào `.env.test.local`.
 
 ```sh
-mkdir -p test-results
-pnpm dlx supabase@2.122.0 start --workdir tests/setup --exclude realtime,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor > test-results/backend-start.log 2>&1
-pnpm dlx supabase@2.122.0 status --workdir tests/setup --output json > test-results/backend-status.json
-node scripts/setup-isolated-tests.mjs --status-json test-results/backend-status.json --database-container supabase_db_hrp-isolated-tests --local-storage --bucket hrp-review-test-ci
 pnpm test:integration
 pnpm test:e2e
 ```
 
-Chạy integration và E2E tuần tự. Script tạo admin/TOTP dùng một lần và `.env.test.local`
-được Git bỏ qua, không in credential. Không chia sẻ raw status/start log.
-Nếu admin đã tồn tại, dùng cấu hình hiện có; `--reset-fixture` chỉ dành cho stack loopback
-cô lập được script kiểm tra. Để thử Cloudflare riêng, dùng `--storage-env <private-file>`
-thay `--local-storage`; bucket `hrp-review-test-*` phải có marker riêng và CORS loopback.
+Chạy integration và E2E tuần tự. `.env.test.local` được Git bỏ qua. Dùng tài khoản
+test riêng và cấu hình CORS cho địa chỉ loopback của máy chạy kiểm thử.
 
 ## Gói triển khai production
 
@@ -102,5 +98,5 @@ URL cấp sau bản sửa; object mồ côi lịch sử cần đối soát riên
 
 Admin production tự quét QR và xác minh OTP theo [SETUP-2FA.md](SETUP-2FA.md).
 Không đăng ký factor hộ người dùng hoặc đưa TOTP vận hành vào source/CI.
-Backend test Docker riêng đã được dừng sau nghiệm thu. Credential test và mã cron kiểm tra
+Backend test riêng đã được dừng sau nghiệm thu. Credential test và mã cron kiểm tra
 không được commit; biên bản JSON và ảnh xác nhận nằm trong `test-results/` bị Git bỏ qua.

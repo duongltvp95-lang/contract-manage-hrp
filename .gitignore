@@ -59,8 +59,6 @@ next-env.d.ts
 
 # supabase cli cache
 supabase/.temp
-tests/setup/supabase/.temp/
-tests/setup/supabase/.branches/
 
 # Cursor local code index (per-machine, not for committing)
 /.codegraph/
