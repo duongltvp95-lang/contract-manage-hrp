@@ -11,7 +11,8 @@ const root = fileURLToPath(new URL("./", import.meta.url));
  *                 on every push.
  *   integration — talks to the real Supabase project and to a real Next server.
  *                 Requires dedicated .env.test.local settings and a backend
- *                 marker. Missing credentials fail setup; forks skip this CI job.
+ *                 marker. Missing credentials fail setup. Run manually against
+ *                 a dedicated hosted backend.
  *
  * The aliases mirror `tsconfig.json` so a test imports exactly what the app
  * imports (`@/lib/...`, `@schemas/...`).

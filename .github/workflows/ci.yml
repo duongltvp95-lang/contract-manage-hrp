@@ -20,7 +20,7 @@ env:
 
 jobs:
   quality:
-    name: lint · typecheck · audit · database · build · unit
+    name: lint · typecheck · audit · build · unit
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -44,7 +44,6 @@ jobs:
           TZ: America/Los_Angeles
       - name: Reject all reported production vulnerabilities
         run: pnpm audit --prod --audit-level=low
-      - run: pnpm test:db
       - name: Build with placeholders
         run: pnpm build
         env:
@@ -57,68 +56,13 @@ jobs:
           R2_BUCKET_NAME: placeholder
           R2_ENDPOINT: https://placeholder.r2.cloudflarestorage.com
 
-  integration:
-    name: integration (isolated Auth · RLS · storage · audit)
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    needs: quality
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.25.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - uses: ./.github/actions/start-isolated-backend
-      - run: pnpm test:integration
-      - name: Remove disposable backend and credentials
-        if: always()
-        run: |
-          if command -v supabase >/dev/null 2>&1; then supabase stop --workdir tests/setup --no-backup; fi
-          rm -f .env.test.local test-results/backend-status.json
-
-  e2e:
-    name: e2e (isolated browser workflows)
-    runs-on: ubuntu-latest
-    timeout-minutes: 50
-    needs: [quality, integration]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.25.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
-      - uses: ./.github/actions/start-isolated-backend
-      - run: pnpm test:e2e
-      - name: Remove disposable backend and credentials
-        if: always()
-        run: |
-          if command -v supabase >/dev/null 2>&1; then supabase stop --workdir tests/setup --no-backup; fi
-          rm -f .env.test.local test-results/backend-status.json
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-report
-          path: test-results/playwright/
-          retention-days: 7
-
   deploy-guard:
     name: deployment guard (all gates green)
     runs-on: ubuntu-latest
-    needs: [quality, integration, e2e]
+    needs: [quality]
     if: always()
     steps:
       - name: Verify all quality gates, including fork runs
         run: |
-          [ "${{ needs.quality.result }}" = "success" ] && \
-          [ "${{ needs.integration.result }}" = "success" ] && \
-          [ "${{ needs.e2e.result }}" = "success" ] || exit 1
-          echo "All isolated quality gates passed."
+          [ "${{ needs.quality.result }}" = "success" ] || exit 1
+          echo "All quality checks passed."

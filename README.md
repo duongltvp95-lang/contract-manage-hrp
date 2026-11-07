@@ -169,29 +169,26 @@ dependency and no vendored copy in `public/`.
 
 ## Tests
 
-Four suites cover different boundaries:
+Three suites cover different boundaries:
 
 - `pnpm test`: unit tests without backend credentials.
-- `pnpm test:db`: all migrations and SQL/RLS, audit, upload intent and concurrency
-  regressions on an automatically created PostgreSQL 17 Docker container. Docker
-  must be running. The container has no network or exposed port and is removed afterward.
 - `pnpm test:integration`: real route handlers, Supabase and R2 on a **dedicated test backend**.
 - `pnpm test:e2e`: browser workflows on the same dedicated backend with a separate local server.
 
 For the live suites, copy `.env.test.example` to `.env.test.local`, fill dedicated
-`TEST_*` credentials, enroll the test admin in TOTP and install
+`TEST_*` credentials for a dedicated hosted Supabase project and R2 bucket, and install
 `tests/setup/test-environment.sql` **on the test project only**. Test credentials
-and TOTP secrets must never be committed. Missing settings or a missing backend
+must never be committed. Missing settings or a missing backend
 marker fail setup before test writes. The suites never load app `.env.local`
 credentials and never reuse an existing server. Configure the test bucket CORS
 for the chosen loopback origin, including GET, HEAD and PUT.
 
-`pnpm test:all` runs unit, integration and E2E sequentially; `test:db` is a separate
-Docker gate. CI also runs lint, typecheck, build and a High/Critical dependency
-audit gate. Internal CI runs require the corresponding `TEST_*` GitHub secrets;
-only fork PRs explicitly skip live jobs. E2E waits for integration to finish.
+`pnpm test:all` runs unit, integration and E2E sequentially when the dedicated test
+backend is configured. CI runs unit tests, lint, typecheck, build and a production
+dependency audit. Integration and E2E are optional manual commands with their own
+test credentials.
 See [release notes and migration preflight](docs/FIXES-2026-10-31.md) and
-[MFA setup](docs/SETUP-2FA.md).
+[test environment settings](.env.test.example).
 
 Two things the suites had to work around, both documented where they live:
 
