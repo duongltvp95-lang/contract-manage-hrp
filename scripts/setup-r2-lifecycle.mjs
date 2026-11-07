@@ -176,14 +176,15 @@ function printGuide() {
   console.log("2. Settings -> Object lifecycle rules");
   console.log("3. CẢNH BÁO: Kiểm tra trường Prefix PHẢI LÀ 'ai-temp/' (1 ngày) và 'uploads-staging/' (2 ngày). TUYỆT ĐỐI KHÔNG ĐỂ TRỐNG HOẶC CHẠM TỚI 'contracts/'!");
   console.log("4. Nếu có bất kỳ rule nào mang Prefix trống, All objects, hoặc dưới 'contracts/...': SỬA HOẶC XÓA NGAY LẬP TỨC.");
-  console.log("5. Kiểm tra tự động (cần R2 API Token quyền Admin Read & Write): node scripts/setup-r2-lifecycle.mjs --check --env .env.local");
+  console.log("5. Kiểm tra tự động (chỉ cần R2 API Token quyền tối thiểu 'Admin Read only'): node scripts/setup-r2-lifecycle.mjs --check --env .env.local");
   console.log("====================================================");
 }
 
 /**
  * @param {string} envPath
+ * @param {string | null} [outputPath]
  */
-async function runCheck(envPath) {
+async function runCheck(envPath, outputPath = null) {
   const fileEnv = envPath ? parseEnvFile(envPath) : {};
   /** @param {string} key */
   const getVar = (key) => process.env[key] || fileEnv[key] || "";
@@ -211,7 +212,17 @@ async function runCheck(envPath) {
     );
     const rules = res.Rules ?? [];
     const report = evaluateLifecycleRules(rules);
-    console.log(JSON.stringify({ bucket, ruleCount: rules.length, ...report }, null, 2));
+    const payload = {
+      checkedAt: new Date().toISOString(),
+      bucket,
+      ruleCount: rules.length,
+      ...report,
+    };
+    if (outputPath) {
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, JSON.stringify(payload, null, 2) + "\n", "utf8");
+    }
+    console.log(JSON.stringify(payload, null, 2));
     if (!report.ok) {
       process.exitCode = 1;
     }
@@ -238,7 +249,7 @@ async function runCheck(envPath) {
               "Current R2 S3 credentials appear to be scoped to 'Object Read & Write', which cannot read bucket-level lifecycle rules.",
             actionRequired: [
               "Verify directly in Cloudflare Dashboard -> R2 -> Bucket -> Settings -> Object lifecycle rules that ONLY 'ai-temp/' (>= 1 day) and 'uploads-staging/' (>= 2 days) have enabled expiration rules, and NO rule touches 'contracts/' or All objects.",
-              "Or re-run this check using an R2 API token with 'Admin Read & Write' permission.",
+              "Or re-run this check using a least-privilege R2 API token with 'Admin Read only' permission (keep runtime/probe tokens scoped to 'Object Read & Write' on the single bucket).",
             ],
           },
           null,
@@ -259,10 +270,12 @@ async function main(argv = process.argv.slice(2)) {
   const checkMode = argv.includes("--check");
   const envIdx = argv.indexOf("--env");
   const envPath = envIdx >= 0 ? argv[envIdx + 1] : ".env.local";
+  const outIdx = argv.indexOf("--output");
+  const outputPath = outIdx >= 0 ? argv[outIdx + 1] : null;
 
   printGuide();
   if (checkMode) {
-    await runCheck(envPath);
+    await runCheck(envPath, outputPath);
   }
 }
 

@@ -68,6 +68,7 @@ import { deleteUser, resetTombstoneProfileCache } from "@/lib/services/users";
 import { evaluateLifecycleRules } from "../../scripts/setup-r2-lifecycle.mjs";
 import {
   buildR2CopyProbeKeys,
+  cleanupAndVerifyR2ProbeKeys,
   isCloudflareR2EndpointUrl,
 } from "../../scripts/verify-r2-conditional-copy.mjs";
 
@@ -447,6 +448,78 @@ describe("Audit Wave 2 unit suite (A06, A08, A10, A12)", () => {
       expect(isCloudflareR2EndpointUrl("https://abc.r2.cloudflarestorage.com")).toBe(true);
       expect(isCloudflareR2EndpointUrl("https://abc.r2.cloudflarestorage.com", "isolated")).toBe(false);
       expect(isCloudflareR2EndpointUrl("http://127.0.0.1:9000")).toBe(false);
+    });
+
+    it("verifies R2 probe keys are actually absent after cleanup instead of swallowing delete errors", async () => {
+      const probeKeys = buildR2CopyProbeKeys("cleanup-check");
+      const keys = [probeKeys.sourceA, probeKeys.sourceB];
+
+      // 1. Delete error must surface as ok=false
+      const deleteFailed = await cleanupAndVerifyR2ProbeKeys({
+        bucket: "hrp-contract",
+        prefix: probeKeys.prefix,
+        keys,
+        send: async (cmd: unknown) => {
+          const name = (cmd as { constructor?: { name?: string } })?.constructor?.name;
+          if (name === "DeleteObjectCommand") {
+            throw new Error("AccessDenied on DeleteObject");
+          }
+          if (name === "HeadObjectCommand") {
+            throw Object.assign(new Error("NotFound"), {
+              name: "NotFound",
+              $metadata: { httpStatusCode: 404 },
+            });
+          }
+          return { Contents: [] };
+        },
+      });
+      expect(deleteFailed.ok).toBe(false);
+      expect(deleteFailed.deleteErrors.length).toBe(2);
+
+      // 2. Leftover object detected via ListObjectsV2 or HEAD must surface as ok=false
+      const leftover = await cleanupAndVerifyR2ProbeKeys({
+        bucket: "hrp-contract",
+        prefix: probeKeys.prefix,
+        keys,
+        send: async (cmd: unknown) => {
+          const name = (cmd as { constructor?: { name?: string } })?.constructor?.name;
+          if (name === "DeleteObjectCommand") return {};
+          if (name === "HeadObjectCommand") {
+            throw Object.assign(new Error("NotFound"), {
+              name: "NotFound",
+              $metadata: { httpStatusCode: 404 },
+            });
+          }
+          return { Contents: [{ Key: probeKeys.sourceA }] };
+        },
+      });
+      expect(leftover.ok).toBe(false);
+      expect(leftover.remainingKeys).toEqual([probeKeys.sourceA]);
+
+      // 3. Verified clean state: all deletes succeed, all HEADs return 404, LIST returns 0 objects
+      const clean = await cleanupAndVerifyR2ProbeKeys({
+        bucket: "hrp-contract",
+        prefix: probeKeys.prefix,
+        keys,
+        send: async (cmd: unknown) => {
+          const name = (cmd as { constructor?: { name?: string } })?.constructor?.name;
+          if (name === "DeleteObjectCommand") return {};
+          if (name === "HeadObjectCommand") {
+            throw Object.assign(new Error("NotFound"), {
+              name: "NotFound",
+              $metadata: { httpStatusCode: 404 },
+            });
+          }
+          return { Contents: [] };
+        },
+      });
+      expect(clean).toEqual({
+        ok: true,
+        deletedAttempted: 2,
+        remainingKeys: [],
+        deleteErrors: [],
+        verifyErrors: [],
+      });
     });
   });
 
