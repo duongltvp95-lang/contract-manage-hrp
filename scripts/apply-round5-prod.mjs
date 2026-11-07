@@ -28,17 +28,21 @@
 // NOT touch the round 3 working tree. The DDL is hard-coded below; the only
 // network calls are to the Supabase REST API over HTTPS.
 
-import { createClient } from "@supabase/supabase-js";
-import dotenv from "dotenv";
-
-dotenv.config({ path: ".env.local" });
+import { guardLegacyDdlScript } from "./lib/legacy-script-guard.mjs";
 
 // ---------------------------------------------------------------------------
 // 1. environment gates
 // ---------------------------------------------------------------------------
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const {
+  supabaseUrl: SUPABASE_URL,
+  supabaseServiceRoleKey: SUPABASE_SERVICE_ROLE_KEY,
+  service,
+} = guardLegacyDdlScript({
+  scriptName: "scripts/apply-round5-prod.mjs",
+  statementCount: 4,
+  supersededBy: "supabase/migrations/20261006130000_profiles_is_tombstone.sql",
+});
 
 function describeEnv(name, value) {
   if (!value) return `${name}=EMPTY`;
@@ -49,21 +53,6 @@ console.log("[env] " + describeEnv("NEXT_PUBLIC_SUPABASE_URL", SUPABASE_URL));
 console.log(
   "[env] " + describeEnv("SUPABASE_SERVICE_ROLE_KEY", SUPABASE_SERVICE_ROLE_KEY),
 );
-
-if (!SUPABASE_URL) {
-  console.error("[fatal] NEXT_PUBLIC_SUPABASE_URL is not set in .env.local");
-  process.exit(2);
-}
-if (!SUPABASE_SERVICE_ROLE_KEY) {
-  console.error(
-    "[fatal] SUPABASE_SERVICE_ROLE_KEY is not set in .env.local — refusing to run",
-  );
-  process.exit(2);
-}
-
-const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
 
 // ---------------------------------------------------------------------------
 // 2. hard-coded DDL — see supabase/migrations/20261006130000_profiles_is_tombstone.sql

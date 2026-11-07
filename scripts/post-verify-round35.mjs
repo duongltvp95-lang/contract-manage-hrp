@@ -1,21 +1,10 @@
 // scripts/post-verify-round35.mjs
 // Verify post-merge state of DONGYANG partners.
 
-import { createClient } from "@supabase/supabase-js";
-import dotenv from "dotenv";
+import { guardLegacyVerifyScript } from "./lib/legacy-script-guard.mjs";
 
-dotenv.config({ path: ".env.local" });
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("[fatal] env missing");
-  process.exit(2);
-}
-
-const svc = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
+const { service: svc } = guardLegacyVerifyScript({
+  scriptName: "scripts/post-verify-round35.mjs",
 });
 
 const KEEP_ID = "4a9940d0-3438-4f66-adc2-c31dc694fc3f";
