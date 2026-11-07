@@ -7,21 +7,12 @@
 //
 //   node scripts/apply-round21-region-abbr.mjs
 
-import { createClient } from "@supabase/supabase-js";
-import dotenv from "dotenv";
+import { guardLegacyDdlScript } from "./lib/legacy-script-guard.mjs";
 
-dotenv.config({ path: ".env.local" });
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("[fatal] Supabase env is missing in .env.local — refusing to run");
-  process.exit(2);
-}
-
-const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
+const { service } = guardLegacyDdlScript({
+  scriptName: "scripts/apply-round21-region-abbr.mjs",
+  statementCount: 8,
+  supersededBy: "supabase/migrations/20261106140200_partners_folded_keys_and_pagination.sql",
 });
 
 const STATEMENTS = [

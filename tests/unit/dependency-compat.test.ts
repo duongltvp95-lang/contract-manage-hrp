@@ -6,7 +6,10 @@ import { afterAll, describe, expect, it } from "vitest";
 import ExcelJS from "exceljs";
 
 const require = createRequire(import.meta.url);
-const legacyGlob = require(createRequire(require.resolve("archiver-utils")).resolve("glob"));
+const exceljsRequire = createRequire(require.resolve("exceljs/package.json"));
+const archiverRequire = createRequire(exceljsRequire.resolve("archiver/package.json"));
+const archiverUtilsRequire = createRequire(archiverRequire.resolve("archiver-utils/package.json"));
+const legacyGlob = archiverUtilsRequire("glob");
 const match = require("../../packages/minimatch-compat/index.cjs");
 const fixtureDir = mkdtempSync(join(tmpdir(), "hrp-dependency-compat-"));
 afterAll(() => rmSync(fixtureDir, { recursive: true, force: true }));

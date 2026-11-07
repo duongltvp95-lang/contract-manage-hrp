@@ -1,17 +1,11 @@
-import { createClient } from "@supabase/supabase-js";
-import dotenv from "dotenv";
+import { guardLegacyVerifyScript } from "./lib/legacy-script-guard.mjs";
 
-dotenv.config({ path: ".env.local" });
+const { env, service: supabase } = guardLegacyVerifyScript({
+  scriptName: "scripts/check-partner-count.ts",
+  allowLocalhost: true,
+});
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-const orgId = process.env.E2E_ORG_ID;
-if (!url || !key) {
-  console.error("Thiếu env: NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY");
-  process.exit(2);
-}
-const supabase = createClient(url, key, { auth: { persistSession: false } });
+const orgId = env.E2E_ORG_ID ?? process.env.E2E_ORG_ID;
 
 async function main() {
   let query = supabase

@@ -3,21 +3,12 @@
 // Round 39 ops script — widen audit_logs.action to include export_partners
 // via public.exec_sql.
 
-import { createClient } from "@supabase/supabase-js";
-import dotenv from "dotenv";
+import { guardLegacyDdlScript } from "./lib/legacy-script-guard.mjs";
 
-dotenv.config({ path: ".env.local" });
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("[fatal] Supabase env is missing in .env.local — refusing to run");
-  process.exit(2);
-}
-
-const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
+const { service } = guardLegacyDdlScript({
+  scriptName: "scripts/apply-round39-export-partners-audit.mjs",
+  statementCount: 2,
+  supersededBy: "supabase/migrations/20261031094000_mfa_audit_action.sql",
 });
 
 const STATEMENTS = [
