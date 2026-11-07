@@ -13,9 +13,16 @@ on:
         required: false
         default: ""
         type: string
+      expected_commit_sha:
+        description: "Optional 40-char Git SHA that promote_deployment_url must match (leave empty to auto-verify deployment SHA against main + CI guard)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
+  actions: read
+  checks: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -165,26 +172,39 @@ jobs:
       - name: Build and stage exact verified commit SHA on Vercel (--skip-domain)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npx --yes vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
           npx --yes vercel@latest build --prod --token="$VERCEL_TOKEN"
-          DEPLOY_URL="$(npx --yes vercel@latest deploy --prebuilt --prod --skip-domain --token="$VERCEL_TOKEN" | tail -n 1 | tr -d '[:space:]')"
+          DEPLOY_URL="$(npx --yes vercel@latest deploy --prebuilt --prod --skip-domain \
+            --meta releaseCommitSha="$GITHUB_SHA" \
+            --meta githubCommitSha="$GITHUB_SHA" \
+            --meta githubCommitRef="main" \
+            --meta ciWorkflowRunId="$GITHUB_RUN_ID" \
+            --token="$VERCEL_TOKEN" | tail -n 1 | tr -d '[:space:]')"
           if [[ ! "$DEPLOY_URL" =~ ^https://[a-z0-9-]+\.vercel\.app$ ]]; then
             echo "::error::Unexpected Vercel deployment URL output: $DEPLOY_URL"
             exit 1
           fi
           echo "Staged production deployment (domain NOT switched): $DEPLOY_URL"
+          DEPLOY_URL="$DEPLOY_URL" EXPECTED_COMMIT_SHA="$GITHUB_SHA" \
+            node scripts/verify-vercel-promote-target.mjs \
+              --mode record-candidate \
+              --output test-results/release/production-candidate-manifest.json
           {
-            echo "### Staged Production Candidate (\`--skip-domain\`)"
-            echo "- **Commit SHA:** \`$GITHUB_SHA\`"
-            echo "- **Candidate URL:** $DEPLOY_URL"
-            echo "- **Live Domain Switched:** No (\`--skip-domain\`)"
             echo ""
             echo "#### Release Cutover Checklist"
             echo "1. Apply & verify DB migrations for \`$GITHUB_SHA\`."
             echo "2. Smoke-test auth, contracts, archive RLS, and staged R2 upload on \`$DEPLOY_URL\`."
-            echo "3. Trigger **Actions → CI → Run workflow** on \`main\` with \`promote_deployment_url=$DEPLOY_URL\` to switch the live domain."
+            echo "3. Trigger **Actions → CI → Run workflow** on \`main\` with \`promote_deployment_url=$DEPLOY_URL\` and \`expected_commit_sha=$GITHUB_SHA\` to switch the live domain."
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Archive staged candidate & allowed rollback ledger
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-candidate-${{ github.sha }}
+          path: test-results/release/production-candidate-manifest.json
+          if-no-files-found: error
+          retention-days: 90
 
   promote-production:
     name: promote verified deployment to production domain
@@ -199,23 +219,31 @@ jobs:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
-      - name: Verify Vercel credentials and promote deployment URL
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify deployment project, production target, SHA & CI evidence before promote
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROMOTE_URL: ${{ inputs.promote_deployment_url }}
+          EXPECTED_COMMIT_SHA: ${{ inputs.expected_commit_sha }}
         run: |
           if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
             echo "::error::Missing VERCEL_TOKEN, VERCEL_ORG_ID, or VERCEL_PROJECT_ID in GitHub repository secrets."
             exit 1
           fi
-          if [[ ! "$PROMOTE_URL" =~ ^https://[a-z0-9-]+\.vercel\.app$ ]]; then
-            echo "::error::promote_deployment_url must match ^https://[a-z0-9-]+\\.vercel\\.app$"
-            exit 1
-          fi
+          node scripts/verify-vercel-promote-target.mjs \
+            --mode verify-promote \
+            --output test-results/release/production-promotion-ledger.json
           npx --yes vercel@latest promote "$PROMOTE_URL" --yes --token="$VERCEL_TOKEN"
-          {
-            echo "### Production Domain Promotion Complete"
-            echo "- **Workflow SHA:** \`$GITHUB_SHA\`"
-            echo "- **Promoted Deployment:** $PROMOTE_URL"
-            echo "- **Rollback:** Re-run **CI → Run workflow** on \`main\` with \`promote_deployment_url\` set to the previous verified \`https://*.vercel.app\` URL."
-          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Archive verified promotion & allowed rollback ledger
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-release-ledger-${{ github.run_id }}
+          path: test-results/release/production-promotion-ledger.json
+          if-no-files-found: error
+          retention-days: 90

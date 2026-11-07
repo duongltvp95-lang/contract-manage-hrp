@@ -174,6 +174,53 @@ try {
       end if;
     end $$;`);
 
+  // Transition & app-only rollback check for A01 archiving:
+  // Verify that a non-privileged authenticated caller (`can_manage_archived = false`)
+  // executing the exact pre-cutover `UPDATE ... SET archived_at = now() ... RETURNING *`
+  // succeeds during the version transition window, yet cannot read the archived row afterward!
+  releaseSql(`set request.jwt.claim.role='service_role';
+    insert into public.contracts(id,organization_id,contract_number,partner_id,created_by) values
+    ('abababab-0000-4000-8000-000000000020','11111111-1111-1111-1111-111111111111','LEGACY-TRANSITION-ARCHIVE',
+     'abababab-0000-4000-8000-000000000002','abababab-0000-4000-8000-000000000001');
+    begin;
+    set local role authenticated;
+    set local request.jwt.claim.role='authenticated';
+    set local request.jwt.claim.sub='abababab-0000-4000-8000-000000000001';
+    do $$
+    declare
+      v_row public.contracts%rowtype;
+    begin
+      update public.contracts
+         set archived_at = now()
+       where id = 'abababab-0000-4000-8000-000000000020'
+         and organization_id = '11111111-1111-1111-1111-111111111111'
+         and archived_at is null
+      returning * into v_row;
+
+      if v_row.id is distinct from 'abababab-0000-4000-8000-000000000020'::uuid
+         or v_row.archived_at is null then
+        raise exception 'old app UPDATE ... RETURNING archive failed after Wave 1 migration';
+      end if;
+    end $$;
+    commit;
+    begin;
+    set local role authenticated;
+    set local request.jwt.claim.role='authenticated';
+    set local request.jwt.claim.sub='abababab-0000-4000-8000-000000000001';
+    do $$
+    begin
+      if (select count(*) from public.contracts where id = 'abababab-0000-4000-8000-000000000020') <> 0 then
+        raise exception 'archived contract remained readable to non-privileged user after commit';
+      end if;
+    end $$;
+    commit;
+    do $$
+    begin
+      if (select count(*) from hrp_private.archive_returning_grants) <> 0 then
+        raise exception 'hrp_private.archive_returning_grants did not clean up on commit';
+      end if;
+    end $$;`);
+
   // Full DB rollback check + idempotent rerun + post-rollback upload + clean Wave 1 re-apply
   for (let attempt = 0; attempt < 2; attempt++) {
     releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Rollback) + ");\n" + verifyAuditWave1RollbackSql);

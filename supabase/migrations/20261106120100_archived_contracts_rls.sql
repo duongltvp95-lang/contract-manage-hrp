@@ -125,6 +125,117 @@ revoke all on function public.can_read_archived_contracts()
 grant execute on function public.can_read_archived_contracts()
   to authenticated, service_role;
 
+-- Zero-downtime transition & app-rollback compatibility:
+-- The pre-cutover app archives active contracts via PostgREST `UPDATE ... SET archived_at = ... RETURNING *`.
+-- PostgreSQL evaluates SELECT RLS (`WCO_RLS_UPDATE_CHECK`) against the NEW tuple (`archived_at IS NOT NULL`)
+-- right after BEFORE UPDATE triggers run. We record an unspoofable xid8-scoped grant in `hrp_private`
+-- strictly when an active contract (`old.archived_at IS NULL`) transitions to archived in the current write tx,
+-- and purge the row via a DEFERRABLE INITIALLY DEFERRED constraint trigger at COMMIT.
+create schema if not exists hrp_private;
+revoke all on schema hrp_private from public, anon, authenticated;
+
+create table if not exists hrp_private.archive_returning_grants (
+  xid xid8 not null,
+  contract_id uuid not null,
+  actor_id uuid not null,
+  organization_id uuid not null,
+  primary key (xid, contract_id)
+);
+
+revoke all on table hrp_private.archive_returning_grants
+  from public, anon, authenticated;
+
+create or replace function public.grant_archive_returning_visibility()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if old.archived_at is null
+     and new.archived_at is not null
+     and auth.role() = 'authenticated'
+     and auth.uid() is not null
+     and new.organization_id = public.current_organization_id() then
+    insert into hrp_private.archive_returning_grants (
+      xid,
+      contract_id,
+      actor_id,
+      organization_id
+    )
+    values (
+      pg_catalog.pg_current_xact_id(),
+      new.id,
+      auth.uid(),
+      new.organization_id
+    )
+    on conflict (xid, contract_id) do nothing;
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.grant_archive_returning_visibility()
+  from public, anon, authenticated, service_role;
+
+create or replace function public.clear_archive_returning_visibility()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  delete from hrp_private.archive_returning_grants
+   where xid = pg_catalog.pg_current_xact_id()
+     and contract_id = new.id;
+
+  return null;
+end;
+$$;
+
+revoke all on function public.clear_archive_returning_visibility()
+  from public, anon, authenticated, service_role;
+
+drop trigger if exists zzz_contracts_grant_archive_returning_visibility on public.contracts;
+create trigger zzz_contracts_grant_archive_returning_visibility
+  before update of archived_at on public.contracts
+  for each row execute function public.grant_archive_returning_visibility();
+
+drop trigger if exists contracts_clear_archive_returning_grant on public.contracts;
+create constraint trigger contracts_clear_archive_returning_grant
+  after update of archived_at on public.contracts
+  deferrable initially deferred
+  for each row execute function public.clear_archive_returning_visibility();
+
+create or replace function public.is_archiving_contract_in_current_tx(
+  p_contract_id uuid,
+  p_organization_id uuid
+)
+returns boolean
+language sql
+volatile
+security definer
+set search_path = ''
+as $$
+  select case
+    when pg_catalog.pg_current_xact_id_if_assigned() is null then false
+    else exists (
+      select 1
+        from hrp_private.archive_returning_grants g
+       where g.xid = pg_catalog.pg_current_xact_id_if_assigned()
+         and g.contract_id = p_contract_id
+         and g.organization_id = p_organization_id
+         and g.actor_id = auth.uid()
+    )
+  end;
+$$;
+
+revoke all on function public.is_archiving_contract_in_current_tx(uuid, uuid)
+  from public, anon, authenticated, service_role;
+grant execute on function public.is_archiving_contract_in_current_tx(uuid, uuid)
+  to authenticated, service_role;
+
 drop policy if exists contracts_select_own_org on public.contracts;
 create policy contracts_select_own_org
   on public.contracts
@@ -132,7 +243,11 @@ create policy contracts_select_own_org
   to authenticated
   using (
     organization_id = public.current_organization_id()
-    and (archived_at is null or public.can_read_archived_contracts())
+    and (
+      archived_at is null
+      or public.can_read_archived_contracts()
+      or public.is_archiving_contract_in_current_tx(id, organization_id)
+    )
   );
 
 drop policy if exists contracts_insert_own_org on public.contracts;

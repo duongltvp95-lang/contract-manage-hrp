@@ -134,7 +134,11 @@ export const verifyAuditWave1Sql = `do $verify$
 begin
   if has_column_privilege('authenticated','public.profiles','can_manage_archived','update')
      or has_function_privilege('anon','public.archive_contract_atomic(uuid)','execute')
-     or has_function_privilege('anon','public.get_contract_archive_state(uuid)','execute') then
+     or has_function_privilege('anon','public.get_contract_archive_state(uuid)','execute')
+     or has_function_privilege('anon','public.is_archiving_contract_in_current_tx(uuid,uuid)','execute')
+     or to_regclass('hrp_private.archive_returning_grants') is null
+     or has_table_privilege('authenticated','hrp_private.archive_returning_grants','select')
+     or has_table_privilege('authenticated','hrp_private.archive_returning_grants','insert') then
     raise exception 'Wave 1 privilege hardening incomplete';
   end if;
 
@@ -391,6 +395,13 @@ begin
     to authenticated
     using (organization_id = public.current_organization_id());
 
+  drop trigger if exists zzz_contracts_grant_archive_returning_visibility on public.contracts;
+  drop trigger if exists contracts_clear_archive_returning_grant on public.contracts;
+  drop function if exists public.is_archiving_contract_in_current_tx(uuid, uuid);
+  drop function if exists public.grant_archive_returning_visibility();
+  drop function if exists public.clear_archive_returning_visibility();
+  drop table if exists hrp_private.archive_returning_grants;
+
   drop function if exists public.can_read_archived_contracts();
 
   create or replace function public.handle_new_user()
@@ -495,8 +506,9 @@ begin
      where attrelid = 'public.profiles'::regclass
        and attname = 'can_manage_archived'
        and not attisdropped
-  ) then
-    raise exception 'Wave 1 rollback incomplete: can_manage_archived still exists';
+  ) or to_regclass('hrp_private.archive_returning_grants') is not null
+    or to_regprocedure('public.is_archiving_contract_in_current_tx(uuid,uuid)') is not null then
+    raise exception 'Wave 1 rollback incomplete: can_manage_archived or archive returning helper still exists';
   end if;
 
   if exists (

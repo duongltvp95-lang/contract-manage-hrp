@@ -388,6 +388,42 @@ suite("RLS isolates organizations", () => {
     } finally {
       await seeded.cleanup();
     }
+
+    // Zero-downtime transition & app-rollback check:
+    // A non-privileged user on the pre-cutover app archives via `.update({ archived_at }).select(...)`.
+    const legacySeeded = await seedContractWithFile(admin, {
+      organizationId: ORG_B,
+      label: "RLS-A01-LEGACY",
+      withObject: false,
+    });
+    try {
+      const legacyArchive = await orgB.client
+        .from("contracts")
+        .update({ archived_at: new Date().toISOString() })
+        .eq("id", legacySeeded.contractId)
+        .eq("organization_id", ORG_B)
+        .is("archived_at", null)
+        .select("id, contract_number, archived_at")
+        .maybeSingle();
+
+      expect(legacyArchive.error).toBeNull();
+      expect(legacyArchive.data?.id).toBe(legacySeeded.contractId);
+      expect(legacyArchive.data?.archived_at).not.toBeNull();
+
+      const afterLegacySelect = await orgB.client
+        .from("contracts")
+        .select("id")
+        .eq("id", legacySeeded.contractId);
+      expect(afterLegacySelect.data ?? []).toHaveLength(0);
+
+      const afterLegacyFiles = await orgB.client
+        .from("contract_files")
+        .select("id")
+        .eq("contract_id", legacySeeded.contractId);
+      expect(afterLegacyFiles.data ?? []).toHaveLength(0);
+    } finally {
+      await legacySeeded.cleanup();
+    }
   });
 
   it("A02: rejects cross-tenant partner/company links and expiry_date < signed_date directly in PostgreSQL", async () => {
