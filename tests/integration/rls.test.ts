@@ -389,8 +389,8 @@ suite("RLS isolates organizations", () => {
       await seeded.cleanup();
     }
 
-    // Zero-downtime transition & app-rollback check:
-    // A non-privileged user on the pre-cutover app archives via `.update({ archived_at }).select(...)`.
+    // Zero-downtime application version transition & app-rollback check:
+    // A non-privileged user on the previous application version archives via `.update({ archived_at }).select(...)`.
     const legacySeeded = await seedContractWithFile(admin, {
       organizationId: ORG_B,
       label: "RLS-A01-LEGACY",

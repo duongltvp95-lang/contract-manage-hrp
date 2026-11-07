@@ -125,8 +125,8 @@ revoke all on function public.can_read_archived_contracts()
 grant execute on function public.can_read_archived_contracts()
   to authenticated, service_role;
 
--- Zero-downtime transition & app-rollback compatibility:
--- The pre-cutover app archives active contracts via PostgREST `UPDATE ... SET archived_at = ... RETURNING *`.
+-- Zero-downtime application version transition & app-rollback compatibility:
+-- The previous application version archives active contracts via PostgREST `UPDATE ... SET archived_at = ... RETURNING *`.
 -- PostgreSQL evaluates SELECT RLS (`WCO_RLS_UPDATE_CHECK`) against the NEW tuple (`archived_at IS NOT NULL`)
 -- right after BEFORE UPDATE triggers run. We record an unspoofable xid8-scoped grant in `hrp_private`
 -- strictly when an active contract (`old.archived_at IS NULL`) transitions to archived in the current write tx,

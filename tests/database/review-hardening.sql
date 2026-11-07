@@ -133,7 +133,7 @@ select public.test_assert((select count(*)=0 from public.contracts where id='ccc
  'A01: newly archived contract becomes hidden from non-privileged SELECT');
 
 -- Note: review-hardening.sql runs via `psql -f` / stdin where statements run in autocommit unless wrapped in `begin; ... commit;`.
--- Simulate the exact pre-cutover PostgREST `UPDATE ... SET archived_at = ... RETURNING *` transaction!
+-- Simulate the previous application version's PostgREST `UPDATE ... SET archived_at = ... RETURNING *` transaction!
 begin;
 set local role authenticated;
 set local request.jwt.claim.role='authenticated';
