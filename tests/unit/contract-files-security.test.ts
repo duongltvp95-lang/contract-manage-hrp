@@ -133,6 +133,7 @@ describe("Contract Files Security & Access Control", () => {
     vi.clearAllMocks();
     mockRpc.mockReset();
     mockRpc.mockImplementation((name: string) => createRpcMock(name === "register_contract_upload_intent" ? true : null));
+    mockCreateAdminClient.mockReturnValue(createAdminMock(() => createChainableMock(null)));
     mockCopyObjectConditional.mockResolvedValue({ status: "copied", etag: "etag-123" });
   });
 
@@ -369,7 +370,7 @@ describe("Contract Files Security & Access Control", () => {
   });
 
   describe("[P1] completeUpload: ghi hàng và khóa cleanup nguyên tử", () => {
-    it("từ chối objectKey trỏ thẳng vào contracts/ thay vì uploads-staging/", async () => {
+    it("từ chối objectKey trỏ thẳng vào contracts/ khi không có pending_contract_uploads tiền-chuyển-giao", async () => {
       mockCreateClient.mockReturnValue({
         from: () => createChainableMock({ id: contractId, archived_at: null }),
       });
@@ -390,6 +391,93 @@ describe("Contract Files Security & Access Control", () => {
       expect(res.ok).toBe(false);
       if (!res.ok) expect(res.code).toBe("forbidden");
       expect(mockCopyObjectConditional).not.toHaveBeenCalled();
+    });
+
+    it("hoàn tất an toàn phiên upload tiền-chuyển-giao (contracts/) đã đăng ký trong pending_contract_uploads mà không xóa tệp đích", async () => {
+      mockCreateClient.mockReturnValue({
+        from: () => createChainableMock({ id: contractId, archived_at: null }),
+      });
+
+      mockCreateAdminClient.mockReturnValue(
+        createAdminMock((table: string) => {
+          if (table === "pending_contract_uploads") {
+            return createChainableMock({ object_key: objectKey });
+          }
+          return createChainableMock(null);
+        }),
+      );
+
+      mockHeadObject.mockResolvedValue({
+        exists: true,
+        contentLength: 1024,
+        etag: "etag-legacy-123",
+      });
+
+      mockRpc.mockImplementationOnce(() =>
+        createRpcMock({
+          id: fileId,
+          organization_id: orgId,
+          contract_id: contractId,
+          object_key: objectKey,
+          original_filename: "doc.pdf",
+          mime_type: "application/pdf",
+          file_size: 1024,
+          checksum: "etag-legacy-123",
+          created_by: "user-1",
+          kind: "document",
+          storage_provider: "r2",
+          bucket: "mock-bucket",
+          created_at: "2026-11-06T00:00:00Z",
+        }),
+      );
+
+      const res = await completeUpload({
+        organizationId: orgId,
+        userId: "user-1",
+        userEmail: nonAdminEmail,
+        contractId,
+        fileId,
+        objectKey,
+        uploadReservation: makeReservation(fileId, objectKey, "doc.pdf", 1024),
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+      });
+
+      expect(res.ok).toBe(true);
+      expect(mockCopyObjectConditional).not.toHaveBeenCalled();
+      expect(mockDeleteObject).not.toHaveBeenCalled();
+      expect(mockRpc).toHaveBeenCalledWith(
+        "complete_contract_file_upload",
+        expect.objectContaining({
+          p_file_id: fileId,
+          p_object_key: objectKey,
+          p_checksum: "etag-legacy-123",
+        }),
+      );
+    });
+
+    it("createUploadRequest luôn cấp khóa uploads-staging/ thay vì contracts/", async () => {
+      mockCreateClient.mockReturnValue({
+        from: () => createChainableMock({ id: contractId, archived_at: null }),
+      });
+      mockCreateUploadUrl.mockResolvedValue("https://r2.example.com/put-staging");
+
+      const res = await createUploadRequest({
+        userId: "user-1",
+        organizationId: orgId,
+        contractId,
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+        userEmail: nonAdminEmail,
+      });
+
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.data.objectKey.startsWith(`uploads-staging/${orgId}/${contractId}/`)).toBe(true);
+        expect(res.data.objectKey.startsWith("contracts/")).toBe(false);
+      }
     });
 
     it("khi RPC ghi hàng thất bại và hàng chưa tồn tại, enqueue cleanup dưới advisory lock", async () => {

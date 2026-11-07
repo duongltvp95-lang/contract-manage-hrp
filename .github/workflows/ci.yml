@@ -7,6 +7,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      promote_deployment_url:
+        description: "Verified Vercel --skip-domain deployment URL (https://*.vercel.app) to promote to the live production domain after DB migration & smoke checks"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -124,10 +130,12 @@ jobs:
           echo "All isolated quality gates passed."
 
   deploy-production:
-    name: deploy production (exact verified commit)
+    name: stage production release (--skip-domain)
     runs-on: ubuntu-latest
     needs: [deploy-guard]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.promote_deployment_url == '')
     concurrency:
       group: production-deploy
       cancel-in-progress: false
@@ -154,10 +162,60 @@ jobs:
             echo "::error::Missing VERCEL_TOKEN, VERCEL_ORG_ID, or VERCEL_PROJECT_ID in GitHub repository secrets."
             exit 1
           fi
-      - name: Build and deploy exact verified commit SHA to Vercel Production
+      - name: Build and stage exact verified commit SHA on Vercel (--skip-domain)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
           npx --yes vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
           npx --yes vercel@latest build --prod --token="$VERCEL_TOKEN"
-          npx --yes vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+          DEPLOY_URL="$(npx --yes vercel@latest deploy --prebuilt --prod --skip-domain --token="$VERCEL_TOKEN" | tail -n 1 | tr -d '[:space:]')"
+          if [[ ! "$DEPLOY_URL" =~ ^https://[a-z0-9-]+\.vercel\.app$ ]]; then
+            echo "::error::Unexpected Vercel deployment URL output: $DEPLOY_URL"
+            exit 1
+          fi
+          echo "Staged production deployment (domain NOT switched): $DEPLOY_URL"
+          {
+            echo "### Staged Production Candidate (\`--skip-domain\`)"
+            echo "- **Commit SHA:** \`$GITHUB_SHA\`"
+            echo "- **Candidate URL:** $DEPLOY_URL"
+            echo "- **Live Domain Switched:** No (\`--skip-domain\`)"
+            echo ""
+            echo "#### Release Cutover Checklist"
+            echo "1. Apply & verify DB migrations for \`$GITHUB_SHA\`."
+            echo "2. Smoke-test auth, contracts, archive RLS, and staged R2 upload on \`$DEPLOY_URL\`."
+            echo "3. Trigger **Actions → CI → Run workflow** on \`main\` with \`promote_deployment_url=$DEPLOY_URL\` to switch the live domain."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote-production:
+    name: promote verified deployment to production domain
+    runs-on: ubuntu-latest
+    needs: [deploy-guard]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.promote_deployment_url != ''
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    timeout-minutes: 15
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Verify Vercel credentials and promote deployment URL
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          PROMOTE_URL: ${{ inputs.promote_deployment_url }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "::error::Missing VERCEL_TOKEN, VERCEL_ORG_ID, or VERCEL_PROJECT_ID in GitHub repository secrets."
+            exit 1
+          fi
+          if [[ ! "$PROMOTE_URL" =~ ^https://[a-z0-9-]+\.vercel\.app$ ]]; then
+            echo "::error::promote_deployment_url must match ^https://[a-z0-9-]+\\.vercel\\.app$"
+            exit 1
+          fi
+          npx --yes vercel@latest promote "$PROMOTE_URL" --yes --token="$VERCEL_TOKEN"
+          {
+            echo "### Production Domain Promotion Complete"
+            echo "- **Workflow SHA:** \`$GITHUB_SHA\`"
+            echo "- **Promoted Deployment:** $PROMOTE_URL"
+            echo "- **Rollback:** Re-run **CI → Run workflow** on \`main\` with \`promote_deployment_url\` set to the previous verified \`https://*.vercel.app\` URL."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -4,6 +4,12 @@ import { readFileSync, readdirSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { buildReviewMigrationSql,verifyReviewSql } from "./lib/review-release.mjs";
+import {
+  buildAuditWave1MigrationSql,
+  buildAuditWave1RollbackSql,
+  verifyAuditWave1RollbackSql,
+  verifyAuditWave1Sql,
+} from "./lib/audit-wave1-release.mjs";
 
 const execAsync = promisify(execFile);
 const root = new URL("../", import.meta.url);
@@ -101,6 +107,99 @@ try {
     releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(bundle) + ");\n" + verifyReviewSql);
   }
   console.log("PASS exact release RPC bundle: atomic rollback, idempotent rerun, private receipts and unchanged data fingerprints");
+
+  // Rehearse Wave 1 zero-downtime version transition, app-only rollback, full DB rollback, and clean re-apply.
+  releaseSql(`set request.jwt.claim.role='service_role';
+    do $$
+    begin
+      if not public.register_contract_upload_intent(
+        'contracts/11111111-1111-1111-1111-111111111111/abababab-0000-4000-8000-000000000003/abababab-0000-4000-8000-000000000010/pre-wave1.pdf',
+        'abababab-0000-4000-8000-000000000010','11111111-1111-1111-1111-111111111111',
+        'abababab-0000-4000-8000-000000000003','abababab-0000-4000-8000-000000000001'
+      ) then
+        raise exception 'pre-Wave-1 canonical upload intent failed';
+      end if;
+      perform public.complete_contract_file_upload(
+        'abababab-0000-4000-8000-000000000010','11111111-1111-1111-1111-111111111111',
+        'abababab-0000-4000-8000-000000000003',
+        'contracts/11111111-1111-1111-1111-111111111111/abababab-0000-4000-8000-000000000003/abababab-0000-4000-8000-000000000010/pre-wave1.pdf',
+        'isolated','pre-wave1.pdf','application/pdf',256,'etag-pre-wave1','abababab-0000-4000-8000-000000000001','document'
+      );
+    end $$;`);
+
+  const wave1Bundle = buildAuditWave1MigrationSql();
+  const wave1Rollback = buildAuditWave1RollbackSql();
+  try {
+    releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Bundle + "\nselect 1/0;") + ");");
+    throw new Error("Injected Wave 1 release failure unexpectedly committed");
+  } catch (error) {
+    if (!String(error.stderr).includes("division by zero")) throw error;
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Bundle) + ");\n" + verifyAuditWave1Sql);
+  }
+
+  // Transition & app-only rollback check: old app (contracts/) AND new app (uploads-staging/) both work!
+  releaseSql(`set request.jwt.claim.role='service_role';
+    do $$
+    begin
+      if not public.register_contract_upload_intent(
+        'contracts/11111111-1111-1111-1111-111111111111/abababab-0000-4000-8000-000000000003/abababab-0000-4000-8000-000000000011/old-app-during-transition.pdf',
+        'abababab-0000-4000-8000-000000000011','11111111-1111-1111-1111-111111111111',
+        'abababab-0000-4000-8000-000000000003','abababab-0000-4000-8000-000000000001'
+      ) then
+        raise exception 'old app canonical upload intent failed after Wave 1 migration';
+      end if;
+      perform public.complete_contract_file_upload(
+        'abababab-0000-4000-8000-000000000011','11111111-1111-1111-1111-111111111111',
+        'abababab-0000-4000-8000-000000000003',
+        'contracts/11111111-1111-1111-1111-111111111111/abababab-0000-4000-8000-000000000003/abababab-0000-4000-8000-000000000011/old-app-during-transition.pdf',
+        'isolated','old-app-during-transition.pdf','application/pdf',512,'etag-old-app','abababab-0000-4000-8000-000000000001','document'
+      );
+      if not public.register_contract_upload_intent(
+        'uploads-staging/11111111-1111-1111-1111-111111111111/abababab-0000-4000-8000-000000000003/abababab-0000-4000-8000-000000000012/new-app-staged.pdf',
+        'abababab-0000-4000-8000-000000000012','11111111-1111-1111-1111-111111111111',
+        'abababab-0000-4000-8000-000000000003','abababab-0000-4000-8000-000000000001'
+      ) then
+        raise exception 'new app staged upload intent failed';
+      end if;
+      perform public.complete_contract_file_upload(
+        'abababab-0000-4000-8000-000000000012','11111111-1111-1111-1111-111111111111',
+        'abababab-0000-4000-8000-000000000003',
+        'contracts/11111111-1111-1111-1111-111111111111/abababab-0000-4000-8000-000000000003/abababab-0000-4000-8000-000000000012/new-app-staged.pdf',
+        'isolated','new-app-staged.pdf','application/pdf',768,'etag-new-app','abababab-0000-4000-8000-000000000001','document'
+      );
+      if (select count(*) from public.pending_contract_uploads) <> 0 then
+        raise exception 'upload intents did not clear cleanly';
+      end if;
+    end $$;`);
+
+  // Full DB rollback check + idempotent rerun + post-rollback upload + clean Wave 1 re-apply
+  for (let attempt = 0; attempt < 2; attempt++) {
+    releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Rollback) + ");\n" + verifyAuditWave1RollbackSql);
+  }
+  releaseSql(`set request.jwt.claim.role='service_role';
+    do $$
+    begin
+      if (select count(*) from public.contract_files where contract_id='abababab-0000-4000-8000-000000000003') <> 4 then
+        raise exception 'Wave 1 DB rollback did not preserve committed contract_files';
+      end if;
+      if not public.register_contract_upload_intent(
+        'contracts/11111111-1111-1111-1111-111111111111/abababab-0000-4000-8000-000000000003/abababab-0000-4000-8000-000000000013/post-rollback.pdf',
+        'abababab-0000-4000-8000-000000000013','11111111-1111-1111-1111-111111111111',
+        'abababab-0000-4000-8000-000000000003','abababab-0000-4000-8000-000000000001'
+      ) then
+        raise exception 'canonical upload intent failed after full Wave 1 DB rollback';
+      end if;
+      perform public.complete_contract_file_upload(
+        'abababab-0000-4000-8000-000000000013','11111111-1111-1111-1111-111111111111',
+        'abababab-0000-4000-8000-000000000003',
+        'contracts/11111111-1111-1111-1111-111111111111/abababab-0000-4000-8000-000000000003/abababab-0000-4000-8000-000000000013/post-rollback.pdf',
+        'isolated','post-rollback.pdf','application/pdf',512,'etag-post-rb','abababab-0000-4000-8000-000000000001','document'
+      );
+    end $$;`);
+  releaseSql("set request.jwt.claim.role='service_role'; select public.exec_sql(" + literal(wave1Bundle) + ");\n" + verifyAuditWave1Sql);
+  console.log("PASS Wave 1 zero-downtime upload transition, app-only rollback, full DB rollback, and clean re-apply");
 } catch (error) {
   console.error(error.message);
   if (error.cause) console.error(error.cause.stderr?.toString() || error.cause.message);

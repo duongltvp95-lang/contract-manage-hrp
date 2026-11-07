@@ -1,5 +1,8 @@
 -- A03: Stage browser PUT uploads under uploads-staging/ so clients never hold
 -- write credentials to canonical contracts/ object keys.
+-- During zero-downtime release transitions or app-only rollbacks, the server-only
+-- register_contract_upload_intent RPC also accepts canonical contracts/ keys from
+-- the pre-Wave-1 server while the new server exclusively issues uploads-staging/ keys.
 
 create or replace function public.register_contract_upload_intent(
   p_object_key text,
@@ -16,7 +19,10 @@ as $$
 declare
   v_intent public.pending_contract_uploads%rowtype;
   v_staging_prefix text;
+  v_canonical_prefix text;
+  v_matched_prefix text;
   v_remainder text;
+  v_staging_key text;
   v_final_key text;
 begin
   if p_object_key is null
@@ -32,14 +38,24 @@ begin
     || lower(p_contract_id::text) || '/'
     || lower(p_file_id::text) || '/';
 
-  if left(p_object_key, char_length(v_staging_prefix)) <> v_staging_prefix then
+  v_canonical_prefix := 'contracts/'
+    || lower(p_organization_id::text) || '/'
+    || lower(p_contract_id::text) || '/'
+    || lower(p_file_id::text) || '/';
+
+  if left(p_object_key, char_length(v_staging_prefix)) = v_staging_prefix then
+    v_matched_prefix := v_staging_prefix;
+  elsif left(p_object_key, char_length(v_canonical_prefix)) = v_canonical_prefix then
+    v_matched_prefix := v_canonical_prefix;
+  else
     raise exception 'Invalid pending upload' using errcode = '22023';
   end if;
 
-  v_remainder := substring(p_object_key from char_length(v_staging_prefix) + 1);
+  v_remainder := substring(p_object_key from char_length(v_matched_prefix) + 1);
   if v_remainder = ''
      or pg_catalog.strpos(v_remainder, '/') > 0
      or pg_catalog.strpos(v_remainder, pg_catalog.chr(92)) > 0
+     or v_remainder = '.'
      or v_remainder = '..' then
     raise exception 'Invalid pending upload' using errcode = '22023';
   end if;
@@ -61,28 +77,25 @@ begin
     raise exception 'Invalid pending upload' using errcode = '22023';
   end if;
 
-  v_final_key := 'contracts/'
-    || lower(p_organization_id::text) || '/'
-    || lower(p_contract_id::text) || '/'
-    || lower(p_file_id::text) || '/'
-    || v_remainder;
+  v_staging_key := v_staging_prefix || v_remainder;
+  v_final_key := v_canonical_prefix || v_remainder;
 
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended('r2-object:' || v_final_key, 0)
   );
   perform pg_catalog.pg_advisory_xact_lock(
-    pg_catalog.hashtextextended('r2-object:' || p_object_key, 0)
+    pg_catalog.hashtextextended('r2-object:' || v_staging_key, 0)
   );
 
   if exists (
     select 1
       from public.contract_files f
      where f.id = p_file_id
-        or f.object_key in (p_object_key, v_final_key)
+        or f.object_key in (v_staging_key, v_final_key)
   ) or exists (
     select 1
       from public.r2_cleanup_queue q
-     where q.object_key in (p_object_key, v_final_key)
+     where q.object_key in (v_staging_key, v_final_key)
   ) then
     return false;
   end if;

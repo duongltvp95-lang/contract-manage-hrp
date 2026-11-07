@@ -419,16 +419,19 @@ export async function completeUpload(
     return access;
   }
 
-  // Only staged object keys matching this organization/contract/file are accepted;
-  // browsers never hold PUT URLs for canonical `contracts/` keys.
-  if (!isStagingObjectKeyFor(objectKey, { organizationId, contractId, fileId })) {
+  const isStagedUpload = isStagingObjectKeyFor(objectKey, { organizationId, contractId, fileId });
+  const isLegacyDirectUpload =
+    !isStagedUpload && isObjectKeyFor(objectKey, { organizationId, contractId, fileId });
+  if (!isStagedUpload && !isLegacyDirectUpload) {
     return err("forbidden", "objectKey không khớp với hợp đồng");
   }
-  const finalObjectKey = stagingKeyToFinalObjectKey(objectKey, {
-    organizationId,
-    contractId,
-    fileId,
-  });
+  const finalObjectKey = isStagedUpload
+    ? stagingKeyToFinalObjectKey(objectKey, {
+        organizationId,
+        contractId,
+        fileId,
+      })
+    : objectKey;
   if (!finalObjectKey) {
     return err("forbidden", "objectKey không khớp với hợp đồng");
   }
@@ -448,6 +451,43 @@ export async function completeUpload(
   } as const;
   if (!verifyUploadReservation(input.uploadReservation, reservationFields)) {
     return err("forbidden", "Phiên tải lên không hợp lệ hoặc đã hết hạn. Vui lòng tải lại tệp.");
+  }
+
+  // New createUploadRequest() calls exclusively issue uploads-staging/ keys.
+  // A canonical contracts/ key is accepted ONLY for an in-flight upload that was
+  // server-registered in pending_contract_uploads right before domain cutover.
+  if (isLegacyDirectUpload) {
+    const adminCheck = createAdminClient();
+    const { data: legacyIntent, error: legacyIntentError } = await adminCheck
+      .from("pending_contract_uploads")
+      .select("object_key")
+      .eq("file_id", fileId)
+      .eq("object_key", objectKey)
+      .eq("organization_id", organizationId)
+      .eq("contract_id", contractId)
+      .eq("created_by", userId)
+      .abortSignal(AbortSignal.timeout(5_000))
+      .maybeSingle();
+    if (legacyIntentError) {
+      return dbError("completeUpload.verifyLegacyIntent", legacyIntentError);
+    }
+    if (!legacyIntent) {
+      const { data: committedRow } = await adminCheck
+        .from("contract_files")
+        .select(CONTRACT_FILE_COLUMNS)
+        .eq("id", fileId)
+        .abortSignal(AbortSignal.timeout(5_000))
+        .maybeSingle();
+      if (
+        committedRow &&
+        committedRow.organization_id === organizationId &&
+        committedRow.contract_id === contractId &&
+        committedRow.object_key === finalObjectKey
+      ) {
+        return ok(committedRow as ContractFileRow);
+      }
+      return err("forbidden", "objectKey không khớp với hợp đồng");
+    }
   }
 
   if (input.kind === "appendix") {
@@ -581,52 +621,54 @@ export async function completeUpload(
   }
 
   let promotedChecksum: string | null = head.etag;
-  try {
-    const copyRes = await copyObjectConditional(objectKey, finalObjectKey, {
-      sourceEtag: head.etag,
-      contentType: input.mimeType,
-      timeoutMs: 10_000,
-    });
+  if (isStagedUpload) {
+    try {
+      const copyRes = await copyObjectConditional(objectKey, finalObjectKey, {
+        sourceEtag: head.etag,
+        contentType: input.mimeType,
+        timeoutMs: 10_000,
+      });
 
-    if (copyRes.status === "source_changed_or_missing") {
-      return err(
-        "upload_incomplete",
-        "Nội dung tệp tải lên đã thay đổi hoặc chưa sẵn sàng. Vui lòng tải lại tệp.",
+      if (copyRes.status === "source_changed_or_missing") {
+        return err(
+          "upload_incomplete",
+          "Nội dung tệp tải lên đã thay đổi hoặc chưa sẵn sàng. Vui lòng tải lại tệp.",
+        );
+      }
+
+      if (copyRes.status === "destination_exists") {
+        const adminCheck = createAdminClient();
+        const { data: committedRow } = await adminCheck
+          .from("contract_files")
+          .select(CONTRACT_FILE_COLUMNS)
+          .eq("id", fileId)
+          .abortSignal(AbortSignal.timeout(5_000))
+          .maybeSingle();
+        if (
+          committedRow &&
+          committedRow.organization_id === organizationId &&
+          committedRow.contract_id === contractId &&
+          committedRow.object_key === finalObjectKey
+        ) {
+          await deleteObject(objectKey, { timeoutMs: 3_000 }).catch(() => {});
+          return ok(committedRow as ContractFileRow);
+        }
+
+        const existingFinalHead = await headObject(finalObjectKey, { timeoutMs: 5_000 });
+        if (!existingFinalHead.exists) {
+          return err("upload_incomplete", "Không xác minh được tệp đích trên kho lưu trữ. Vui lòng thử lại.");
+        }
+        promotedChecksum = existingFinalHead.etag ?? head.etag;
+      } else {
+        promotedChecksum = copyRes.etag ?? head.etag;
+      }
+    } catch (copyError) {
+      await discardRejectedUpload(
+        objectKey,
+        `R2 CopyObject thất bại: ${copyError instanceof Error ? copyError.message : String(copyError)}`,
       );
+      return dbError("completeUpload.copyObject", copyError);
     }
-
-    if (copyRes.status === "destination_exists") {
-      const adminCheck = createAdminClient();
-      const { data: committedRow } = await adminCheck
-        .from("contract_files")
-        .select(CONTRACT_FILE_COLUMNS)
-        .eq("id", fileId)
-        .abortSignal(AbortSignal.timeout(5_000))
-        .maybeSingle();
-      if (
-        committedRow &&
-        committedRow.organization_id === organizationId &&
-        committedRow.contract_id === contractId &&
-        committedRow.object_key === finalObjectKey
-      ) {
-        await deleteObject(objectKey, { timeoutMs: 3_000 }).catch(() => {});
-        return ok(committedRow as ContractFileRow);
-      }
-
-      const existingFinalHead = await headObject(finalObjectKey, { timeoutMs: 5_000 });
-      if (!existingFinalHead.exists) {
-        return err("upload_incomplete", "Không xác minh được tệp đích trên kho lưu trữ. Vui lòng thử lại.");
-      }
-      promotedChecksum = existingFinalHead.etag ?? head.etag;
-    } else {
-      promotedChecksum = copyRes.etag ?? head.etag;
-    }
-  } catch (copyError) {
-    await discardRejectedUpload(
-      objectKey,
-      `R2 CopyObject thất bại: ${copyError instanceof Error ? copyError.message : String(copyError)}`,
-    );
-    return dbError("completeUpload.copyObject", copyError);
   }
 
   const admin = createAdminClient();
@@ -684,11 +726,13 @@ export async function completeUpload(
         reason: "upload_db_failed",
         lastError,
       });
-      await enqueueR2Cleanup({
-        objectKey,
-        reason: "upload_db_failed",
-        lastError,
-      });
+      if (isStagedUpload) {
+        await enqueueR2Cleanup({
+          objectKey,
+          reason: "upload_db_failed",
+          lastError,
+        });
+      }
       if (!queuedFinal) {
         console.error(
           "[service:completeUpload] Không xác nhận được hàng DB và cũng không ghi được cleanup intent; object cần được đối soát thủ công",
@@ -703,7 +747,7 @@ export async function completeUpload(
     return dbError("completeUpload", new Error("RPC complete_contract_file_upload returned no row"));
   }
 
-  if (!persistError) {
+  if (!persistError && isStagedUpload) {
     try {
       await deleteObject(objectKey, { timeoutMs: 3_000 });
     } catch (stagingDeleteError) {
