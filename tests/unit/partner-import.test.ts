@@ -1,3 +1,4 @@
+import { deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -276,6 +277,73 @@ describe("parsePartnerWorkbook", { timeout: 30_000 }, () => {
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) {
       expect(parsed.code).toBe("file_too_large");
+    }
+  });
+
+  it("aborts spoofed-header PKZIP DEFLATE bombs that claim tiny uncompressedSize before exceljs loads RAM (A05)", async () => {
+    const fileName = new TextEncoder().encode("xl/worksheets/sheet1.xml");
+    const rawPayload = Buffer.alloc(PARTNER_IMPORT_MAX_SINGLE_ENTRY_BYTES + 2 * 1024 * 1024, 0x41);
+    const deflated = deflateRawSync(rawPayload);
+    expect(deflated.byteLength).toBeLessThan(128 * 1024);
+
+    const localHeaderLen = 30 + fileName.byteLength;
+    const cdOffset = localHeaderLen + deflated.byteLength;
+    const cdLen = 46 + fileName.byteLength;
+    const archive = new Uint8Array(cdOffset + cdLen + 22);
+    const view = new DataView(archive.buffer);
+
+    // Local File Header claiming only 64 uncompressed bytes
+    view.setUint32(0, 0x04034b50, true);
+    view.setUint16(4, 20, true);
+    view.setUint16(8, 8, true);
+    view.setUint32(18, deflated.byteLength, true);
+    view.setUint32(22, 64, true);
+    view.setUint16(26, fileName.byteLength, true);
+    archive.set(fileName, 30);
+    archive.set(deflated, localHeaderLen);
+
+    // Central Directory Header also forging uncompressedSize = 64
+    view.setUint32(cdOffset, 0x02014b50, true);
+    view.setUint16(cdOffset + 4, 20, true);
+    view.setUint16(cdOffset + 6, 20, true);
+    view.setUint16(cdOffset + 10, 8, true);
+    view.setUint32(cdOffset + 20, deflated.byteLength, true);
+    view.setUint32(cdOffset + 24, 64, true);
+    view.setUint16(cdOffset + 28, fileName.byteLength, true);
+    view.setUint32(cdOffset + 42, 0, true);
+    archive.set(fileName, cdOffset + 46);
+
+    // End of Central Directory
+    const eocdOffset = cdOffset + cdLen;
+    view.setUint32(eocdOffset, 0x06054b50, true);
+    view.setUint16(eocdOffset + 8, 1, true);
+    view.setUint16(eocdOffset + 10, 1, true);
+    view.setUint32(eocdOffset + 12, cdLen, true);
+    view.setUint32(eocdOffset + 16, cdOffset, true);
+
+    const parsed = await parsePartnerWorkbook(archive);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.code).toBe("file_too_large");
+    }
+  });
+
+  it("rejects encrypted PKZIP entries before handing bytes to exceljs (A05)", async () => {
+    const valid = await buildWorkbook(["Tên đối tác"], [["Công ty A"]]);
+    const encrypted = new Uint8Array(valid);
+    const view = new DataView(encrypted.buffer, encrypted.byteOffset, encrypted.byteLength);
+
+    for (let offset = 0; offset <= encrypted.byteLength - 46; offset += 1) {
+      if (view.getUint32(offset, true) === 0x02014b50) {
+        view.setUint16(offset + 8, view.getUint16(offset + 8, true) | 0x0001, true);
+        break;
+      }
+    }
+
+    const bounds = inspectXlsxArchiveBounds(encrypted);
+    expect(bounds.ok).toBe(false);
+    if (!bounds.ok) {
+      expect(bounds.code).toBe("unreadable_file");
     }
   });
 });

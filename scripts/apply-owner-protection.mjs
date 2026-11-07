@@ -3,7 +3,7 @@ import { guardLegacyDdlScript } from "./lib/legacy-script-guard.mjs";
 const { service } = guardLegacyDdlScript({
   scriptName: "scripts/apply-owner-protection.mjs",
   statementCount: 3,
-  supersededBy: "supabase/migrations/20261015000000_protect_owner_profile.sql",
+  supersededBy: "supabase/migrations/20261106120100_archived_contracts_rls.sql",
 });
 
 const STATEMENTS = [

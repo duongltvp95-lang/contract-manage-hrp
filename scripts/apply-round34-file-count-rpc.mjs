@@ -3,7 +3,8 @@ import { guardLegacyDdlScript } from "./lib/legacy-script-guard.mjs";
 const { service } = guardLegacyDdlScript({
   scriptName: "scripts/apply-round34-file-count-rpc.mjs",
   statementCount: 2,
-  supersededBy: "supabase/migrations/20261106120000_archived_contract_rls_and_rpc.sql",
+  supersededBy:
+    "supabase/migrations/20261019000000_contract_file_counts_rpc.sql, supabase/migrations/20261106120100_archived_contracts_rls.sql",
 });
 
 const RPC_SQL = `

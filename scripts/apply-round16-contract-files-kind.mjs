@@ -12,7 +12,7 @@ import { guardLegacyDdlScript } from "./lib/legacy-script-guard.mjs";
 const { service } = guardLegacyDdlScript({
   scriptName: "scripts/apply-round16-contract-files-kind.mjs",
   statementCount: 4,
-  supersededBy: "supabase/migrations/20261016000000_contract_files_kind.sql",
+  supersededBy: "supabase/migrations/20261013000000_contract_files_kind.sql",
 });
 
 const STATEMENTS = [

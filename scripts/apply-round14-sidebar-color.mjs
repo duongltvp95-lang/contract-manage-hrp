@@ -12,7 +12,7 @@ import { guardLegacyDdlScript } from "./lib/legacy-script-guard.mjs";
 const { service } = guardLegacyDdlScript({
   scriptName: "scripts/apply-round14-sidebar-color.mjs",
   statementCount: 5,
-  supersededBy: "supabase/migrations/20261014000000_profile_sidebar_color.sql",
+  supersededBy: "supabase/migrations/20261012000000_profile_sidebar_color.sql",
 });
 
 const STATEMENTS = [
