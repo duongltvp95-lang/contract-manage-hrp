@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createUploadReservation, verifyUploadReservation } from "@/lib/services/upload-reservation";
+import {
+  createAiUploadSession,
+  createUploadReservation,
+  verifyAiUploadSession,
+  verifyUploadReservation,
+} from "@/lib/services/upload-reservation";
 
 describe("upload reservation signatures", () => {
   const previousSecret = process.env.UPLOAD_RESERVATION_SECRET;
@@ -32,5 +37,32 @@ describe("upload reservation signatures", () => {
     expect(verifyUploadReservation(token, { ...payload, userId: "user-2" })).toBe(false);
     expect(verifyUploadReservation(token, { ...payload, objectKey: `${payload.objectKey}.other` })).toBe(false);
     expect(verifyUploadReservation(`${token}x`, payload)).toBe(false);
+  });
+
+  it("binds AI temp upload sessions to exact user, org, and objectKey and rejects cross-purpose tokens (A08)", () => {
+    const aiSession = {
+      userId: "aaaaaaaa-0000-4000-8000-000000000001",
+      organizationId: "11111111-1111-1111-1111-111111111111",
+      objectKey:
+        "ai-temp/11111111-1111-1111-1111-111111111111/aaaaaaaa-0000-4000-8000-000000000001/33333333-3333-3333-3333-333333333333/scan.pdf",
+    };
+
+    const aiToken = createAiUploadSession(aiSession);
+    expect(verifyAiUploadSession(aiToken, aiSession)).toBe(true);
+    expect(
+      verifyAiUploadSession(aiToken, {
+        ...aiSession,
+        userId: "aaaaaaaa-0000-4000-8000-000000000002",
+      }),
+    ).toBe(false);
+    expect(
+      verifyAiUploadSession(aiToken, {
+        ...aiSession,
+        objectKey: `${aiSession.objectKey}.other`,
+      }),
+    ).toBe(false);
+
+    const fileReservationToken = createUploadReservation(payload);
+    expect(verifyAiUploadSession(fileReservationToken, aiSession)).toBe(false);
   });
 });

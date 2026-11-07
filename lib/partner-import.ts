@@ -28,7 +28,13 @@ import {
 import { foldText } from "@/lib/partner-display";
 
 export const PARTNER_IMPORT_MAX_ROWS = 500;
-export const PARTNER_IMPORT_MAX_BYTES = 5 * 1024 * 1024;
+export const PARTNER_IMPORT_MAX_BYTES = 4 * 1024 * 1024;
+export const PARTNER_IMPORT_MAX_ARCHIVE_ENTRIES = 200;
+export const PARTNER_IMPORT_MAX_SINGLE_ENTRY_BYTES = 25 * 1024 * 1024;
+export const PARTNER_IMPORT_MAX_UNCOMPRESSED_BYTES = 32 * 1024 * 1024;
+export const PARTNER_IMPORT_MAX_PHYSICAL_ROW = 10_000;
+export const PARTNER_IMPORT_MAX_SCAN_ROWS = 2_000;
+export const PARTNER_IMPORT_MAX_SCAN_COLUMNS = 64;
 
 /**
  * The accepted MIME types — one: a real .xlsx workbook.
@@ -200,12 +206,14 @@ function cellText(value: ExcelJS.CellValue): string {
 }
 
 function detectColumns(
-  headerRow: ExcelJS.Row,
+  headerRow: ExcelJS.Row | undefined,
 ): Partial<Record<PartnerImportColumn, number>> {
   const found: Partial<Record<PartnerImportColumn, number>> = {};
+  if (!headerRow) return found;
 
   // `eachCell` with includeEmpty=false walks only the filled cells.
   headerRow.eachCell({ includeEmpty: false }, (cell, columnNumber) => {
+    if (columnNumber > PARTNER_IMPORT_MAX_SCAN_COLUMNS) return;
     const text = foldText(cellText(cell.value));
     if (!text) return;
 
@@ -217,6 +225,170 @@ function detectColumns(
   });
 
   return found;
+}
+
+const ZIP_LOCAL_FILE_HEADER_SIG = 0x04034b50;
+const ZIP_CENTRAL_DIR_HEADER_SIG = 0x02014b50;
+const ZIP_END_OF_CENTRAL_DIR_SIG = 0x06054b50;
+
+/**
+ * Inspects the PKZIP Central Directory BEFORE handing bytes to `exceljs` so
+ * zip bombs, ZIP64 archives, or workbooks with excessive XML inflation are
+ * rejected cheaply in O(entryCount) without inflating a single byte.
+ */
+export function inspectXlsxArchiveBounds(
+  bytes: Uint8Array,
+): { ok: true } | ({ ok: false } & PartnerImportParseFailure) {
+  if (bytes.byteLength < 22) {
+    return {
+      ok: false,
+      code: "unreadable_file",
+      message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
+    };
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(0, true) !== ZIP_LOCAL_FILE_HEADER_SIG) {
+    return {
+      ok: false,
+      code: "unreadable_file",
+      message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
+    };
+  }
+
+  const minEocdOffset = Math.max(0, bytes.byteLength - 65_557);
+  let eocdOffset = -1;
+  for (let offset = bytes.byteLength - 22; offset >= minEocdOffset; offset -= 1) {
+    if (view.getUint32(offset, true) !== ZIP_END_OF_CENTRAL_DIR_SIG) continue;
+    const commentLength = view.getUint16(offset + 20, true);
+    if (offset + 22 + commentLength === bytes.byteLength) {
+      eocdOffset = offset;
+      break;
+    }
+  }
+
+  if (eocdOffset < 0) {
+    return {
+      ok: false,
+      code: "unreadable_file",
+      message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
+    };
+  }
+
+  const totalEntries = view.getUint16(eocdOffset + 10, true);
+  const centralDirSize = view.getUint32(eocdOffset + 12, true);
+  const centralDirOffset = view.getUint32(eocdOffset + 16, true);
+
+  if (
+    totalEntries === 0xffff ||
+    centralDirSize === 0xffffffff ||
+    centralDirOffset === 0xffffffff
+  ) {
+    return {
+      ok: false,
+      code: "file_too_large",
+      message:
+        "Nội dung giải nén của file vượt giới hạn an toàn. Vui lòng lưu lại file .xlsx gọn nhẹ hơn.",
+    };
+  }
+
+  if (
+    totalEntries === 0 ||
+    centralDirOffset > eocdOffset ||
+    centralDirSize > eocdOffset - centralDirOffset
+  ) {
+    return {
+      ok: false,
+      code: "unreadable_file",
+      message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
+    };
+  }
+
+  if (totalEntries > PARTNER_IMPORT_MAX_ARCHIVE_ENTRIES) {
+    return {
+      ok: false,
+      code: "file_too_large",
+      message:
+        "File .xlsx chứa quá nhiều thành phần nội bộ. Vui lòng lưu lại thành workbook đơn giản và thử lại.",
+    };
+  }
+
+  const centralDirEnd = centralDirOffset + centralDirSize;
+  let cursor = centralDirOffset;
+  let totalUncompressed = 0;
+
+  for (let index = 0; index < totalEntries; index += 1) {
+    if (cursor + 46 > centralDirEnd) {
+      return {
+        ok: false,
+        code: "unreadable_file",
+        message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
+      };
+    }
+
+    if (view.getUint32(cursor, true) !== ZIP_CENTRAL_DIR_HEADER_SIG) {
+      return {
+        ok: false,
+        code: "unreadable_file",
+        message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
+      };
+    }
+
+    const compressedSize = view.getUint32(cursor + 20, true);
+    const uncompressedSize = view.getUint32(cursor + 24, true);
+    const fileNameLen = view.getUint16(cursor + 28, true);
+    const extraLen = view.getUint16(cursor + 30, true);
+    const commentLen = view.getUint16(cursor + 32, true);
+    const nextCursor = cursor + 46 + fileNameLen + extraLen + commentLen;
+
+    if (nextCursor > centralDirEnd) {
+      return {
+        ok: false,
+        code: "unreadable_file",
+        message: "Không đọc được file. Vui lòng kiểm tra lại file .xlsx và thử lại.",
+      };
+    }
+
+    if (
+      compressedSize === 0xffffffff ||
+      uncompressedSize === 0xffffffff ||
+      uncompressedSize > PARTNER_IMPORT_MAX_SINGLE_ENTRY_BYTES
+    ) {
+      return {
+        ok: false,
+        code: "file_too_large",
+        message:
+          "Nội dung giải nén của file vượt giới hạn an toàn. Vui lòng xoá các vùng dữ liệu thừa và thử lại.",
+      };
+    }
+
+    totalUncompressed += uncompressedSize;
+    if (totalUncompressed > PARTNER_IMPORT_MAX_UNCOMPRESSED_BYTES) {
+      return {
+        ok: false,
+        code: "file_too_large",
+        message:
+          "Nội dung giải nén của file vượt giới hạn an toàn. Vui lòng xoá các vùng dữ liệu thừa và thử lại.",
+      };
+    }
+
+    cursor = nextCursor;
+  }
+
+  return { ok: true };
+}
+
+function readRowCellText(row: ExcelJS.Row, columnNumber: number | undefined): string {
+  if (columnNumber === undefined) return "";
+  const sparseRow = row as ExcelJS.Row & {
+    findCell?: (col: number) => ExcelJS.Cell | undefined;
+  };
+  const cell =
+    typeof sparseRow.findCell === "function"
+      ? sparseRow.findCell(columnNumber)
+      : row.getCell(columnNumber);
+  if (!cell) return "";
+  return cellText(cell as unknown as ExcelJS.CellValue);
 }
 
 /**
@@ -244,6 +416,16 @@ export async function parsePartnerWorkbook(
     };
   }
 
+  const rawBytes =
+    buffer instanceof ArrayBuffer
+      ? new Uint8Array(buffer)
+      : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+  const archiveBounds = inspectXlsxArchiveBounds(rawBytes);
+  if (!archiveBounds.ok) {
+    return archiveBounds;
+  }
+
   // Dynamic import, like the audit-log export: keep exceljs out of every bundle
   // that does not parse a workbook.
   const ExcelJS = (await import("exceljs")).default;
@@ -252,8 +434,7 @@ export async function parsePartnerWorkbook(
   try {
     // exceljs accepts both shapes at runtime; its types only declare the legacy
     // Buffer shape, so the value is handed over as whatever load() expects.
-    const loadable =
-      buffer instanceof ArrayBuffer ? Buffer.from(new Uint8Array(buffer)) : Buffer.from(buffer);
+    const loadable = Buffer.from(rawBytes);
     await workbook.xlsx.load(
       loadable as unknown as Parameters<typeof workbook.xlsx.load>[0],
     );
@@ -274,7 +455,20 @@ export async function parsePartnerWorkbook(
     };
   }
 
-  const columns = detectColumns(sheet.getRow(1));
+  if (sheet.rowCount > PARTNER_IMPORT_MAX_PHYSICAL_ROW) {
+    return {
+      ok: false,
+      code: "too_many_rows",
+      message: `Vùng dữ liệu của sheet trải tới dòng ${sheet.rowCount} (tối đa ${PARTNER_IMPORT_MAX_PHYSICAL_ROW} dòng vật lý). Vui lòng xoá các dòng trống thừa bên dưới và thử lại.`,
+    };
+  }
+
+  const sparseSheet = sheet as ExcelJS.Worksheet & {
+    findRow?: (rowNumber: number) => ExcelJS.Row | undefined;
+  };
+  const headerRow =
+    typeof sparseSheet.findRow === "function" ? sparseSheet.findRow(1) : sheet.getRow(1);
+  const columns = detectColumns(headerRow);
 
   if (columns.name === undefined) {
     return {
@@ -286,22 +480,36 @@ export async function parsePartnerWorkbook(
   }
 
   const rows: ParsedPartnerImportRow[] = [];
+  let visitedNonEmptyRows = 0;
+  let failure: PartnerImportParseFailure | null = null;
 
-  for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
-    const row = sheet.getRow(rowNumber);
-    const name = cellText(row.getCell(columns.name));
-    const address =
-      columns.address !== undefined ? cellText(row.getCell(columns.address)) : "";
-    const taxCode =
-      columns.taxCode !== undefined ? cellText(row.getCell(columns.taxCode)) : "";
-    const region =
-      columns.region !== undefined ? cellText(row.getCell(columns.region)) : "";
-    const abbreviation =
-      columns.abbreviation !== undefined ? cellText(row.getCell(columns.abbreviation)) : "";
-    const statusText =
-      columns.status !== undefined ? cellText(row.getCell(columns.status)) : "";
-    const companyText =
-      columns.company !== undefined ? cellText(row.getCell(columns.company)) : "";
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    if (failure || rowNumber <= 1) return;
+
+    if (rowNumber > PARTNER_IMPORT_MAX_PHYSICAL_ROW) {
+      failure = {
+        code: "too_many_rows",
+        message: `Vùng dữ liệu của sheet trải tới dòng ${rowNumber} (tối đa ${PARTNER_IMPORT_MAX_PHYSICAL_ROW} dòng vật lý). Vui lòng xoá các dòng trống thừa bên dưới và thử lại.`,
+      };
+      return;
+    }
+
+    visitedNonEmptyRows += 1;
+    if (visitedNonEmptyRows > PARTNER_IMPORT_MAX_SCAN_ROWS) {
+      failure = {
+        code: "too_many_rows",
+        message: `Sheet có quá nhiều dòng chứa dữ liệu ngoài vùng cột nhập (tối đa ${PARTNER_IMPORT_MAX_SCAN_ROWS} dòng quét). Vui lòng dọn bớt dữ liệu thừa và chia nhỏ file.`,
+      };
+      return;
+    }
+
+    const name = readRowCellText(row, columns.name);
+    const address = readRowCellText(row, columns.address);
+    const taxCode = readRowCellText(row, columns.taxCode);
+    const region = readRowCellText(row, columns.region);
+    const abbreviation = readRowCellText(row, columns.abbreviation);
+    const statusText = readRowCellText(row, columns.status);
+    const companyText = readRowCellText(row, columns.company);
 
     // A row with nothing in any mapped column is a spacer, not an error.
     if (
@@ -313,15 +521,15 @@ export async function parsePartnerWorkbook(
       !statusText.trim() &&
       !companyText.trim()
     ) {
-      continue;
+      return;
     }
 
     if (rows.length >= PARTNER_IMPORT_MAX_ROWS) {
-      return {
-        ok: false,
+      failure = {
         code: "too_many_rows",
         message: `Vượt quá giới hạn ${PARTNER_IMPORT_MAX_ROWS} dòng dữ liệu mỗi lần tải lên. Vui lòng chia nhỏ file.`,
       };
+      return;
     }
 
     rows.push({
@@ -335,6 +543,10 @@ export async function parsePartnerWorkbook(
       companyText,
       hasCompanyColumn: columns.company !== undefined,
     });
+  });
+
+  if (failure) {
+    return { ok: false, ...(failure as PartnerImportParseFailure) };
   }
 
   return { ok: true, rows };

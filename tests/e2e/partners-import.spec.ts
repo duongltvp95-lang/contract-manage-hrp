@@ -123,6 +123,8 @@ test.describe("partner import from Excel", () => {
     const confirm = page.getByTestId("partner-import-confirm");
     await expect(confirm).toHaveText("Nhập 3 đối tác");
     await confirm.click();
+    await expect(page.getByTestId("partner-import-confirm-dialog")).toBeVisible();
+    await page.getByTestId("partner-import-modal-confirm").click();
 
     // Success toast…
     await expect(page.getByText("Đã nhập 3 đối tác")).toBeVisible({ timeout: 15_000 });
@@ -235,6 +237,8 @@ test.describe("partner import from Excel", () => {
     );
 
     await page.getByTestId("partner-import-confirm").click();
+    await expect(page.getByTestId("partner-import-confirm-dialog")).toBeVisible();
+    await page.getByTestId("partner-import-modal-confirm").click();
     await expect(page.getByText("Đã nhập 2 đối tác")).toBeVisible({ timeout: 15_000 });
 
     // The database agrees on both statuses.
@@ -308,6 +312,8 @@ test.describe("partner import from Excel", () => {
     );
 
     await page.getByTestId("partner-import-confirm").click();
+    await expect(page.getByTestId("partner-import-confirm-dialog")).toBeVisible();
+    await page.getByTestId("partner-import-modal-confirm").click();
     await expect(page.getByText("Đã nhập 2 đối tác")).toBeVisible({ timeout: 15_000 });
 
     // The sheet closed (no failures) — the list now has the new partner.
@@ -367,6 +373,8 @@ test.describe("partner import from Excel", () => {
     );
 
     await page.getByTestId("partner-import-confirm").click();
+    await expect(page.getByTestId("partner-import-confirm-dialog")).toBeVisible();
+    await page.getByTestId("partner-import-modal-confirm").click();
     await expect(page.getByText("Đã nhập 1 đối tác")).toBeVisible({ timeout: 15_000 });
 
     // Two SEPARATE partners now share the name.

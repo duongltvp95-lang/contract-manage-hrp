@@ -30,7 +30,10 @@ import {
   deleteContractFile,
   type ContractFileRow,
 } from "@/lib/services/files";
+import { isOwnedAiTempObjectKey } from "@/lib/r2/keys";
 import { deleteObject, getObjectBufferBounded } from "@/lib/r2/objects";
+import { enqueueR2Cleanup } from "@/lib/services/storage-cleanup";
+import { verifyAiUploadSession } from "@/lib/services/upload-reservation";
 import {
   authorized,
   fromService,
@@ -560,14 +563,29 @@ export async function extractContractAction(
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   const objectKey = formData.get("objectKey");
 
+  const aiUploadToken = formData.get("aiUploadToken");
+
+  const deleteOrEnqueueAiTemp = async (key: string) => {
+    try {
+      await deleteObject(key, { timeoutMs: 5_000 });
+    } catch (error) {
+      await enqueueR2Cleanup({
+        objectKey: key,
+        reason: "reconciliation",
+        lastError:
+          error instanceof Error ? error.message.slice(0, 500) : "ai_temp_delete_failed",
+      });
+    }
+  };
+
   const cleanupR2 = (key: string) => {
-    // Đăng ký dọn tệp tạm sau khi phản hồi để không kéo dài thời gian AI.
+    // Đăng ký dọn tệp tạm sau khi phản hồi; nếu DeleteObject lỗi thì đẩy vào r2_cleanup_queue để cron thử lại.
     try {
       after(async () => {
-        await deleteObject(key, { timeoutMs: 5_000 }).catch(() => {});
+        await deleteOrEnqueueAiTemp(key);
       });
     } catch {
-      void deleteObject(key, { timeoutMs: 5_000 }).catch(() => {});
+      void deleteOrEnqueueAiTemp(key);
     }
   };
 
@@ -587,11 +605,20 @@ export async function extractContractAction(
     );
     if (!access.ok) return access.result;
 
-    const ownedObjectKey =
+    const hasValidAiUploadSession =
       typeof objectKey === "string" &&
-      objectKey.startsWith(`ai-temp/${access.user.organizationId}/`)
-        ? objectKey
-        : null;
+      typeof aiUploadToken === "string" &&
+      isOwnedAiTempObjectKey(objectKey, {
+        organizationId: access.user.organizationId,
+        userId: access.user.id,
+      }) &&
+      verifyAiUploadSession(aiUploadToken, {
+        userId: access.user.id,
+        organizationId: access.user.organizationId,
+        objectKey,
+      });
+
+    const ownedObjectKey = hasValidAiUploadSession ? objectKey : null;
     if (ownedObjectKey) {
       r2KeyToClean = ownedObjectKey;
     }
@@ -675,10 +702,12 @@ export async function extractContractAction(
       pdfTextCharacters = trimmedClientText.length;
       pdfTextExtractionAttempted = true;
     } else if (typeof objectKey === "string" && objectKey.length > 0) {
-      const expectedPrefix = `ai-temp/${access.user.organizationId}/`;
-      if (!objectKey.startsWith(expectedPrefix)) {
+      if (!ownedObjectKey) {
         return validationFailure("objectKey không hợp lệ", [
-          { path: "objectKey", message: "Tệp không thuộc tổ chức của bạn" },
+          {
+            path: "objectKey",
+            message: "Phiên tải tệp AI tạm không hợp lệ hoặc không thuộc tài khoản của bạn",
+          },
         ]);
       }
 
@@ -1132,25 +1161,55 @@ export async function extractContractAction(
 }
 
 /**
- * Dọn tệp R2 tạm (ai-temp/<orgId>/...) khi phiên tải trước theo lô (prefetch) bị người dùng dừng giữa chừng.
+ * Dọn tệp R2 tạm (ai-temp/<orgId>/<userId>/<fileId>/...) khi phiên tải trước theo lô (prefetch) bị người dùng dừng giữa chừng.
  */
 export async function cleanupAiTempObjectAction(
   objectKey: string,
-): Promise<ActionResult<{ deleted: boolean }>> {
+  aiUploadToken?: string,
+): Promise<ActionResult<{ deleted: boolean; queued: boolean }>> {
   const access = await authorized({ timeoutMs: 5_000 });
   if (!access.ok) return access.result;
 
   if (
     typeof objectKey !== "string" ||
-    !objectKey.startsWith(`ai-temp/${access.user.organizationId}/`)
+    typeof aiUploadToken !== "string" ||
+    !isOwnedAiTempObjectKey(objectKey, {
+      organizationId: access.user.organizationId,
+      userId: access.user.id,
+    }) ||
+    !verifyAiUploadSession(aiUploadToken, {
+      userId: access.user.id,
+      organizationId: access.user.organizationId,
+      objectKey,
+    })
   ) {
     return validationFailure("objectKey không hợp lệ", [
-      { path: "objectKey", message: "Tệp không thuộc tổ chức của bạn" },
+      {
+        path: "objectKey",
+        message: "Phiên tải tệp AI tạm không hợp lệ hoặc không thuộc tài khoản của bạn",
+      },
     ]);
   }
 
-  await deleteObject(objectKey, { timeoutMs: 5_000 }).catch(() => {});
-  return { ok: true, data: { deleted: true } };
+  try {
+    await deleteObject(objectKey, { timeoutMs: 5_000 });
+    return { ok: true, data: { deleted: true, queued: false } };
+  } catch (error) {
+    const queued = await enqueueR2Cleanup({
+      objectKey,
+      reason: "reconciliation",
+      lastError:
+        error instanceof Error ? error.message.slice(0, 500) : "ai_temp_cleanup_failed",
+    });
+    if (queued) {
+      return { ok: true, data: { deleted: false, queued: true } };
+    }
+    return {
+      ok: false,
+      code: "storage_error",
+      message: "Không thể xoá tệp AI tạm trên kho lưu trữ đám mây. Vui lòng thử lại sau.",
+    };
+  }
 }
 
 /**

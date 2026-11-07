@@ -66,19 +66,14 @@ export function UploadDropzone({
   const [rejections, setRejections] = useState<string[]>([]);
 
   const onDrop = useCallback(
-    (accepted: File[], rejected: unknown[], event: unknown) => {
+    (accepted: File[], rejected: unknown[]) => {
       setRejections(describeRejections(rejected, maxUploadSizeMb));
       if (accepted.length === 0) return;
       const addedFiles = accepted.map((file) =>
         newPendingFile(file, showKindBadge ? undefined : kind),
       );
       onFilesChange((current) => [...current, ...addedFiles]);
-
-      const isDragDrop = (event as DragEvent)?.type === "drop";
-      const isRealUserPicker = typeof navigator !== "undefined" && !navigator.webdriver;
-      if (isDragDrop || isRealUserPicker) {
-        onAutoExtract?.(addedFiles);
-      }
+      onAutoExtract?.(addedFiles);
     },
     [onFilesChange, maxUploadSizeMb, setRejections, kind, showKindBadge, onAutoExtract],
   );

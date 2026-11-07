@@ -11,7 +11,11 @@ import { getCurrentUser } from "@/lib/auth";
 import { canDeleteEntities, BULK_DELETE_LIMIT } from "@/lib/delete-permissions";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { PARTNER_SEARCH_LIMIT } from "@/lib/partner-display";
+import {
+  PARTNERS_PAGE_SIZE_DEFAULT,
+  PARTNER_SEARCH_LIMIT,
+  foldText,
+} from "@/lib/partner-display";
 import {
   buildMergePatch,
   matchExistingPartner,
@@ -87,6 +91,19 @@ export type PartnerContext = {
   organizationId: string;
 };
 
+export { PARTNERS_PAGE_SIZE_DEFAULT };
+export const PARTNERS_PAGE_SIZE_MAX = 500;
+export const PARTNERS_BATCH_SIZE = 1_000;
+const PARTNER_ID_IN_CHUNK_SIZE = 200;
+
+export type PartnersDirectoryPage = {
+  rows: PartnerWithCount[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+};
+
 /**
  * Counts contracts per partner for the given partners.
  *
@@ -104,16 +121,33 @@ export async function countContractsByPartner(
   if (partnerIds.length === 0) return counts;
 
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("contracts")
-    .select("partner_id")
-    .eq("organization_id", organizationId)
-    .is("archived_at", null)
-    .in("partner_id", partnerIds);
 
-  for (const row of (data ?? []) as { partner_id: string | null }[]) {
-    if (!row.partner_id) continue;
-    counts.set(row.partner_id, (counts.get(row.partner_id) ?? 0) + 1);
+  for (let start = 0; start < partnerIds.length; start += PARTNER_ID_IN_CHUNK_SIZE) {
+    const chunk = partnerIds.slice(start, start + PARTNER_ID_IN_CHUNK_SIZE);
+    for (let offset = 0; ; offset += PARTNERS_BATCH_SIZE) {
+      const baseQuery = supabase
+        .from("contracts")
+        .select("id, partner_id")
+        .eq("organization_id", organizationId)
+        .is("archived_at", null)
+        .in("partner_id", chunk)
+        .order("id", { ascending: true });
+
+      const supportsRange = typeof baseQuery.range === "function";
+      const { data } = supportsRange
+        ? await baseQuery.range(offset, offset + PARTNERS_BATCH_SIZE - 1)
+        : await baseQuery;
+
+      const rows = (data ?? []) as { id?: string; partner_id: string | null }[];
+      for (const row of rows) {
+        if (!row.partner_id) continue;
+        counts.set(row.partner_id, (counts.get(row.partner_id) ?? 0) + 1);
+      }
+
+      if (!supportsRange || rows.length < PARTNERS_BATCH_SIZE) {
+        break;
+      }
+    }
   }
 
   return counts;
@@ -350,7 +384,7 @@ export async function companyRowsForOnePartner(
   }
 }
 
-/** Bulk company names per partner, one query for a whole page of partners. */
+/** Bulk company names per partner, chunked for arbitrarily large partner sets. */
 export async function companiesForPartners(
   partnerIds: string[],
 ): Promise<Map<string, string[]>> {
@@ -358,18 +392,35 @@ export async function companiesForPartners(
   if (partnerIds.length === 0) return result;
 
   const supabase = await createClient();
-  const { data } = await supabase
-    .from("partner_companies")
-    .select("partner_id, companies(name)")
-    .in("partner_id", partnerIds);
+  for (let start = 0; start < partnerIds.length; start += PARTNER_ID_IN_CHUNK_SIZE) {
+    const chunk = partnerIds.slice(start, start + PARTNER_ID_IN_CHUNK_SIZE);
+    for (let offset = 0; ; offset += PARTNERS_BATCH_SIZE) {
+      const baseQuery = supabase
+        .from("partner_companies")
+        .select("partner_id, company_id, companies(name)")
+        .in("partner_id", chunk)
+        .order("partner_id", { ascending: true })
+        .order("company_id", { ascending: true });
 
-  for (const row of (data ?? []) as {
-    partner_id: string;
-    companies: { name: string } | { name: string }[] | null;
-  }[]) {
-    const embedded = Array.isArray(row.companies) ? row.companies[0] : row.companies;
-    if (!embedded?.name) continue;
-    result.set(row.partner_id, [...(result.get(row.partner_id) ?? []), embedded.name]);
+      const supportsRange = typeof baseQuery.range === "function";
+      const { data } = supportsRange
+        ? await baseQuery.range(offset, offset + PARTNERS_BATCH_SIZE - 1)
+        : await baseQuery;
+
+      const rows = (data ?? []) as {
+        partner_id: string;
+        companies: { name: string } | { name: string }[] | null;
+      }[];
+      for (const row of rows) {
+        const embedded = Array.isArray(row.companies) ? row.companies[0] : row.companies;
+        if (!embedded?.name) continue;
+        result.set(row.partner_id, [...(result.get(row.partner_id) ?? []), embedded.name]);
+      }
+
+      if (!supportsRange || rows.length < PARTNERS_BATCH_SIZE) {
+        break;
+      }
+    }
   }
 
   return result;
@@ -405,9 +456,9 @@ async function deletePartnerRollback(
  * Every partner of the caller's organization, alphabetically, with its contract
  * count and linked company names.
  *
- * The directory is expected to be small (tens to low hundreds per
- * organization), so this returns the whole list rather than paginating: it feeds
- * a `<select>` / combobox and a filter control, both of which need every option.
+ * A10: Fetches in deterministic 1,000-row batches (`ORDER BY name ASC, id ASC`)
+ * so `/api/partners/export` and service callers never truncate silently at
+ * PostgREST's default 1,000-row ceiling.
  */
 export async function listPartners({
   organizationId,
@@ -420,48 +471,88 @@ export async function listPartners({
 }): Promise<ServiceResult<PartnerWithCount[]>> {
   const supabase = await createClient();
 
-  // Task 3: Sử dụng RPC get_partners_summary tổng hợp trực tiếp tại DB
-  // (1 query duy nhất thay cho 3 round-trips kéo dữ liệu về JS).
-  // Có fallback an toàn sang truy vấn truyền thống nếu RPC chưa sẵn sàng.
-  const { data: rpcData, error: rpcError } = await supabase.rpc(
-    "get_partners_summary",
-    { org_id: organizationId },
-  );
+  type SummaryRpcRow = PartnerRow & {
+    contract_count: number | string;
+    companies: string[] | null;
+  };
 
-  let withCounts: PartnerWithCount[];
+  let withCounts: PartnerWithCount[] | null = null;
+  const collectedRpcRows: SummaryRpcRow[] = [];
+  let rpcFailed = false;
 
-  if (!rpcError && rpcData) {
-    withCounts = (
-      rpcData as Array<
-        PartnerRow & {
-          contract_count: number | string;
-          companies: string[] | null;
-        }
-      >
-    ).map((row) => ({
-      ...row,
-      contract_count: Number(row.contract_count) || 0,
-      companies: (row.companies ?? []).sort(),
-    }));
-  } else {
-    const query = supabase
-      .from("partners")
-      .select(PARTNER_COLUMNS)
-      .eq("organization_id", organizationId);
+  for (let offset = 0; ; offset += PARTNERS_BATCH_SIZE) {
+    const rpcQuery = supabase.rpc("get_partners_summary", {
+      org_id: organizationId,
+    });
+    const supportsRange = typeof rpcQuery.range === "function";
+    const { data: rpcData, error: rpcError } = supportsRange
+      ? await rpcQuery.range(offset, offset + PARTNERS_BATCH_SIZE - 1)
+      : await rpcQuery;
 
-    const { data, error } = await query.order("name", { ascending: true });
-
-    if (error) {
-      return dbError("listPartners", error);
+    if (rpcError || !Array.isArray(rpcData)) {
+      rpcFailed = true;
+      break;
     }
 
-    const rows = (data ?? []) as PartnerRow[];
+    const batch = rpcData as SummaryRpcRow[];
+    collectedRpcRows.push(...batch);
+    if (!supportsRange || batch.length < PARTNERS_BATCH_SIZE) {
+      break;
+    }
+  }
+
+  if (!rpcFailed) {
+    const seen = new Set<string>();
+    withCounts = [];
+    for (const row of collectedRpcRows) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      withCounts.push({
+        ...row,
+        contract_count: Number(row.contract_count) || 0,
+        companies: (row.companies ?? []).sort(),
+      });
+    }
+  } else {
+    const collectedRows: PartnerRow[] = [];
+    const seen = new Set<string>();
+
+    for (let offset = 0; ; offset += PARTNERS_BATCH_SIZE) {
+      const baseQuery = supabase
+        .from("partners")
+        .select(PARTNER_COLUMNS)
+        .eq("organization_id", organizationId)
+        .order("name", { ascending: true })
+        .order("id", { ascending: true });
+
+      const supportsRange = typeof baseQuery.range === "function";
+      const { data, error } = supportsRange
+        ? await baseQuery.range(offset, offset + PARTNERS_BATCH_SIZE - 1)
+        : await baseQuery;
+
+      if (error) {
+        return dbError("listPartners", error);
+      }
+
+      const batch = (data ?? []) as PartnerRow[];
+      for (const row of batch) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        collectedRows.push(row);
+      }
+
+      if (!supportsRange || batch.length < PARTNERS_BATCH_SIZE) {
+        break;
+      }
+    }
+
+    const partnerIds = collectedRows.map((row) => row.id);
     const [counts, companyMap] = await Promise.all([
-      countContractsByPartner(rows.map((row) => row.id), organizationId),
-      companiesForPartners(rows.map((row) => row.id)),
+      countContractsByPartner(partnerIds, organizationId),
+      companiesForPartners(partnerIds),
     ]);
 
-    withCounts = rows.map((row) => ({
+    withCounts = collectedRows.map((row) => ({
       ...row,
       contract_count: counts.get(row.id) ?? 0,
       companies: (companyMap.get(row.id) ?? []).sort(),
@@ -480,6 +571,151 @@ export async function listPartners({
   }
 
   return ok(withCounts);
+}
+
+/**
+ * Paginated & server-filtered directory page for `/partners` (`A10`).
+ *
+ * Uses `get_partners_directory_page` RPC so organizations with > 1,000 partners
+ * paginate cleanly in PostgreSQL while keeping exact total counts.
+ */
+export async function listPartnersDirectoryPage({
+  organizationId,
+  search,
+  status,
+  company,
+  contracts,
+  page = 1,
+  pageSize = PARTNERS_PAGE_SIZE_DEFAULT,
+}: PartnerContext & {
+  search?: string;
+  status?: PartnerStatus;
+  company?: string;
+  contracts?: "has" | "none";
+  page?: number;
+  pageSize?: number;
+}): Promise<ServiceResult<PartnersDirectoryPage>> {
+  const safePageSize = Math.min(
+    Math.max(1, Number.isFinite(pageSize) ? Math.trunc(pageSize) : PARTNERS_PAGE_SIZE_DEFAULT),
+    PARTNERS_PAGE_SIZE_MAX,
+  );
+  let safePage = Math.max(1, Number.isFinite(page) ? Math.trunc(page) : 1);
+  const normalizedSearch = search?.trim() ? search.trim().slice(0, 120) : null;
+  const normalizedCompany = company?.trim() ? company.trim() : null;
+
+  type DirectoryRpcRow = PartnerRow & {
+    contract_count: number | string;
+    companies: string[] | null;
+    total_count: number | string;
+  };
+
+  const supabase = await createClient();
+  const runRpc = async (offset: number) =>
+    supabase.rpc("get_partners_directory_page", {
+      p_org_id: organizationId,
+      p_search: normalizedSearch,
+      p_status: status ?? null,
+      p_company: normalizedCompany,
+      p_contracts: contracts ?? null,
+      p_limit: safePageSize,
+      p_offset: offset,
+    });
+
+  const { data: rpcData, error: rpcError } = await runRpc((safePage - 1) * safePageSize);
+
+  if (rpcError) {
+    // Graceful fallback if the migration has not been applied yet on an ephemeral environment.
+    if (rpcError.code === "PGRST202" || rpcError.message?.includes("get_partners_directory_page")) {
+      const full = await listPartners({ organizationId, status, contracts });
+      if (!full.ok) return full;
+
+      let filtered = full.data;
+      if (normalizedCompany) {
+        filtered = filtered.filter((row) => row.companies.includes(normalizedCompany));
+      }
+      if (normalizedSearch) {
+        const needle = foldText(normalizedSearch);
+        if (needle) {
+          filtered = filtered.filter(
+            (row) =>
+              foldText(row.name).includes(needle) ||
+              foldText(row.tax_code ?? "").includes(needle) ||
+              foldText(row.abbreviation ?? "").includes(needle) ||
+              foldText(row.region ?? "").includes(needle),
+          );
+        }
+      }
+
+      const totalCount = filtered.length;
+      const pageCount = Math.max(1, Math.ceil(totalCount / safePageSize));
+      const clampedPage = Math.min(safePage, pageCount);
+      const start = (clampedPage - 1) * safePageSize;
+      return ok({
+        rows: filtered.slice(start, start + safePageSize),
+        totalCount,
+        page: clampedPage,
+        pageSize: safePageSize,
+        pageCount,
+      });
+    }
+
+    return dbError("listPartnersDirectoryPage", rpcError);
+  }
+
+  let rpcRows = (rpcData ?? []) as DirectoryRpcRow[];
+  if (rpcRows.length === 0 && safePage > 1) {
+    const firstPage = await runRpc(0);
+    if (firstPage.error) {
+      return dbError("listPartnersDirectoryPage", firstPage.error);
+    }
+    const firstRows = (firstPage.data ?? []) as DirectoryRpcRow[];
+    if (firstRows.length === 0) {
+      return ok({
+        rows: [],
+        totalCount: 0,
+        page: 1,
+        pageSize: safePageSize,
+        pageCount: 1,
+      });
+    }
+
+    const totalFromFirst = Number(firstRows[0]?.total_count) || firstRows.length;
+    const lastPage = Math.max(1, Math.ceil(totalFromFirst / safePageSize));
+    safePage = lastPage;
+    if (lastPage === 1) {
+      rpcRows = firstRows;
+    } else {
+      const clampedRes = await runRpc((lastPage - 1) * safePageSize);
+      if (clampedRes.error) {
+        return dbError("listPartnersDirectoryPage", clampedRes.error);
+      }
+      rpcRows = (clampedRes.data ?? []) as DirectoryRpcRow[];
+    }
+  }
+
+  const totalCount = rpcRows.length > 0 ? Number(rpcRows[0]?.total_count) || rpcRows.length : 0;
+  const pageCount = Math.max(1, Math.ceil(totalCount / safePageSize));
+
+  return ok({
+    rows: rpcRows.map((row) => ({
+      id: row.id,
+      organization_id: row.organization_id,
+      name: row.name,
+      address: row.address,
+      tax_code: row.tax_code,
+      region: row.region,
+      abbreviation: row.abbreviation,
+      status: row.status,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      contract_count: Number(row.contract_count) || 0,
+      companies: (row.companies ?? []).sort(),
+    })),
+    totalCount,
+    page: safePage,
+    pageSize: safePageSize,
+    pageCount,
+  });
 }
 
 /** A partner as returned by the quick-search RPC (round 6). */
@@ -1041,6 +1277,113 @@ export type PartnerImportServiceRow = Pick<
 >;
 
 /**
+ * Loads only candidate existing partners that could possibly match the incoming
+ * Excel import batch on folded tax code or folded name (`A10`), avoiding
+ * full-directory scans and > 1,000-row truncation on large tenants.
+ */
+async function loadCandidateMergePartners(
+  rows: PartnerImportServiceRow[],
+  organizationId: string,
+): Promise<ServiceResult<MergeablePartner[]>> {
+  const foldedTaxCodes = [
+    ...new Set(
+      rows
+        .map((row) => foldText(row.taxCode ?? ""))
+        .filter((value) => value.length > 0),
+    ),
+  ];
+  const foldedNames = [
+    ...new Set(
+      rows
+        .map((row) => foldText(row.name ?? ""))
+        .filter((value) => value.length > 0),
+    ),
+  ];
+
+  if (foldedTaxCodes.length === 0 && foldedNames.length === 0) {
+    return ok([]);
+  }
+
+  const supabase = await createClient();
+  const byId = new Map<string, PartnerRow>();
+
+  const fallbackToFullDirectory = async (): Promise<ServiceResult<MergeablePartner[]>> => {
+    const directory = await listPartners({ organizationId });
+    if (!directory.ok) return directory;
+    return ok(
+      directory.data.map((partner) => ({
+        id: partner.id,
+        name: partner.name,
+        tax_code: partner.tax_code,
+        abbreviation: partner.abbreviation,
+        region: partner.region,
+        address: partner.address,
+        status: partner.status,
+        companies: partner.companies,
+      })),
+    );
+  };
+
+  for (let start = 0; start < foldedTaxCodes.length; start += 100) {
+    const chunk = foldedTaxCodes.slice(start, start + 100);
+    const { data, error } = await supabase
+      .from("partners")
+      .select(PARTNER_COLUMNS)
+      .eq("organization_id", organizationId)
+      .in("tax_code_folded", chunk);
+
+    if (error) {
+      if (error.code === "42703" || error.message?.includes("folded")) {
+        return fallbackToFullDirectory();
+      }
+      return dbError("loadCandidateMergePartners", error);
+    }
+
+    for (const row of (data ?? []) as PartnerRow[]) {
+      byId.set(row.id, row);
+    }
+  }
+
+  for (let start = 0; start < foldedNames.length; start += 100) {
+    const chunk = foldedNames.slice(start, start + 100);
+    const { data, error } = await supabase
+      .from("partners")
+      .select(PARTNER_COLUMNS)
+      .eq("organization_id", organizationId)
+      .in("name_folded", chunk);
+
+    if (error) {
+      if (error.code === "42703" || error.message?.includes("folded")) {
+        return fallbackToFullDirectory();
+      }
+      return dbError("loadCandidateMergePartners", error);
+    }
+
+    for (const row of (data ?? []) as PartnerRow[]) {
+      byId.set(row.id, row);
+    }
+  }
+
+  const candidates = [...byId.values()].sort(
+    (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+  );
+  const companyMap = await companiesForPartners(candidates.map((row) => row.id));
+
+  return ok(
+    candidates.map((partner) => ({
+      id: partner.id,
+      name: partner.name,
+      tax_code: partner.tax_code,
+      abbreviation: partner.abbreviation,
+      region: partner.region,
+      address: partner.address,
+      status: partner.status,
+      companies: (companyMap.get(partner.id) ?? []).sort(),
+    })),
+  );
+}
+
+/**
  * Preview — round 25: predicts, for every valid row, whether the import will
  * CREATE a partner ("Thêm mới") or MERGE into an existing one ("Cập nhật"),
  * WITHOUT writing anything.
@@ -1054,19 +1397,10 @@ export async function previewPartnerImport(
   rows: PartnerImportServiceRow[],
   { organizationId }: PartnerContext,
 ): Promise<ServiceResult<PartnerImportRowReport[]>> {
-  const directory = await listPartners({ organizationId });
-  if (!directory.ok) return directory;
+  const candidates = await loadCandidateMergePartners(rows, organizationId);
+  if (!candidates.ok) return candidates;
 
-  const existing: MergeablePartner[] = directory.data.map((partner) => ({
-    id: partner.id,
-    name: partner.name,
-    tax_code: partner.tax_code,
-    abbreviation: partner.abbreviation,
-    region: partner.region,
-    address: partner.address,
-    status: partner.status,
-    companies: partner.companies,
-  }));
+  const existing: MergeablePartner[] = [...candidates.data];
 
   return ok(
     rows.map((row): PartnerImportRowReport => {
@@ -1151,22 +1485,12 @@ export async function importPartners(
     companies.data.map((company) => [company.name.trim().toLowerCase(), company.id]),
   );
 
-  // The merge needs the whole directory. One query for the batch keeps it
-  // simple; the matching itself is pure (lib/partner-merge.ts). The directory
-  // list is the same query the partners page runs.
-  const directory = await listPartners({ organizationId });
-  if (!directory.ok) return directory;
+  // A10: Load only candidate existing partners matching the batch's folded
+  // tax codes or folded names (with company links hydrated).
+  const candidates = await loadCandidateMergePartners(rows, organizationId);
+  if (!candidates.ok) return candidates;
 
-  const existing: MergeablePartner[] = directory.data.map((partner) => ({
-    id: partner.id,
-    name: partner.name,
-    tax_code: partner.tax_code,
-    abbreviation: partner.abbreviation,
-    region: partner.region,
-    address: partner.address,
-    status: partner.status,
-    companies: partner.companies,
-  }));
+  const existing: MergeablePartner[] = [...candidates.data];
 
   const supabase = await createClient();
   const results: PartnerImportRowReport[] = [];

@@ -237,4 +237,137 @@ delete from public.contracts where id in (
  'cccccccc-0000-4000-8000-000000000005'
 );
 
+-- A06: deleted actor audit snapshot preservation + rollback on failed GoTrue delete
+insert into auth.users(id, email) values
+ ('aaaaaaaa-0000-4000-8000-000000000090', 'tombstone-w2@test.invalid'),
+ ('aaaaaaaa-0000-4000-8000-000000000091', 'victim-w2@test.invalid');
+update public.profiles
+   set is_tombstone = true, is_active = false, full_name = 'Đã xoá'
+ where id = 'aaaaaaaa-0000-4000-8000-000000000090';
+update public.profiles
+   set full_name = 'Nguyễn Văn Xoá'
+ where id = 'aaaaaaaa-0000-4000-8000-000000000091';
+
+insert into public.audit_logs(
+  id, organization_id, actor_id, actor_role, action, target_kind, target_id, metadata
+) values (
+  '99999999-0000-4000-8000-000000000001',
+  '11111111-1111-1111-1111-111111111111',
+  'aaaaaaaa-0000-4000-8000-000000000091',
+  'user',
+  'create_contract',
+  'contract',
+  null,
+  '{}'::jsonb
+);
+
+select public.test_assert(
+  not has_function_privilege('authenticated', 'public.prepare_actor_audit_for_user_delete(uuid,uuid,uuid,text,text)', 'execute')
+  and not has_function_privilege('authenticated', 'public.restore_actor_audit_after_failed_user_delete(uuid,uuid,uuid)', 'execute'),
+  'A06: user delete audit RPCs revoked from authenticated callers'
+);
+
+select public.test_assert(
+  public.prepare_actor_audit_for_user_delete(
+    '11111111-1111-1111-1111-111111111111',
+    'aaaaaaaa-0000-4000-8000-000000000091',
+    'aaaaaaaa-0000-4000-8000-000000000090',
+    'Nguyễn Văn Xoá',
+    'victim-w2@test.invalid'
+  ) = 1,
+  'A06: prepare_actor_audit_for_user_delete repoints historical audit row'
+);
+select public.test_assert(
+  (select actor_id = 'aaaaaaaa-0000-4000-8000-000000000090'
+      and deleted_actor_id = 'aaaaaaaa-0000-4000-8000-000000000091'
+      and actor_name_snapshot = 'Nguyễn Văn Xoá'
+      and actor_email_snapshot = 'victim-w2@test.invalid'
+     from public.audit_logs
+    where id = '99999999-0000-4000-8000-000000000001'),
+  'A06: historical audit row retains deleted_actor_id and actor snapshots'
+);
+
+select public.test_assert(
+  public.restore_actor_audit_after_failed_user_delete(
+    '11111111-1111-1111-1111-111111111111',
+    'aaaaaaaa-0000-4000-8000-000000000091',
+    'aaaaaaaa-0000-4000-8000-000000000090'
+  ) = 1,
+  'A06: restore_actor_audit_after_failed_user_delete rolls back repointing when GoTrue delete fails'
+);
+select public.test_assert(
+  (select actor_id = 'aaaaaaaa-0000-4000-8000-000000000091'
+      and deleted_actor_id is null
+      and actor_name_snapshot is null
+      and actor_email_snapshot is null
+     from public.audit_logs
+    where id = '99999999-0000-4000-8000-000000000001'),
+  'A06: rolled back audit row restores live actor_id and clears snapshots'
+);
+
+-- A10: folded partner keys, paginated directory RPC, and last-company-link deferred trigger
+select public.test_assert(
+  public.fold_partner_text('  Công ty Cổ phần Điện tử Đăng Khoa  ') = 'cong ty co phan dien tu dang khoa',
+  'A10: fold_partner_text normalizes Vietnamese diacritics and đ/Đ identically to foldText()'
+);
+
+insert into public.partners(id, organization_id, name, tax_code) values
+ ('dddddddd-0000-4000-8000-000000000010','11111111-1111-1111-1111-111111111111','Công ty Điện tử Đăng Khoa','0109888777-001'),
+ ('dddddddd-0000-4000-8000-000000000011','11111111-1111-1111-1111-111111111111','Đối tác Phân Trang B','0109888778');
+insert into public.partner_companies(partner_id, company_id) values
+ ('dddddddd-0000-4000-8000-000000000010','00000000-0000-4000-8000-000000000001'),
+ ('dddddddd-0000-4000-8000-000000000011','00000000-0000-4000-8000-000000000001');
+
+select public.test_assert(
+  (select name_folded = 'cong ty dien tu dang khoa' and tax_code_folded = '0109888777-001'
+     from public.partners where id = 'dddddddd-0000-4000-8000-000000000010'),
+  'A10: partners_sync_folded_columns trigger populates folded columns on insert'
+);
+
+set role authenticated;
+set request.jwt.claim.role='authenticated';
+set request.jwt.claim.sub='aaaaaaaa-0000-4000-8000-000000000001';
+select public.test_assert(
+  (select count(*) = 1 and min(total_count) >= 3
+     from public.get_partners_directory_page('11111111-1111-1111-1111-111111111111', null, null, null, null, 1, 0)),
+  'A10: get_partners_directory_page enforces limit while reporting full total_count'
+);
+select public.test_assert(
+  (select count(*) = 1 and bool_and(id = 'dddddddd-0000-4000-8000-000000000010')
+     from public.get_partners_directory_page('11111111-1111-1111-1111-111111111111', 'dang khoa', null, null, null, 20, 0)),
+  'A10: get_partners_directory_page matches accent-folded search terms'
+);
+select public.update_partner_atomic(
+  'dddddddd-0000-4000-8000-000000000011',
+  '11111111-1111-1111-1111-111111111111',
+  '{"name":"Đối tác Phân Trang B (mới)","tax_code":"0109888799"}'::jsonb,
+  null
+);
+reset role;
+set request.jwt.claim.role='service_role';
+select public.test_assert(
+  (select metadata->'changed' = '["name","taxCode"]'::jsonb
+     from public.audit_logs
+    where target_kind = 'partner'
+      and target_id = 'dddddddd-0000-4000-8000-000000000011'
+      and action = 'update_partner'
+    order by created_at desc
+    limit 1),
+  'A10: audit_business_write omits internal derived folded columns from metadata.changed'
+);
+set role authenticated;
+set request.jwt.claim.role='authenticated';
+set request.jwt.claim.sub='aaaaaaaa-0000-4000-8000-000000000001';
+do $$
+begin
+  begin
+    delete from public.partner_companies where partner_id = 'dddddddd-0000-4000-8000-000000000010';
+    set constraints partner_companies_require_at_least_one_link immediate;
+    raise exception 'Deleting last partner company link unexpectedly succeeded';
+  exception when check_violation then null;
+  end;
+end $$;
+reset role;
+set request.jwt.claim.role='service_role';
+
 select 'PASS RLS, atomic partner rollback, login budget, listing and file privileges';

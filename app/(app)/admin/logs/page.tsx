@@ -91,7 +91,7 @@ async function AdminLogsContent({
             trong tổ chức của bạn.
           </p>
         </div>
-        <LogsExportButton filter={filter} />
+        <LogsExportButton filter={filter} total={total} />
       </header>
 
       <Card>

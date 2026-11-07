@@ -2,7 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 
 export const maxDuration = 60;
 import { guardFileApiRequest } from "@/lib/api-guard";
+import { buildAiTempObjectKey } from "@/lib/r2/keys";
 import { createUploadUrl } from "@/lib/r2/presign";
+import { createAiUploadSession } from "@/lib/services/upload-reservation";
 import {
   ALLOWED_MIME_TYPES,
   MAX_AI_FILE_SIZE_BYTES,
@@ -55,13 +57,22 @@ export async function POST(request: NextRequest) {
   }
 
   const fileId = crypto.randomUUID();
-  const safeFilename = filename.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
-  const objectKey = `ai-temp/${guard.user.organizationId}/${fileId}/${safeFilename}`;
+  const objectKey = buildAiTempObjectKey({
+    organizationId: guard.user.organizationId,
+    userId: guard.user.id,
+    fileId,
+    filename,
+  });
 
   try {
     const uploadUrl = await createUploadUrl(objectKey, resolvedMime, fileSize);
+    const aiUploadToken = createAiUploadSession({
+      userId: guard.user.id,
+      organizationId: guard.user.organizationId,
+      objectKey,
+    });
     return NextResponse.json(
-      { uploadUrl, objectKey, mimeType: resolvedMime },
+      { uploadUrl, objectKey, aiUploadToken, mimeType: resolvedMime },
       { status: 200, headers: guard.headers },
     );
   } catch (error) {

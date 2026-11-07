@@ -1,8 +1,11 @@
 "use client";
 
-import { Building2, Plus } from "lucide-react";
+import { Building2, ChevronLeft, ChevronRight, Plus, Search, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+import type { PartnerStatus } from "@schemas/partner";
 
 import { AddPartnerButton, RenamePartnerButton } from "@/components/partners/partner-name-sheet";
 import { CompanyBadges, PartnerStatusBadge } from "@/components/partners/partner-badges";
@@ -13,6 +16,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -21,6 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { PARTNERS_PAGE_SIZE_DEFAULT } from "@/lib/partner-display";
 import type { PartnerWithCount } from "@/lib/services/partners";
 
 import {
@@ -39,6 +44,39 @@ export {
   CONTRACT_COUNT_OPTIONS,
 };
 export type { PartnerFilters };
+
+export type PartnersPaginationState = {
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  search?: string;
+  status?: PartnerStatus;
+  company?: string;
+  contracts?: "has" | "none";
+};
+
+function buildPartnersHref(
+  base: PartnersPaginationState | undefined,
+  patch: Partial<Pick<PartnersPaginationState, "page" | "pageSize" | "search">>,
+): string {
+  const params = new URLSearchParams();
+  const nextSearch = (patch.search !== undefined ? patch.search : base?.search ?? "").trim();
+  const nextPage = patch.page ?? base?.page ?? 1;
+  const nextPageSize = patch.pageSize ?? base?.pageSize ?? PARTNERS_PAGE_SIZE_DEFAULT;
+
+  if (nextSearch) params.set("q", nextSearch);
+  if (base?.status) params.set("status", base.status);
+  if (base?.company) params.set("company", base.company);
+  if (base?.contracts) params.set("contracts", base.contracts);
+  if (nextPageSize !== PARTNERS_PAGE_SIZE_DEFAULT) {
+    params.set("pageSize", String(nextPageSize));
+  }
+  if (nextPage > 1) params.set("page", String(nextPage));
+
+  const qs = params.toString();
+  return qs ? `/partners?${qs}` : "/partners";
+}
 
 /**
  * Partners table — feature round 2, part 2 + part 3; refactored in Round 33.
@@ -60,15 +98,32 @@ export type { PartnerFilters };
  *
  * Round 37 — Excel-style column filter popovers (7 cột: tên, viết tắt, MST,
  * khu vực, trạng thái, công ty, số hợp đồng).
+ *
+ * A10 — Server-side pagination + full-directory folded search (`?q=&page=`).
  */
 export function PartnersTable({
   rows,
   canDelete = false,
+  pagination,
 }: {
   rows: PartnerWithCount[];
   canDelete?: boolean;
+  pagination?: PartnersPaginationState;
 }) {
   const router = useRouter();
+  const [searchInput, setSearchInput] = useState(pagination?.search ?? "");
+
+  const totalCount = pagination?.totalCount ?? rows.length;
+  const page = pagination?.page ?? 1;
+  const pageSize = pagination?.pageSize ?? PARTNERS_PAGE_SIZE_DEFAULT;
+  const pageCount = pagination?.pageCount ?? 1;
+  const hasServerFilter = Boolean(
+    pagination?.search ||
+      pagination?.status ||
+      pagination?.company ||
+      pagination?.contracts,
+  );
+  const showServerSearch = pageCount > 1 || hasServerFilter;
 
   const {
     filters,
@@ -103,7 +158,7 @@ export function PartnersTable({
     clearSelection();
   };
 
-  if (rows.length === 0) {
+  if (rows.length === 0 && !hasServerFilter) {
     return (
       <EmptyState
         icon={<Building2 className="h-6 w-6" />}
@@ -114,8 +169,49 @@ export function PartnersTable({
     );
   }
 
+  const from = totalCount === 0 ? 0 : (page - 1) * pageSize + 1;
+  const to = Math.min((page - 1) * pageSize + rows.length, totalCount);
+
   return (
     <div className="space-y-3">
+      {showServerSearch && (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          data-testid="partners-server-search-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            router.push(buildPartnersHref(pagination, { search: searchInput, page: 1 }));
+          }}
+        >
+          <div className="relative flex-1 min-w-[240px] max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Tìm toàn danh bạ (tên, MST, viết tắt, khu vực)..."
+              className="pl-9 pr-8"
+              data-testid="partners-server-search"
+            />
+            {searchInput && (
+              <button
+                type="button"
+                aria-label="Xoá từ khoá tìm kiếm"
+                data-testid="partners-server-search-clear"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  setSearchInput("");
+                  router.push(buildPartnersHref(pagination, { search: "", page: 1 }));
+                }}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          <Button type="submit" variant="outline" size="sm">
+            Tìm kiếm
+          </Button>
+        </form>
+      )}
       {canDelete && effectiveIds.length > 0 && (
         <BulkDeletePartnersButton
           ids={effectiveIds}
@@ -388,11 +484,48 @@ export function PartnersTable({
             )}
           </TableBody>
         </Table>
-        <p className="border-t px-4 py-2.5 text-xs text-muted-foreground bg-muted/10">
-          {hasFilters
-            ? `${filteredRows.length} / ${rows.length} đối tác`
-            : `${rows.length} đối tác`}
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2.5 text-xs text-muted-foreground bg-muted/10">
+          <p>
+            {hasFilters
+              ? `${filteredRows.length} / ${rows.length} đối tác${
+                  pageCount > 1 ? ` (trang ${page}/${pageCount}, tổng ${totalCount})` : ""
+                }`
+              : pageCount > 1
+                ? `Hiển thị ${from}–${to} trong ${totalCount} đối tác`
+                : `${totalCount} đối tác`}
+          </p>
+          {pageCount > 1 && (
+            <div className="flex items-center gap-2" data-testid="partners-pagination">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 px-2.5 text-xs"
+                disabled={page <= 1}
+                data-testid="partners-page-prev"
+                onClick={() => router.push(buildPartnersHref(pagination, { page: page - 1 }))}
+              >
+                <ChevronLeft className="mr-1 h-3.5 w-3.5" />
+                Trước
+              </Button>
+              <span className="tabular-nums">
+                Trang {page}/{pageCount}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 px-2.5 text-xs"
+                disabled={page >= pageCount}
+                data-testid="partners-page-next"
+                onClick={() => router.push(buildPartnersHref(pagination, { page: page + 1 }))}
+              >
+                Sau
+                <ChevronRight className="ml-1 h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

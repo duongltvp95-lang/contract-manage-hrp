@@ -285,16 +285,12 @@ export function PartnerImportSheet() {
   }, [preview, filterTab, attentionRows, completeRows]);
 
   function handleConfirmClick() {
-    // Trong môi trường test tự động hoặc khi 100% đối tác đã đầy đủ thông tin,
-    // tiến hành nhập trực tiếp.
-    const isAutomated =
-      typeof window !== "undefined" && Boolean(window.navigator?.webdriver);
-    if (isAutomated || attentionRows.length === 0) {
+    if (attentionRows.length === 0) {
       void runImport();
       return;
     }
 
-    // Với người dùng thao tác thực tế, mở AlertDialog xác nhận thông báo trước khi nhập
+    // Mở hộp thoại cảnh báo khi có dòng thiếu/trùng thông tin hoặc dòng lỗi cần xác nhận
     setShowConfirmModal(true);
   }
 
@@ -342,11 +338,11 @@ export function PartnerImportSheet() {
                     : "Kéo thả file .xlsx vào đây, hoặc bấm để chọn"}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  File .xlsx, tối đa {PARTNER_IMPORT_MAX_ROWS} dòng · Cột: Tên đối
-                  tác · Tên viết tắt · Khu vực · Địa chỉ · Mã số thuế · Công ty
-                  (HRP / HR VN, cách nhau dấu phẩy — bỏ trống mặc định HRP) ·
-                  Trạng thái hợp tác (Đang hợp tác / Đã dừng hợp tác — bỏ trống
-                  mặc định Đang hợp tác).
+                  File .xlsx, tối đa {MAX_MB} MB ({PARTNER_IMPORT_MAX_ROWS} dòng) ·
+                  Cột: Tên đối tác · Tên viết tắt · Khu vực · Địa chỉ · Mã số
+                  thuế · Công ty (HRP / HR VN, cách nhau dấu phẩy — bỏ trống mặc
+                  định HRP) · Trạng thái hợp tác (Đang hợp tác / Đã dừng hợp tác
+                  — bỏ trống mặc định Đang hợp tác).
                 </p>
               </div>
 
@@ -557,7 +553,10 @@ export function PartnerImportSheet() {
 
               {/* Hộp thoại thông báo xác nhận trước khi nhập */}
               <AlertDialog open={showConfirmModal} onOpenChange={setShowConfirmModal}>
-                <AlertDialogContent className="max-w-md">
+                <AlertDialogContent
+                  className="max-w-md"
+                  data-testid="partner-import-confirm-dialog"
+                >
                   <AlertDialogHeader>
                     <AlertDialogTitle className="flex items-center gap-2 text-base font-semibold">
                       <AlertTriangle className="h-5 w-5 text-amber-500" />
@@ -605,6 +604,7 @@ export function PartnerImportSheet() {
                     <AlertDialogCancel disabled={busy}>Xem lại</AlertDialogCancel>
                     <AlertDialogAction
                       disabled={busy}
+                      data-testid="partner-import-modal-confirm"
                       onClick={() => {
                         setShowConfirmModal(false);
                         void runImport();

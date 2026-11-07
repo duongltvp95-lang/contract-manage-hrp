@@ -543,6 +543,7 @@ export function ContractForm({
     | {
         kind: "r2";
         objectKey: string;
+        aiUploadToken: string;
         mimeType: string;
         presignMs: number;
         clientR2UploadMs: number;
@@ -628,10 +629,12 @@ export function ContractForm({
       const {
         uploadUrl,
         objectKey,
+        aiUploadToken,
         mimeType: serverMime,
       } = (await presignRes.json()) as {
         uploadUrl: string;
         objectKey: string;
+        aiUploadToken: string;
         mimeType?: string;
       };
       const presignMs = Date.now() - presignStartedAt;
@@ -651,6 +654,7 @@ export function ContractForm({
       return {
         kind: "r2",
         objectKey,
+        aiUploadToken,
         mimeType: targetMime,
         presignMs,
         clientR2UploadMs,
@@ -717,6 +721,7 @@ export function ContractForm({
           formData.append("clientPdfAttempted", "1");
         }
         formData.append("objectKey", prepared.objectKey);
+        formData.append("aiUploadToken", prepared.aiUploadToken);
         formData.append("filename", fileItem.file.name);
         formData.append("mimeType", prepared.mimeType);
       } else {
@@ -897,7 +902,11 @@ export function ContractForm({
 
       // CHỈ điền số hợp đồng & ngày hiệu lực vào biểu mẫu nếu tệp này là HỢP ĐỒNG CHÍNH.
       // Nếu là phụ lục mà chưa có hợp đồng gốc thì TUYỆT ĐỐI không điền để tránh tạo hợp đồng mới trái phép.
-      if (!isAppendixDoc && data.contractNumber) {
+      if (
+        !isAppendixDoc &&
+        data.contractNumber &&
+        !form.getValues("contractNumber")?.trim()
+      ) {
         form.setValue("contractNumber", data.contractNumber, {
           shouldValidate: true,
           shouldDirty: true,
@@ -1222,7 +1231,10 @@ export function ContractForm({
         prefetchedNextRef.current = null;
         void unconsumed.outcomePromise.then((res) => {
           if (res.ok && res.value.kind === "r2") {
-            void cleanupAiTempObjectAction(res.value.objectKey).catch(() => {});
+            void cleanupAiTempObjectAction(
+              res.value.objectKey,
+              res.value.aiUploadToken,
+            ).catch(() => {});
           }
         });
       }
@@ -1248,16 +1260,21 @@ export function ContractForm({
     if (!addedFiles || addedFiles.length === 0) return;
     if (isExtractingAi || isAttachingToExisting || busy) return;
 
-    // Khi 1 hợp đồng trước đó đọc xong báo lỗi bất kỳ (hoặc biểu mẫu đang có lỗi/trống tệp):
-    // Người dùng tải tệp PDF khác lên sẽ tự động xóa hết các thông tin đọc được trước đó ở các trường thông tin
-    if (extractionHadErrorRef.current || formError || filesRef.current.length === 0) {
+    // Khi hợp đồng trước đó đọc xong báo lỗi bất kỳ (hoặc biểu mẫu đang ở trạng thái lỗi):
+    // Người dùng tải tệp PDF khác lên sẽ tự động xóa thông tin lỗi trước đó; ngược lại
+    // giữ nguyên các trường người dùng đã nhập thủ công trên biểu mẫu.
+    if (extractionHadErrorRef.current || formError) {
       clearExtractedFormFields();
       setFiles(() => addedFiles);
       filesRef.current = addedFiles;
       extractionHadErrorRef.current = false;
       setHasExtractionError(false);
     } else {
-      filesRef.current = [...filesRef.current, ...addedFiles];
+      const existingIds = new Set(filesRef.current.map((file) => file.id));
+      filesRef.current = [
+        ...filesRef.current,
+        ...addedFiles.filter((file) => !existingIds.has(file.id)),
+      ];
     }
 
     await handleExtractAllAi(addedFiles);

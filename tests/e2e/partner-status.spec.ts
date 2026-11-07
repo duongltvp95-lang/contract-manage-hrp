@@ -184,6 +184,8 @@ test.describe("partner status + companies (round 10)", () => {
     );
 
     await clickSafe(page, '[data-testid="partner-import-confirm"]');
+    await expect(page.getByTestId("partner-import-confirm-dialog")).toBeVisible();
+    await page.getByTestId("partner-import-modal-confirm").click();
     await expect(page.getByText("Đã nhập 1 đối tác")).toBeVisible({ timeout: 15_000 });
 
     // Fully successful → the sheet closes and the list refreshes.

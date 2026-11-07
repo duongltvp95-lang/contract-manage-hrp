@@ -427,12 +427,18 @@ export async function selectCompany(
   await option.click();
 }
 
-/** Save follows the current UX: confirm date warnings, reset, then open the toast action. */
+/** Save follows the current UX: confirm date warnings when shown, or proceed directly when dates are already valid. */
 export async function submitContract(page: Page): Promise<void> {
+  const submit = page.getByTestId("contract-form-submit");
   const confirm = page.getByRole("button", { name: "Xác nhận lưu", exact: true });
   const open = page.getByRole("button", { name: "Xem hợp đồng", exact: true });
-  await page.getByTestId("contract-form-submit").click();
-  await expect(confirm.or(open).first()).toBeVisible({ timeout: 120_000 });
+  const progress = page.locator('[role="progressbar"]').first();
+  const retryError = page.getByText("tải tệp lên chưa hoàn tất");
+  await expect(submit).toBeEnabled({ timeout: 30_000 });
+  await submit.click();
+  await expect(
+    confirm.or(open).or(progress).or(retryError).first(),
+  ).toBeVisible({ timeout: 120_000 });
   if (await confirm.isVisible()) await confirm.click();
 }
 

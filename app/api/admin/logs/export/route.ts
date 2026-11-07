@@ -19,13 +19,14 @@ import { formatAuditSentence } from "@/lib/audit-display";
 import { getCurrentUser } from "@/lib/auth";
 import { businessDate } from "@/lib/business-date";
 import {
-  listAuditLogs,
+  exportAuditLogs,
   recordAudit,
   type AuditLogRow,
+  type AuditLogsExportResult,
 } from "@/lib/services/audit-logs";
 
 /**
- * Admin log export — round 3, part 1.
+ * Admin log export — round 3, part 1 (hardened in A12).
  *
  * Two formats, both served from the same endpoint:
  *
@@ -72,8 +73,6 @@ export async function GET(request: NextRequest) {
       { status: 422 },
     );
   }
-  // The export ignores page/pageSize — see LogsExportButton.
-  const filter = { ...parsed.data, page: 1, pageSize: 200 } as const;
 
   const format = (raw.format ?? "txt").toLowerCase();
   if (format !== "txt" && format !== "xlsx") {
@@ -83,18 +82,22 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Read up to `pageSize` rows. The cap is the same as the page (200). The
-  // admin has the filter UI for narrowing; the export is "everything I can
-  // see at the default page size", not a full backfill.
-  const list = await listAuditLogs(user.organizationId, filter);
-  if (!list.ok) {
+  // Paginated export up to AUDIT_LOGS_EXPORT_MAX_ROWS (5,000 rows), with explicit
+  // count/truncation headers and in-file truncation notice when total exceeds the cap.
+  const exported = await exportAuditLogs(user.organizationId, parsed.data);
+  if (!exported.ok) {
     return NextResponse.json(
-      { error: list.message, code: list.code },
-      { status: statusForCode(list.code) },
+      { error: exported.message, code: exported.code },
+      { status: statusForCode(exported.code) },
     );
   }
 
-  const body = format === "txt" ? formatTxt(list.data.rows) : Buffer.from(await formatXlsx(list.data.rows));
+  const { rows, total, truncated, maxRows } = exported.data;
+  const body =
+    format === "txt"
+      ? formatTxt(exported.data)
+      : Buffer.from(await formatXlsx(exported.data));
+
   // Do not release the export unless its audit event has been durably accepted.
   const audit = await recordAudit({
     organizationId: user.organizationId,
@@ -103,11 +106,22 @@ export async function GET(request: NextRequest) {
     action: "export_logs",
     targetKind: "logs",
     targetId: null,
-    metadata: { format, count: list.data.rows.length },
+    metadata: { format, count: rows.length, total, truncated },
   });
   if (!audit.ok) {
-    return NextResponse.json({ error: "Không thể ghi nhận lượt xuất nhật ký. Vui lòng thử lại.", code: "db_error" }, { status: 503 });
+    return NextResponse.json(
+      { error: "Không thể ghi nhận lượt xuất nhật ký. Vui lòng thử lại.", code: "db_error" },
+      { status: 503 },
+    );
   }
+
+  const exportMetaHeaders = {
+    "cache-control": "no-store",
+    "x-audit-export-count": String(rows.length),
+    "x-audit-export-total": String(total),
+    "x-audit-export-max-rows": String(maxRows),
+    "x-audit-export-truncated": truncated ? "true" : "false",
+  };
 
   const today = businessDate();
   if (format === "txt") {
@@ -116,7 +130,7 @@ export async function GET(request: NextRequest) {
       headers: {
         "content-type": "text/plain; charset=utf-8",
         "content-disposition": `attachment; filename="audit-logs-${today}.txt"`,
-        "cache-control": "no-store",
+        ...exportMetaHeaders,
       },
     });
   }
@@ -126,14 +140,20 @@ export async function GET(request: NextRequest) {
     headers: {
       "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "content-disposition": `attachment; filename="audit-logs-${today}.xlsx"`,
-      "cache-control": "no-store",
+      ...exportMetaHeaders,
     },
   });
 }
 
-function formatTxt(rows: AuditLogRow[]): string {
+function formatTruncationNotice(
+  meta: Pick<AuditLogsExportResult, "rows" | "total" | "maxRows">,
+): string {
+  return `[LƯU Ý GIỚI HẠN XUẤT] Tệp này chứa ${meta.rows.length}/${meta.total} sự kiện mới nhất (tối đa ${meta.maxRows} dòng mỗi lượt xuất). Hãy thu hẹp khoảng thời gian (Từ ngày / Đến ngày) để xuất phần còn lại.`;
+}
+
+function formatTxt(exported: AuditLogsExportResult): string {
   const header = ["Thời gian", "Người thực hiện", "Vai trò", "Hành động", "Đối tượng", "Chi tiết"].join(" | ");
-  const lines = rows.map((row) =>
+  const lines = exported.rows.map((row) =>
     [
       row.createdAt,
       actorDisplay(row),
@@ -143,10 +163,13 @@ function formatTxt(rows: AuditLogRow[]): string {
       formatAuditSentence(row),
     ].join(" | "),
   );
+  if (exported.truncated) {
+    lines.push(`# ${formatTruncationNotice(exported)}`);
+  }
   return [header, ...lines].join("\n") + "\n";
 }
 
-async function formatXlsx(rows: AuditLogRow[]): Promise<Buffer> {
+async function formatXlsx(exported: AuditLogsExportResult): Promise<Buffer> {
   // Dynamic import keeps exceljs (≈ 925 KB minified) out of the client bundle
   // and out of any route that does not need it.
   const ExcelJS = (await import("exceljs")).default;
@@ -165,7 +188,7 @@ async function formatXlsx(rows: AuditLogRow[]): Promise<Buffer> {
     { header: "Chi tiết", key: "metadata", width: 50 },
   ];
   sheet.getRow(1).font = { bold: true };
-  for (const row of rows) {
+  for (const row of exported.rows) {
     sheet.addRow({
       createdAt: row.createdAt,
       actorId: actorDisplay(row),
@@ -174,6 +197,17 @@ async function formatXlsx(rows: AuditLogRow[]): Promise<Buffer> {
       target: targetLabel(row.targetKind, row.targetId),
       metadata: formatAuditSentence(row),
     });
+  }
+  if (exported.truncated) {
+    const noticeRow = sheet.addRow({
+      createdAt: "",
+      actorId: "",
+      actorRole: "",
+      action: "LƯU Ý GIỚI HẠN XUẤT",
+      target: `${exported.rows.length}/${exported.total} dòng`,
+      metadata: formatTruncationNotice(exported),
+    });
+    noticeRow.font = { italic: true };
   }
   return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }

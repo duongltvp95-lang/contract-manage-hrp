@@ -1201,3 +1201,130 @@ describe("Step 2 — Đọc chữ PDF trên trình duyệt (extractClientUsableP
   });
 });
 
+describe("A07 & A11 — Gemini finishReason, empty extraction rejection, and test stub guard", () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  const ORIGINAL_KEY = process.env.GEMINI_API_KEY;
+  const ORIGINAL_STUB = process.env.HRP_AI_TEST_MODE;
+  const ORIGINAL_VERCEL = process.env.VERCEL;
+
+  beforeEach(() => {
+    process.env.GEMINI_API_KEY = "test-key";
+    delete process.env.HRP_AI_TEST_MODE;
+    delete process.env.VERCEL;
+    fetchSpy = vi.spyOn(global, "fetch");
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    if (ORIGINAL_KEY === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = ORIGINAL_KEY;
+    if (ORIGINAL_STUB === undefined) delete process.env.HRP_AI_TEST_MODE;
+    else process.env.HRP_AI_TEST_MODE = ORIGINAL_STUB;
+    if (ORIGINAL_VERCEL === undefined) delete process.env.VERCEL;
+    else process.env.VERCEL = ORIGINAL_VERCEL;
+  });
+
+  it("A07: retries fallback model when primary hits finishReason=MAX_TOKENS and succeeds on fallback", async () => {
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                finishReason: "MAX_TOKENS",
+                content: { parts: [{ text: '{"contractNumber":"HD-TRUNC"' }] },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                finishReason: "STOP",
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        contractNumber: "HD-2026-OK",
+                        partnerName: "Công ty TNHH Sao Mai",
+                      }),
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+
+    const result = await extractContractFromBuffer({
+      buffer: Buffer.from("dummy image"),
+      mimeType: "image/png",
+      filename: "scan.png",
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.contractNumber).toBe("HD-2026-OK");
+    }
+  });
+
+  it("A07: rejects semantically empty {} HTTP 200 responses instead of reporting ok: true", async () => {
+    const models = getGeminiModels();
+    for (let i = 0; i < models.length; i += 1) {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                finishReason: "STOP",
+                content: { parts: [{ text: "{}" }] },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+    }
+
+    const result = await extractContractFromBuffer({
+      buffer: Buffer.from("blank page"),
+      mimeType: "image/png",
+      filename: "blank.png",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("validation");
+      expect(result.message).toContain("không nhận diện được thông tin hợp đồng");
+    }
+  });
+
+  it("A11: HRP_AI_TEST_MODE=stub returns deterministic extraction in test mode and never activates when VERCEL is set", async () => {
+    delete process.env.GEMINI_API_KEY;
+    process.env.HRP_AI_TEST_MODE = "stub";
+
+    const stubbed = await extractContractFromBuffer({
+      buffer: Buffer.from("any pdf"),
+      mimeType: "image/png",
+      filename: "Hop-dong-stub.png",
+    });
+    expect(stubbed.ok).toBe(true);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    process.env.VERCEL = "1";
+    const blockedOnVercel = await extractContractFromBuffer({
+      buffer: Buffer.from("any pdf"),
+      mimeType: "image/png",
+      filename: "Hop-dong-stub.png",
+    });
+    expect(blockedOnVercel.ok).toBe(false);
+  });
+});
+

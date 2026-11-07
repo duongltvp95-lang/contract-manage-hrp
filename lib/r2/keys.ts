@@ -11,6 +11,7 @@ import "server-only";
 
 export const OBJECT_KEY_PREFIX = "contracts";
 export const STAGING_OBJECT_KEY_PREFIX = "uploads-staging";
+export const AI_TEMP_OBJECT_KEY_PREFIX = "ai-temp";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -190,4 +191,60 @@ export function stagingKeyToFinalObjectKey(
   const prefix = `${STAGING_OBJECT_KEY_PREFIX}/${org}/${contract}/${file}/`;
   const rest = stagingKey.slice(prefix.length);
   return `${OBJECT_KEY_PREFIX}/${org}/${contract}/${file}/${rest}`;
+}
+
+export type AiTempObjectKeyParts = {
+  organizationId: string;
+  userId: string;
+  fileId: string;
+  filename: string;
+};
+
+/**
+ * `ai-temp/{organizationId}/{userId}/{fileId}/{sanitizedFilename}`
+ *
+ * Binds temporary AI uploads to BOTH the tenant organization and the issuing
+ * user account so another member of the same organization cannot read or delete
+ * an in-flight AI upload key.
+ */
+export function buildAiTempObjectKey({
+  organizationId,
+  userId,
+  fileId,
+  filename,
+}: AiTempObjectKeyParts): string {
+  const org = assertUuid(organizationId, "organizationId");
+  const user = assertUuid(userId, "userId");
+  const file = assertUuid(fileId, "fileId");
+  const safeName = sanitizeFilename(filename);
+
+  return `${AI_TEMP_OBJECT_KEY_PREFIX}/${org}/${user}/${file}/${safeName}`;
+}
+
+export function isOwnedAiTempObjectKey(
+  objectKey: string,
+  { organizationId, userId }: { organizationId: string; userId: string },
+): boolean {
+  let prefix: string;
+  try {
+    prefix = `${AI_TEMP_OBJECT_KEY_PREFIX}/${assertUuid(organizationId, "organizationId")}/${assertUuid(userId, "userId")}/`;
+  } catch {
+    return false;
+  }
+
+  if (!objectKey.startsWith(prefix)) return false;
+
+  const rest = objectKey.slice(prefix.length);
+  const slashIndex = rest.indexOf("/");
+  if (slashIndex <= 0 || slashIndex >= rest.length - 1) return false;
+
+  const fileIdPart = rest.slice(0, slashIndex);
+  const tail = rest.slice(slashIndex + 1);
+  return (
+    UUID_RE.test(fileIdPart) &&
+    tail.length > 0 &&
+    !tail.includes("/") &&
+    !tail.includes("\\") &&
+    tail !== ".."
+  );
 }
