@@ -13,7 +13,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { requireUser } from "@/lib/auth";
 import { formatDateOnly } from "@/lib/format";
 import {
-  countUndatedContracts,
   DASHBOARD_LIST_LIMIT,
   expiringWindowBounds,
   getContractMetrics,
@@ -35,17 +34,39 @@ const getCachedUndatedContracts = cache((organizationId: string) =>
   getUndatedContracts(organizationId, DASHBOARD_LIST_LIMIT),
 );
 
+type UndatedResultPromise = ReturnType<typeof getUndatedContracts>;
+
+async function UndatedMetricCard({
+  undatedPromise,
+}: {
+  undatedPromise: UndatedResultPromise;
+}) {
+  const undated = await undatedPromise;
+  const total = undated.ok ? undated.data.total : null;
+
+  return (
+    <MetricCard
+      testId="metric-undated"
+      title="Không xác định thời hạn"
+      value={total !== null ? total : "—"}
+      badgeText={total !== null && total > 0 ? "Cần kiểm tra" : undefined}
+      hint="Chưa có ngày ký / ngày hết hạn"
+      tone="warning"
+      icon={<AlertTriangle className="h-5 w-5 text-amber-500" />}
+    />
+  );
+}
+
 async function DashboardMetricsSection({
   organizationId,
+  undatedPromise,
 }: {
   organizationId: string;
+  undatedPromise: UndatedResultPromise;
 }) {
-  const [metrics, undatedCount] = await Promise.all([
-    getContractMetrics(organizationId),
-    countUndatedContracts(organizationId),
-  ]);
+  const metrics = await getContractMetrics(organizationId);
 
-  const failure = !metrics.ok ? metrics : !undatedCount.ok ? undatedCount : null;
+  const failure = !metrics.ok ? metrics : null;
   const window = expiringWindowBounds();
 
   return (
@@ -84,15 +105,9 @@ async function DashboardMetricsSection({
           tone="danger"
           icon={<AlertCircle className="h-5 w-5" />}
         />
-        <MetricCard
-          testId="metric-undated"
-          title="Không xác định thời hạn"
-          value={undatedCount.ok ? undatedCount.data : "—"}
-          badgeText={undatedCount.ok && undatedCount.data > 0 ? "Cần kiểm tra" : undefined}
-          hint="Chưa có ngày ký / ngày hết hạn"
-          tone="warning"
-          icon={<AlertTriangle className="h-5 w-5 text-amber-500" />}
-        />
+        <Suspense fallback={<Skeleton className="h-[7.5rem] rounded-xl" />}>
+          <UndatedMetricCard undatedPromise={undatedPromise} />
+        </Suspense>
       </div>
     </>
   );
@@ -133,12 +148,12 @@ async function ExpiringContractsSection({
 }
 
 async function UndatedContractsBadge({
-  organizationId,
+  undatedPromise,
 }: {
-  organizationId: string;
+  undatedPromise: UndatedResultPromise;
 }) {
-  const undated = await getCachedUndatedContracts(organizationId);
-  if (!undated.ok || undated.data.total <= 0) {
+  const undated = await undatedPromise;
+  if (!undated.ok || undated.data.total === null || undated.data.total <= 0) {
     return null;
   }
   return (
@@ -149,11 +164,11 @@ async function UndatedContractsBadge({
 }
 
 async function UndatedContractsSection({
-  organizationId,
+  undatedPromise,
 }: {
-  organizationId: string;
+  undatedPromise: UndatedResultPromise;
 }) {
-  const undated = await getCachedUndatedContracts(organizationId);
+  const undated = await undatedPromise;
   return undated.ok ? (
     <UndatedContracts contracts={undated.data.rows} />
   ) : (
@@ -165,6 +180,7 @@ async function UndatedContractsSection({
 
 async function DashboardContent() {
   const user = await requireUser();
+  const undatedPromise = getCachedUndatedContracts(user.organizationId);
 
   return (
     <div className="space-y-6 p-6">
@@ -184,7 +200,10 @@ async function DashboardContent() {
       </header>
 
       <Suspense fallback={<DashboardMetricsSkeleton />}>
-        <DashboardMetricsSection organizationId={user.organizationId} />
+        <DashboardMetricsSection
+          organizationId={user.organizationId}
+          undatedPromise={undatedPromise}
+        />
       </Suspense>
 
       <Card className="rounded-2xl border border-border/80 shadow-sm bg-card overflow-hidden">
@@ -227,7 +246,7 @@ async function DashboardContent() {
                 Hợp đồng không xác định thời hạn
               </CardTitle>
               <Suspense fallback={null}>
-                <UndatedContractsBadge organizationId={user.organizationId} />
+                <UndatedContractsBadge undatedPromise={undatedPromise} />
               </Suspense>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -252,7 +271,7 @@ async function DashboardContent() {
           </Alert>
 
           <Suspense fallback={<DashboardRowsSkeleton />}>
-            <UndatedContractsSection organizationId={user.organizationId} />
+            <UndatedContractsSection undatedPromise={undatedPromise} />
           </Suspense>
         </CardContent>
       </Card>
