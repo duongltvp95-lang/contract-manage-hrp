@@ -35,7 +35,10 @@ export type ContractMetrics = {
  * `companies` are the linked partner's company names (empty when none). RLS is
  * applied once per sub-query row, not per contract.
  */
-export type DashboardContractRow = ContractRow & {
+export type DashboardSummaryContractRow = Pick<
+  ContractRow,
+  "id" | "contract_number" | "signed_date" | "expiry_date" | "partner_text"
+> & {
   partnerName: string | null;
   /**
    * Round 37 — the company the contract is signed for (`contracts.company_id`),
@@ -43,6 +46,9 @@ export type DashboardContractRow = ContractRow & {
    */
   companies: string[];
 };
+
+export type DashboardContractRow = DashboardSummaryContractRow &
+  Partial<Omit<ContractRow, keyof DashboardSummaryContractRow>>;
 
 /** How many rows the dashboard lists show. */
 export const DASHBOARD_LIST_LIMIT = 5;
@@ -144,18 +150,33 @@ export async function getContractMetrics(
   });
 }
 
+export const DASHBOARD_SUMMARY_CONTRACT_COLUMNS = `
+  id, contract_number, signed_date, expiry_date, partner_text,
+  partner:partners(name),
+  company:companies(name)
+`;
+
 const DASHBOARD_CONTRACT_COLUMNS = `
   ${CONTRACT_COLUMNS},
   partner:partners(name),
   company:companies(name)
 `;
 
-type EmbeddedContractRow = ContractRow & {
-  partner: { name: string } | null;
-  company: { name: string } | null;
-};
+type EmbeddedSummaryContractRow = Pick<
+  ContractRow,
+  "id" | "contract_number" | "signed_date" | "expiry_date" | "partner_text"
+> &
+  Partial<
+    Omit<
+      ContractRow,
+      "id" | "contract_number" | "signed_date" | "expiry_date" | "partner_text"
+    >
+  > & {
+    partner: { name: string } | null;
+    company: { name: string } | null;
+  };
 
-function formatDashboardRow(row: EmbeddedContractRow): DashboardContractRow {
+function formatDashboardRow(row: EmbeddedSummaryContractRow): DashboardContractRow {
   const { partner, company, ...contract } = row;
   return {
     ...contract,
@@ -173,7 +194,7 @@ export async function getRecentContracts(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select(DASHBOARD_CONTRACT_COLUMNS)
+    .select(DASHBOARD_SUMMARY_CONTRACT_COLUMNS)
     .eq("organization_id", organizationId)
     .is("archived_at", null)
     .order("created_at", { ascending: false })
@@ -183,7 +204,7 @@ export async function getRecentContracts(
     return dbError("getRecentContracts", error);
   }
 
-  const rows = (data ?? []) as unknown as EmbeddedContractRow[];
+  const rows = (data ?? []) as unknown as EmbeddedSummaryContractRow[];
   return ok(rows.map(formatDashboardRow));
 }
 
@@ -203,7 +224,7 @@ export async function getExpiringContracts(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select(DASHBOARD_CONTRACT_COLUMNS)
+    .select(DASHBOARD_SUMMARY_CONTRACT_COLUMNS)
     .eq("organization_id", organizationId)
     .is("archived_at", null)
     .gte("expiry_date", window.gte!)
@@ -215,7 +236,7 @@ export async function getExpiringContracts(
     return dbError("getExpiringContracts", error);
   }
 
-  const rows = (data ?? []) as unknown as EmbeddedContractRow[];
+  const rows = (data ?? []) as unknown as EmbeddedSummaryContractRow[];
   return ok(rows.map(formatDashboardRow));
 }
 
@@ -258,7 +279,7 @@ export async function countUndatedContracts(
 export async function getUndatedContracts(
   organizationId: string,
   limit: number = DASHBOARD_LIST_LIMIT,
-): Promise<ServiceResult<{ rows: DashboardContractRow[]; total: number }>> {
+): Promise<ServiceResult<{ rows: DashboardContractRow[]; total: number | null }>> {
   const supabase = await createClient();
 
   const { data, count, error } = await supabase
@@ -274,10 +295,10 @@ export async function getUndatedContracts(
     return dbError("getUndatedContracts", error);
   }
 
-  const rows = (data ?? []) as unknown as EmbeddedContractRow[];
+  const rows = (data ?? []) as unknown as EmbeddedSummaryContractRow[];
   return ok({
     rows: rows.map(formatDashboardRow),
-    total: count ?? rows.length,
+    total: typeof count === "number" ? count : null,
   });
 }
 

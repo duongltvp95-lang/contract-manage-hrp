@@ -154,18 +154,62 @@ describe("Wave 2 — Streaming độc lập trên Tổng quan và Hợp đồng"
     const stream = streamElement(React.createElement(DashboardPage));
     await new Promise((r) => setTimeout(r, 40));
 
-    // Khi getUndatedContracts vẫn đang treo, các thẻ số liệu và bảng Hợp đồng gần đây đã được đẩy xuống trình duyệt!
+    // Khi getUndatedContracts vẫn đang treo, 3 thẻ số liệu đầu và bảng Hợp đồng gần đây đã được đẩy xuống trình duyệt!
     const midHtml = stream.getHtml();
     expect(midHtml).toContain('data-testid="metric-total"');
+    expect(midHtml).toContain('data-testid="metric-expiring-soon"');
+    expect(midHtml).toContain('data-testid="metric-expired"');
     expect(midHtml).toContain("48");
     expect(midHtml).toContain("HD-NHANH-001");
+    expect(midHtml).not.toContain('data-testid="metric-undated"');
     expect(midHtml).not.toMatch(/3(?:<!-- -->)? hợp đồng/);
 
     slowUndated.resolve({ ok: true, data: { rows: [], total: 3 } });
     await stream.done;
 
     const finalHtml = stream.getHtml();
+    expect(finalHtml).toContain('data-testid="metric-undated"');
     expect(finalHtml).toMatch(/3(?:<!-- -->)? hợp đồng/);
+    expect(mockCountUndatedContracts).not.toHaveBeenCalled();
+    expect(mockGetUndatedContracts).toHaveBeenCalledTimes(1);
+  });
+
+  it("Tổng quan: khi getUndatedContracts trả total = null vẫn hiển thị dòng dữ liệu nhưng hiện '—' trên thẻ thứ tư và ẩn badge", async () => {
+    mockGetContractMetrics.mockResolvedValue({
+      ok: true,
+      data: { total: 10, active: 9, expiringSoon: 1, expired: 1, archived: 0 },
+    });
+    mockGetRecentContracts.mockResolvedValue({ ok: true, data: [] });
+    mockGetExpiringContracts.mockResolvedValue({ ok: true, data: [] });
+    mockGetUndatedContracts.mockResolvedValue({
+      ok: true,
+      data: {
+        rows: [
+          {
+            id: "c-undated-1",
+            contract_number: "HD-KHONG-THOI-HAN-01",
+            signed_date: null,
+            expiry_date: null,
+            duration_text: "Vô thời hạn",
+            notes: "Ghi chú kiểm tra",
+            partner_text: null,
+            partnerName: "Đối tác B",
+            companies: ["HRP"],
+          },
+        ],
+        total: null,
+      },
+    });
+
+    const stream = streamElement(React.createElement(DashboardPage));
+    await stream.done;
+
+    const html = stream.getHtml();
+    expect(html).toContain('data-testid="metric-undated"');
+    expect(html).toContain("HD-KHONG-THOI-HAN-01");
+    expect(html).toContain("Ghi chú kiểm tra");
+    expect(html).not.toMatch(/\d+(?:<!-- -->)? hợp đồng/);
+    expect(mockCountUndatedContracts).not.toHaveBeenCalled();
   });
 
   it("Hợp đồng: hiển thị các tab, thanh công cụ và danh sách hợp đồng trước khi các bộ đếm tab hoàn tất", async () => {
